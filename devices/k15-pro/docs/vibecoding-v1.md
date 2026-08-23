@@ -1,43 +1,52 @@
-# VIBECODING v1 draft
+# VIBECODING v1
 
-Status: **design candidate**, not a released profile.
+Status: **alpha profile available for testing**.
 
-The goal is a one-hand control surface for ChatGPT, Codex, AgentLoop-style workflows, and general development work while keeping destructive actions deliberate.
+The goal is a one-hand control surface for ChatGPT, Codex, AgentLoop-style workflows, and general development work while keeping consequential actions deliberate.
+
+The installable alpha specification is in [`../profiles/vibecoding-v1-alpha/`](../profiles/vibecoding-v1-alpha/).
 
 ## UX principles
 
 The layout follows four principles inspired by the OpenAI + Work Louder Codex Micro control model:
 
 1. frequent commands live on dedicated keys;
-2. workflow-level actions are good joystick candidates;
+2. workflow-level actions are strong joystick candidates;
 3. rotary input is a natural fit for a continuously adjustable setting such as reasoning level;
 4. lighting can later expose agent state.
 
 Reference: https://openai.com/supply/co-lab/work-louder/
 
-## Hardware profile 1: AI / VIBECODING
+## Hardware-profile strategy
 
-Candidate standard-key semantics:
+For the first alpha:
 
-| Key | Semantic action | Initial intent |
+- **UI Profile1** is preserved as the safe/factory-style fallback;
+- **UI Profile2** becomes the VIBECODING profile.
+
+The K15 hardware profile remains intentionally simple. Application-specific behavior is moved to a Windows dispatcher so the keyboard does not need to be rewritten every time a ChatGPT/Codex workflow changes.
+
+## VIBECODING alpha key semantics
+
+| Key | Semantic action | Alpha behavior |
 |---|---|---|
-| `1` | `CHECK` | check current work |
-| `2` | `NEXT` | proceed to the next step |
-| `3` | `AGENT_PROMPT` | prepare the next agent prompt |
-| `4` | `FIX` | fix identified issues |
-| `5` | `PUBLISH` | prepare/publish current result |
-| `6` | `MERGE` | prepare/merge approved change |
-| `7` | `CREATE` | create requested artifact/change |
-| `8` | `CONTINUE` | continue current work |
-| `9` | `REVIEW` | perform review |
-| `0` | `TEST` | run/inspect tests |
-| `.` | `STATUS` | report current status |
-| `Enter` | `NEW_LINE` | insert a newline without submitting |
-| `-` | `REJECT_OR_STOP` | reject/stop current path |
-| `+` | `ACCEPT_OR_APPROVE` | accept/approve current path |
-| `Space` | `PUSH_TO_TALK` | voice input trigger where supported |
+| `1` | `CHECK` | insert `Проверь` |
+| `2` | `NEXT` | insert `Следующий шаг` |
+| `3` | `AGENT_PROMPT` | insert `Пиши следующий промпт для агента` |
+| `4` | `FIX` | insert `Исправляй` |
+| `5` | `PUBLISH` | insert `Публикуй` |
+| `6` | `MERGE` | insert `Мержи` |
+| `7` | `CREATE` | insert `Создавай` |
+| `8` | `CONTINUE` | insert `Продолжай` |
+| `9` | `REVIEW` | insert `Проведи review` |
+| `0` | `TEST` | insert `Запусти тесты` |
+| `.` | `STATUS` | insert `Дай статус` |
+| `Enter` | `NEW_LINE` | newline without submit |
+| `-` | `REJECT_OR_STOP` | insert `Стоп` |
+| `+` | `SUBMIT` | temporary submit key |
+| `Space` | `ACCEPT_OR_APPROVE` | insert `Принимается` |
 
-Destructive or consequential commands should insert/prepare an action but should not submit it automatically. Submission remains a separate physical action.
+Consequential commands do **not** submit automatically. Text insertion and submission are separate gestures.
 
 ## Newline vs submit
 
@@ -48,13 +57,26 @@ K15 Enter -> NEW_LINE
 joystick click -> SUBMIT
 ```
 
-The dispatcher can translate `NEW_LINE` per application, for example `Shift+Enter`, `Ctrl+Enter`, or plain `Enter` depending on the focused application.
+Joystick-click storage is not yet proven, therefore `+` is the temporary `SUBMIT` key in the alpha. When joystick click becomes programmable, `SUBMIT` moves there and `+` can return to an approve/accept role.
 
-Joystick-click storage on K15 has not yet been proven, so `SUBMIT` remains a desired mapping pending hardware verification.
+The alpha dispatcher currently sends `Shift+Enter` for `NEW_LINE`. App-specific ChatGPT/Codex/IDE rules are the next calibration step.
+
+## Layout-independent trigger transport
+
+Direct Russian onboard macros are keyboard-layout dependent because K15 macro playback is HID-key based. The alpha therefore programs digit-only sentinels such as `77133701` and lets AutoHotkey v2 translate them to Unicode text or shortcuts.
+
+Benefits:
+
+- EN/RU layout does not change the semantic command;
+- long prompts live in software rather than onboard memory;
+- the same physical key can later behave differently in ChatGPT, Codex, an IDE, or a terminal;
+- if the dispatcher is not running, failure is visible as the raw numeric sentinel.
 
 ## Joystick candidate workflows
 
-If joystick programming is confirmed, preferred semantics are workflow-level rather than cursor-level:
+OpenAI's Codex Micro uses joystick gestures for common workflows such as PR review, debugging, and refactoring. K15 can adopt the same high-level idea after its joystick storage mapping is proven.
+
+Preferred future semantics:
 
 | Direction | Candidate semantic |
 |---|---|
@@ -64,36 +86,30 @@ If joystick programming is confirmed, preferred semantics are workflow-level rat
 | Right | `VERIFY_OR_TEST` |
 | Click | `SUBMIT` |
 
-Fallback while storage is unresolved: retain native cursor behavior.
+Alpha fallback: retain native cursor behavior.
 
 ## Encoder candidate behavior
 
-Preferred AI-profile behavior, if remapping is proven:
+Preferred future AI-profile behavior, after remapping is proven:
 
 - rotate left: reasoning level down;
 - rotate right: reasoning level up;
 - click: switch hardware profile.
 
-Fallback: retain native volume control and profile switching.
+Alpha fallback: retain native volume control and profile switching.
 
-## Hardware profile 2: SYSTEM
+## Application-aware dispatcher
 
-The second onboard profile is reserved for desktop/navigation shortcuts. Exact assignments will be selected after the AI profile is tested in real use.
+The first dispatcher is [`../dispatcher/windows/vibecoding-k15.ahk`](../dispatcher/windows/vibecoding-k15.ahk).
 
-## App-aware dispatcher
-
-Long Russian commands and application-specific shortcuts should preferably live in a Windows-side dispatcher rather than as long onboard text macros.
-
-Example:
+The alpha maps sentinels to common text/actions. Future rules can specialize the same semantics by foreground application, for example:
 
 ```text
 CHECK
-  ChatGPT -> insert "Проверь"
-  Codex   -> insert a Codex-specific review/check instruction
-  IDE     -> run the configured verification action
+  ChatGPT -> insert a conversational check instruction
+  Codex   -> insert a code-review/check instruction
+  IDE     -> run a configured verification action
 ```
-
-This keeps the K15 profile stable while allowing application-specific behavior to evolve independently.
 
 ## Future status lighting
 
