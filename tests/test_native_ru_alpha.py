@@ -83,6 +83,16 @@ class NativeFixtureTests(unittest.TestCase):
 
 
 class SerializerTests(unittest.TestCase):
+    def native_template(self):
+        """Sanitized stand-in for the full native KB template sections."""
+        config = gen.minimal_kb_config()
+        config["FnKey"] = {"btn_KBKey_native_sentinel": 0}
+        config["FnKeyMacro"] = {"btn_KBKey_native_sentinel": gen.empty_macro_binding()}
+        config["KBKey"]["btn_KBKey_native_sentinel"] = 91
+        config["KBKeyMacro"]["btn_KBKey_native_sentinel"] = gen.empty_macro_binding()
+        config["KBled"] = [{"nativeLedSentinel": 0}]
+        return {"KBconfig": config}
+
     def macro(self, profile, action):
         spec = gen.PROFILE_SPECS[profile]
         name, _, _ = next(item for item in spec["macros"] if item[1] == action)
@@ -174,7 +184,7 @@ class SerializerTests(unittest.TestCase):
 
     def test_kb_proven_bindings_and_joystick_for_both_profiles(self):
         for profile in ("A", "B"):
-            package, unresolved = gen.serialize_kb(profile)
+            package, unresolved = gen.serialize_kb(profile, self.native_template())
             macros = package["KBconfig"]["KBKeyMacro"]
             self.assertEqual(unresolved, [])
             self.assertEqual(len(package["MacroGrpInfo"][0]["MacroInfo"]), 15)
@@ -182,6 +192,21 @@ class SerializerTests(unittest.TestCase):
             self.assertEqual(macros["btn_KBKey_Enter"]["MemMacId"], 0)
             self.assertEqual(package["SingleProfile"], 1)
             self.assertEqual(len([x for x in macros if macros[x]["grpGuid"]]), 15)
+
+    def test_kb_generation_fails_closed_without_full_native_template(self):
+        with self.assertRaisesRegex(ValueError, "proven native KB template"):
+            gen.serialize_kb("B")
+        output = ROOT / "must-not-exist-without-template"
+        self.assertFalse(output.exists())
+        with self.assertRaisesRegex(ValueError, "--kb-template is required"):
+            gen.generate(output)
+        self.assertFalse(output.exists())
+        template = self.native_template()
+        package, _ = gen.serialize_kb("B", template)
+        self.assertEqual(package["KBconfig"]["FnKey"], template["KBconfig"]["FnKey"])
+        self.assertEqual(package["KBconfig"]["FnKeyMacro"], template["KBconfig"]["FnKeyMacro"])
+        self.assertEqual(package["KBconfig"]["KBled"], template["KBconfig"]["KBled"])
+        self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_native_sentinel"], 91)
 
     def test_configurable_timing_supports_one_ms_without_changing_default(self):
         self.assertEqual(gen.DEFAULT_EVENT_DELAY_MS, 5)

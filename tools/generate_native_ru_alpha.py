@@ -75,6 +75,7 @@ PROVEN_BINDINGS = {
 }
 CONTROL_STORAGE = {control: slot for control, (slot, _) in PROVEN_BINDINGS.items()}
 UNRESOLVED_CONTROLS: list[str] = []
+REQUIRED_KB_TEMPLATE_FIELDS = ("FnKey", "FnKeyMacro", "KBKey", "KBKeyMacro", "KBled", "KBmain")
 
 
 def _stable_guid(label: str) -> str:
@@ -295,13 +296,39 @@ def minimal_kb_config() -> dict[str, Any]:
             "KBmain": {"curporfile": 1}}
 
 
+def validated_template_config(template: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a full native KB template or fail closed before package output.
+
+    VOROTEX imports require the native profile shape beyond the bindings the
+    serializer edits. A minimal synthetic KB object parses as JSON but is not
+    import-compatible, so it is intentionally not an output fallback.
+    """
+    if not isinstance(template, dict) or not isinstance(template.get("KBconfig"), dict):
+        raise ValueError("a proven native KB template with KBconfig is required")
+    config = template["KBconfig"]
+    missing = [key for key in REQUIRED_KB_TEMPLATE_FIELDS if key not in config]
+    if missing:
+        raise ValueError("KB template is missing native sections: " + ", ".join(missing))
+    for key in ("FnKey", "FnKeyMacro", "KBKey", "KBKeyMacro"):
+        if not isinstance(config[key], dict) or not config[key]:
+            raise ValueError(f"KB template native section {key} must be a non-empty object")
+    if not isinstance(config["KBled"], list) or not config["KBled"]:
+        raise ValueError("KB template native section KBled must be a non-empty array")
+    if not isinstance(config["KBmain"], dict) or not config["KBmain"]:
+        raise ValueError("KB template native section KBmain must be a non-empty object")
+    for physical, (slot, _) in PROVEN_BINDINGS.items():
+        if slot not in config["KBKey"] or slot not in config["KBKeyMacro"]:
+            raise ValueError(f"KB template is missing proven control {physical} ({slot})")
+    return copy.deepcopy(config)
+
+
 def serialize_kb(profile: str = "B", template: dict[str, Any] | None = None,
                 event_delay_ms: int = DEFAULT_EVENT_DELAY_MS) -> tuple[dict[str, Any], list[str]]:
     if profile not in PROFILE_SPECS:
         raise ValueError("profile must be A or B")
     validate_delay(event_delay_ms)
     spec = PROFILE_SPECS[profile]
-    config = copy.deepcopy(template["KBconfig"] if template else minimal_kb_config())
+    config = validated_template_config(template)
     action_to_guid = {action: guid for _, action, guid in spec["macros"]}
     for physical, action in spec["bindings"]:
         slot, mem_id = PROVEN_BINDINGS[physical]
@@ -347,8 +374,11 @@ def _profile_paths(output_dir: Path, profile: str) -> tuple[Path, Path]:
 def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None = None,
              event_delay_ms: int = DEFAULT_EVENT_DELAY_MS) -> dict[str, Any]:
     validate_delay(event_delay_ms)
+    if kb_template_path is None:
+        raise ValueError("--kb-template is required for import-compatible .KB.Config output")
+    template = json.loads(kb_template_path.read_text(encoding="utf-8"))
+    validated_template_config(template)
     output_dir.mkdir(parents=True, exist_ok=True)
-    template = json.loads(kb_template_path.read_text(encoding="utf-8")) if kb_template_path else None
     package_info: dict[str, Any] = {}
     for profile in ("A", "B"):
         macro_path, kb_path = _profile_paths(output_dir, profile)

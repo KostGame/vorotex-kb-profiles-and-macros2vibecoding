@@ -34,6 +34,13 @@ not emitted in this RC because the sanitized evidence proves only the
 `SingleProfile`/profile-count delta, not the complete native object shape.
 Unsupported fields are intentionally not guessed.
 
+An import-compatible `.KB.Config` must be generated with a read-only,
+known-good native `--kb-template`. The serializer preserves the template's
+full `FnKey`, `FnKeyMacro`, `KBKey`, `KBKeyMacro`, `KBled`, and `KBmain`
+sections while replacing only the proven macro bindings and embedded group.
+It fails closed instead of emitting the JSON-parseable but incomplete minimal
+KB shape that VOROTEX Import rejected.
+
 Runtime packages, semantic maps, manifest, and generation report are written
 under the ignored `artifacts/` directory. Physical import remains an owner
 action and is not performed by the generator.
