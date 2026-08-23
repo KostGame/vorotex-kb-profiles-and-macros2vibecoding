@@ -1,4 +1,6 @@
 import json
+import re
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -64,63 +66,115 @@ class NativeFixtureTests(unittest.TestCase):
         self.assertEqual(fixture["exportCurrent"]["profileCount"], 1)
         self.assertEqual(fixture["exportAll"]["profileCount"], 2)
 
+    def test_two_profile_semantics_fixture(self):
+        fixture = self.read_fixture("native-two-profile-space.example.json")
+        self.assertEqual(fixture["profileA"]["role"], "TOOLS_AUTH")
+        self.assertEqual(fixture["profileA"]["space"], "Подтверждаю")
+        self.assertEqual(fixture["profileB"]["role"], "MAIN_VIBECODING")
+        self.assertEqual(fixture["profileB"]["space"], "Давай дальше, без push/merge")
+
+    def test_public_tree_has_no_raw_exports_or_machine_paths(self):
+        tracked = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
+        forbidden_names = {"Profile0.json", "Profile1.json", "macroConfig.json", "DeviceFeature.ini"}
+        self.assertTrue(forbidden_names.isdisjoint({Path(item).name for item in tracked}))
+        for item in tracked:
+            content = (ROOT / item).read_text(encoding="utf-8", errors="ignore")
+            self.assertIsNone(re.search(r"[A-Za-z]:\\\\Users\\\\|[A-Za-z]:\\\\AI_AGENT_PROJECTS", content))
+
 
 class SerializerTests(unittest.TestCase):
-    def test_all_fifteen_macros_use_native_cycle_and_timing(self):
-        package = gen.serialize_macro("RU")
-        self.assertEqual(len(package["MacroInfo"]), 15)
-        self.assertEqual(package["GrpGuid"], gen.GROUP_GUID)
-        for macro in package["MacroInfo"]:
-            data = macro["macData"]
-            self.assertEqual(data["macRpt"], 1)
-            self.assertEqual(data["rptType"], 0)
-            self.assertTrue(all(delay == 10 for delay in data["macDly"][: data["num"]]))
+    def macro(self, profile, action):
+        spec = gen.PROFILE_SPECS[profile]
+        name, _, _ = next(item for item in spec["macros"] if item[1] == action)
+        package = gen.serialize_macro(profile)
+        return next(item for item in package["MacroInfo"] if bytes(item["MacroName"]).decode() == name)
 
-    def test_new_line_is_not_plain_enter_or_submit(self):
-        package = gen.serialize_macro("RU")
-        macro = package["MacroInfo"][11]["macData"]
-        self.assertEqual(macro["num"], 4)
-        self.assertEqual(macro["macVal"][:4], [225, 40, 40, 225])
-        self.assertEqual(macro["macSta"][:4], [1, 1, 2, 2])
-        self.assertEqual(macro["macDly"][:4], [10, 10, 10, 10])
+    def test_all_fifteen_macros_use_native_cycle_and_5ms_timing(self):
+        for profile in ("A", "B"):
+            package = gen.serialize_macro(profile)
+            self.assertEqual(len(package["MacroInfo"]), 15)
+            self.assertEqual(package["GrpGuid"], gen.PROFILE_SPECS[profile]["groupGuid"])
+            for macro in package["MacroInfo"]:
+                data = macro["macData"]
+                self.assertEqual(data["macRpt"], 1)
+                self.assertEqual(data["rptType"], 0)
+                self.assertTrue(all(delay == 5 for delay in data["macDly"][: data["num"]]))
 
-    def test_ru_hid_mapping_matches_native_phrase_fixture(self):
+    def test_new_line_is_shift_enter_at_5ms(self):
+        for profile in ("A", "B"):
+            macro = self.macro(profile, "NEW_LINE")["macData"]
+            self.assertEqual(macro["num"], 4)
+            self.assertEqual(macro["macVal"][:4], [225, 40, 40, 225])
+            self.assertEqual(macro["macSta"][:4], [1, 1, 2, 2])
+            self.assertEqual(macro["macDly"][:4], [5, 5, 5, 5])
+
+    def test_profile_a_exact_map(self):
+        self.assertEqual(gen.PROFILE_SPECS["A"]["bindings"], [
+            ("1", "COPY"), ("2", "PASTE"), ("3", "CUT"), ("4", "UNDO"),
+            ("5", "REDO"), ("6", "SELECT_ALL"), ("7", "REPORT"),
+            ("8", "HERE_IS_REPORT"), ("9", "CODE_FENCE"),
+            ("0", "REPORT_FROM_CLIPBOARD"), (".", "STATUS"),
+            ("Enter", "NEW_LINE"), ("-", "STOP"), ("+", "REPORT_NEXT_CHAT"),
+            ("Space", "ACCEPT_OR_APPROVE")])
+
+    def test_profile_b_exact_map_and_safe_space(self):
+        self.assertEqual(gen.PROFILE_SPECS["B"]["bindings"][-1], ("Space", "SAFE_CONTINUE"))
+        self.assertNotIn("ACCEPT_OR_APPROVE", [a for _, a in gen.PROFILE_SPECS["B"]["bindings"]])
+        self.assertEqual(gen.RU_OUTPUTS["SAFE_CONTINUE"], "Давай дальше, без push/merge")
+
+    def test_shortcut_macros(self):
+        expected = {"COPY": [224, 6, 6, 224], "PASTE": [224, 25, 25, 224],
+                    "CUT": [224, 27, 27, 224], "UNDO": [224, 29, 29, 224],
+                    "REDO": [224, 225, 29, 29, 225, 224], "SELECT_ALL": [224, 4, 4, 224]}
+        for action, values in expected.items():
+            data = self.macro("A", action)["macData"]
+            self.assertEqual(data["macVal"][:len(values)], values)
+
+    def test_code_fence_is_exactly_three_ascii_backticks_and_returns_ru(self):
+        data = self.macro("A", "CODE_FENCE")["macData"]
+        self.assertEqual(data["macVal"][:6], [224, 225, 30, 30, 225, 224])
+        self.assertEqual(data["macVal"][6:12], [53, 53, 53, 53, 53, 53])
+        self.assertEqual(data["macVal"][0:data["num"]][-6:], [224, 225, 31, 31, 225, 224])
+        self.assertEqual(data["num"], 18)
+
+    def test_report_from_clipboard_structure_contains_ctrl_v_and_no_submit(self):
+        data = self.macro("A", "REPORT_FROM_CLIPBOARD")["macData"]
+        values = data["macVal"][:data["num"]]
+        self.assertIn([224, 25, 25, 224], [values[i:i + 4] for i in range(len(values) - 3)])
+        self.assertEqual(values.count(40), 6)
+        self.assertEqual(values.count(53), 12)
+        self.assertEqual(values[-6:], [224, 225, 31, 31, 225, 224])
+
+    def test_ru_hid_mapping_and_cyrillic_ge(self):
         values, states = gen.hid_events("Проверь", "RU")
         self.assertEqual(values, [10, 10, 11, 11, 13, 13, 7, 7, 23, 23, 11, 11, 16, 16])
         self.assertEqual(states, [1, 2] * 7)
+        self.assertEqual(gen.hid_events("г", "RU"), ([24, 24], [1, 2]))
 
-    def test_cyrillic_ge_uses_ru_u_key_position(self):
-        values, states = gen.hid_events("г", "RU")
-        self.assertEqual(values, [24, 24])
-        self.assertEqual(states, [1, 2])
+    def test_safe_continue_uses_ru_and_en_segments(self):
+        data = self.macro("B", "SAFE_CONTINUE")["macData"]
+        values = data["macVal"][:data["num"]]
+        self.assertIn([224, 225, 31, 31, 225, 224], [values[i:i + 6] for i in range(len(values) - 5)])
+        self.assertIn([224, 225, 30, 30, 225, 224], [values[i:i + 6] for i in range(len(values) - 5)])
+        self.assertNotIn(40, values)
 
-    def test_kb_proven_bindings_and_unresolved_controls(self):
-        package, unresolved = gen.serialize_kb()
-        macros = package["KBconfig"]["KBKeyMacro"]
-        self.assertEqual(macros["btn_KBKey_KeyPad1"]["MemMacId"], 2)
-        self.assertEqual(macros["btn_KBKey_KeyPad2"]["MemMacId"], 1)
-        self.assertEqual(macros["btn_KBKey_KeyPadEnter"]["MemMacId"], 11)
-        self.assertEqual(macros["btn_KBKey_KeyPadSub"]["MemMacId"], 13)
-        self.assertEqual(macros["btn_KBKey_KeyPadAdd"]["MemMacId"], 14)
-        self.assertEqual(unresolved, [])
-        self.assertEqual(macros["btn_KBKey_Space"]["MemMacId"], 12)
-        self.assertEqual(macros["btn_KBKey_Space"]["grpGuid"], gen.GROUP_GUID)
-        self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_Space"], 700)
-        self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_Enter"], 40)
-        self.assertEqual(package["KBconfig"]["KBKeyMacro"]["btn_KBKey_Enter"]["MemMacId"], 0)
-        self.assertEqual(package["SingleProfile"], 1)
-        self.assertEqual(len(package["MacroGrpInfo"][0]["MacroInfo"]), 15)
+    def test_kb_proven_bindings_and_joystick_for_both_profiles(self):
+        for profile in ("A", "B"):
+            package, unresolved = gen.serialize_kb(profile)
+            macros = package["KBconfig"]["KBKeyMacro"]
+            self.assertEqual(unresolved, [])
+            self.assertEqual(len(package["MacroGrpInfo"][0]["MacroInfo"]), 15)
+            self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_Enter"], 40)
+            self.assertEqual(macros["btn_KBKey_Enter"]["MemMacId"], 0)
+            self.assertEqual(package["SingleProfile"], 1)
+            self.assertEqual(len([x for x in macros if macros[x]["grpGuid"]]), 15)
 
-    def test_forced_english_profile_is_supported(self):
-        package = gen.serialize_macro("EN")
-        self.assertEqual(package["MacroInfo"][0]["macData"]["macVal"][:16], [224, 225, 30, 30, 225, 224, 6, 6, 11, 11, 8, 8, 6, 6, 14, 14])
-
-    def test_russian_text_self_selects_russian_layout(self):
-        package = gen.serialize_macro("RU")
-        values = package["MacroInfo"][0]["macData"]["macVal"]
-        states = package["MacroInfo"][0]["macData"]["macSta"]
-        self.assertEqual(values[:6], [224, 225, 31, 31, 225, 224])
-        self.assertEqual(states[:6], [1, 1, 1, 2, 2, 2])
+    def test_configurable_timing_supports_one_ms_without_changing_default(self):
+        self.assertEqual(gen.DEFAULT_EVENT_DELAY_MS, 5)
+        package = gen.serialize_macro("A", event_delay_ms=1)
+        self.assertTrue(all(d == 1 for m in package["MacroInfo"] for d in m["macData"]["macDly"][:m["macData"]["num"]]))
+        with self.assertRaises(ValueError):
+            gen.serialize_macro("A", event_delay_ms=0)
 
 
 if __name__ == "__main__":
