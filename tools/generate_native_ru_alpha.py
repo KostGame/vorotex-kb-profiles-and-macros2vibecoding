@@ -13,6 +13,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -219,7 +220,7 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
     write_json(macro_path, macro)
     write_json(kb_path, kb)
     manifest = {
-        "generatorVersion": VERSION, "generatorCommit": "working-tree",
+        "generatorVersion": VERSION, "generatorCommit": os.environ.get("K15_GENERATOR_COMMIT", "working-tree"),
         "profileId": "native-ru-alpha", "requiredWindowsLayout": layout,
         "inputProfileSelection": {"mode": "forced", "selected": layout},
         "macroGroupGuid": GROUP_GUID,
