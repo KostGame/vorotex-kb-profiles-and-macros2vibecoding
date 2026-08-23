@@ -10,11 +10,12 @@
     bindings: [],
     selectedMacro: null,
     dirty: false,
-    expectedExtension: null,
   };
 
   const el = (id) => document.getElementById(id);
-  const fileInput = el('fileInput');
+  const macroFileInput = el('macroFileInput');
+  const profileFileInput = el('profileFileInput');
+  const dropZone = el('dropZone');
 
   function decodeUtf16Array(value) {
     if (!Array.isArray(value)) return String(value ?? '');
@@ -86,8 +87,16 @@
 
   function setStatus(message, mode = 'ok') {
     const node = el('statusText');
+    if (!node) return;
     node.textContent = message;
     node.className = `status ${mode}`;
+  }
+
+  function setRuntimeStatus(message, mode = 'ready') {
+    const node = el('runtimeStatus');
+    if (!node) return;
+    node.textContent = message;
+    node.dataset.mode = mode;
   }
 
   function setDirty(value = true) {
@@ -144,11 +153,16 @@
 
       const header = document.createElement('div');
       header.className = 'group-header';
-      header.textContent = `${group.name || '(без имени)'} · ${group.macros.length}`;
+      const title = document.createElement('span');
+      title.textContent = group.name || '(без имени)';
+      const count = document.createElement('span');
+      count.textContent = group.macros.length;
+      header.append(title, count);
       wrap.appendChild(header);
 
       for (const macro of group.macros) {
         const button = document.createElement('button');
+        button.type = 'button';
         button.className = 'macro-btn';
         if (state.selectedMacro?.raw === macro.raw) button.classList.add('active');
         button.textContent = macro.name || '(без имени)';
@@ -315,27 +329,38 @@
     const dot = name.toLowerCase().lastIndexOf(suffix.toLowerCase());
     if (dot >= 0) name = `${name.slice(0, dot)}.edited${name.slice(dot)}`;
 
-    link.href = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    link.href = url;
     link.download = name;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(link.href);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     setStatus(`Экспортирован файл ${name}`, 'ok');
     setDirty(false);
   }
 
-  async function openFile(file) {
+  function readFileText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(reader.error || new Error('Не удалось прочитать файл.'));
+      reader.readAsText(file);
+    });
+  }
+
+  async function openFile(file, expectedKind = null) {
+    if (!file) return;
+    setRuntimeStatus('читаю файл…', 'busy');
     try {
-      const text = await file.text();
+      const text = await readFileText(file);
       const doc = JSON.parse(text.replace(/^\uFEFF/, ''));
       const kind = detectKind(doc);
-      if (!kind) throw new Error('Не удалось определить .Macro.Config или .KB.Config.');
-      if (state.expectedExtension === 'macro' && kind !== 'macro') {
-        throw new Error('Выбран файл профиля, ожидался .Macro.Config.');
-      }
-      if (state.expectedExtension === 'profile' && kind !== 'profile') {
-        throw new Error('Выбран файл макросов, ожидался .KB.Config.');
+      if (!kind) throw new Error('Не удалось определить .Macro.Config или .KB.Config по структуре файла.');
+      if (expectedKind && kind !== expectedKind) {
+        const expectedName = expectedKind === 'macro' ? '.Macro.Config' : '.KB.Config';
+        const actualName = kind === 'macro' ? '.Macro.Config' : '.KB.Config';
+        throw new Error(`Это ${actualName}, а выбран диалог для ${expectedName}.`);
       }
 
       state.document = doc;
@@ -348,18 +373,24 @@
       setDirty(false);
       renderAll();
       setStatus(`Открыт ${file.name}.`, 'ok');
+      setRuntimeStatus('готов', 'ready');
     } catch (error) {
+      setRuntimeStatus('ошибка файла', 'error');
       setStatus(error.message, 'error');
-      alert(`Не удалось открыть файл:\n${error.message}`);
-    } finally {
-      fileInput.value = '';
+      window.alert(`Не удалось открыть файл:\n${error.message}`);
     }
   }
 
-  function chooseFile(kind) {
-    state.expectedExtension = kind;
-    fileInput.accept = kind === 'macro' ? '.Config,.Macro.Config' : '.Config,.KB.Config';
-    fileInput.click();
+  function clearInputs() {
+    macroFileInput.value = '';
+    profileFileInput.value = '';
+  }
+
+  async function handleInput(input, expectedKind) {
+    const file = input.files?.[0];
+    if (!file) return;
+    await openFile(file, expectedKind);
+    clearInputs();
   }
 
   function closeDocument() {
@@ -372,11 +403,37 @@
     setDirty(false);
     el('workspace').classList.add('hidden');
     el('emptyState').classList.remove('hidden');
+    setRuntimeStatus('готов', 'ready');
   }
 
-  el('openMacroBtn').addEventListener('click', () => chooseFile('macro'));
-  el('openProfileBtn').addEventListener('click', () => chooseFile('profile'));
-  fileInput.addEventListener('change', () => fileInput.files?.[0] && openFile(fileInput.files[0]));
+  function setDropActive(active) {
+    dropZone.classList.toggle('drag-active', active);
+  }
+
+  macroFileInput.addEventListener('change', () => handleInput(macroFileInput, 'macro'));
+  profileFileInput.addEventListener('change', () => handleInput(profileFileInput, 'profile'));
+
+  for (const eventName of ['dragenter', 'dragover']) {
+    dropZone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setDropActive(true);
+    });
+  }
+
+  for (const eventName of ['dragleave', 'drop']) {
+    dropZone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setDropActive(false);
+    });
+  }
+
+  dropZone.addEventListener('drop', (event) => {
+    const file = event.dataTransfer?.files?.[0];
+    if (file) openFile(file);
+  });
+
   el('closeBtn').addEventListener('click', closeDocument);
   el('macroNameInput').addEventListener('change', renameSelectedMacro);
   el('cycleSelect').addEventListener('change', applyCycleOne);
@@ -386,4 +443,7 @@
   el('validateBtn').addEventListener('click', validateDocument);
   el('downloadBtn').addEventListener('click', downloadDocument);
   el('rawJson').addEventListener('input', () => setDirty(true));
+
+  document.body.classList.add('js-ready');
+  setRuntimeStatus('готов', 'ready');
 })();
