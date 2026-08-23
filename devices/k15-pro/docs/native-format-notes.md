@@ -43,9 +43,14 @@ KBconfig, MacroGrpInfo, SingleProfile
 observation only; it does not generalize to other VOROTEX versions.
 
 The supplied Profile B pair proves `MemMacId` and GUID relationships for the
-numeric keypad slots, decimal point, and Enter. It does not prove values for
-minus, the current report-control label `*`, or Space, so the serializer leaves
-those bindings unassigned and reports them unresolved.
+numeric keypad slots, decimal point, and Enter. A later observed Profile B
+state proves serialized macro bindings for minus (`MemMacId=13`) and plus
+(`MemMacId=14`). This is scoped to that observed native profile state, not a
+universal invariant. Space has no final direct proof and remains unresolved.
+
+The joystick click is separately represented by `btn_KBKey_Enter` with native
+key value `40`; it remains a plain Enter and is not converted into another
+Alpha text macro.
 
 The package contains only the intended `K15_VIBECODING_RU_ALPHA` group. This
 avoids copying unrelated groups from the user's local profile into a public

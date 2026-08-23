@@ -1,0 +1,6 @@
+{
+  "fixtureRole": "sanitized-language-selector-evidence",
+  "RU": {"selector": "Ctrl+Shift+2", "values": [224, 225, 31, 31, 225, 224], "states": [1, 1, 1, 2, 2, 2]},
+  "EN": {"selector": "Ctrl+Shift+1", "values": [224, 225, 30, 30, 225, 224], "states": [1, 1, 1, 2, 2, 2]},
+  "modifierOrder": "Ctrl down, Shift down, layout key down/up, Shift up, Ctrl up"
+}

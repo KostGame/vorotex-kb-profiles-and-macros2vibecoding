@@ -19,6 +19,8 @@ from typing import Any, Iterable
 
 VERSION = "0.1.0"
 CORRECTED_NEW_LINE_FIXTURE_SHA256 = "f356f32c6acdf062115d1fc2b7023aa0cb6ec00752dbae2c6502808b7f12017a"
+BOTTOM_BINDING_FIXTURE_SHA256 = "6bb6e1e2a7b2fb896cd046c3323612e25b34c1aa006150784d6556bdc4e39279"
+JOYSTICK_CLICK_STORAGE = "btn_KBKey_Enter"
 GROUP_NAME = "K15_VIBECODING_RU_ALPHA"
 GROUP_GUID = "55492475-3604-4D74-996C-50B165062B5E"
 EVENT_CAPACITY = 500
@@ -82,19 +84,25 @@ PROVEN_BINDINGS = {
     "7": ("btn_KBKey_KeyPad7", 7), "8": ("btn_KBKey_KeyPad8", 8),
     "9": ("btn_KBKey_KeyPad9", 9), "0": ("btn_KBKey_KeyPad0", 0),
     ".": ("btn_KBKey_KeyPadPoint", 10), "Enter": ("btn_KBKey_KeyPadEnter", 11),
+    "-": ("btn_KBKey_KeyPadSub", 13), "+": ("btn_KBKey_KeyPadAdd", 14),
 }
-UNRESOLVED_CONTROLS = ["-", "*", "Space"]
+UNRESOLVED_CONTROLS = ["Space"]
 CONTROL_STORAGE = {
     **{control: slot for control, (slot, _) in PROVEN_BINDINGS.items()},
-    "-": "btn_KBKey_KeyPadSub", "*": "btn_KBKey_KeyPadMulti", "Space": "btn_KBKey_Space",
+    "Space": "btn_KBKey_Space",
 }
 
 PHYSICAL_ACTIONS = [
     ("1", "CHECK"), ("2", "NEXT"), ("3", "AGENT_PROMPT"), ("4", "FIX"),
     ("5", "PUBLISH"), ("6", "MERGE"), ("7", "CREATE"), ("8", "CONTINUE"),
     ("9", "REVIEW"), ("0", "DONE"), (".", "STATUS"), ("Enter", "NEW_LINE"),
-    ("-", "STOP"), ("*", "REPORT"), ("Space", "ACCEPT_OR_APPROVE"),
+    ("-", "STOP"), ("+", "REPORT"), ("Space", "ACCEPT_OR_APPROVE"),
 ]
+
+LANGUAGE_SELECTOR = {
+    "RU": ([224, 225, 31, 31, 225, 224], [1, 1, 1, 2, 2, 2]),
+    "EN": ([224, 225, 30, 30, 225, 224], [1, 1, 1, 2, 2, 2]),
+}
 
 
 def hid_events(text: str, layout: str) -> tuple[list[int], list[int]]:
@@ -113,7 +121,9 @@ def macro_events(action: str, layout: str) -> tuple[list[int], list[int]]:
     if action == "NEW_LINE":
         return [225, 40, 40, 225], [1, 1, 2, 2]
     outputs = RU_OUTPUTS if layout == "RU" else EN_OUTPUTS
-    return hid_events(outputs[action], layout)
+    selector_values, selector_states = LANGUAGE_SELECTOR[layout]
+    text_values, text_states = hid_events(outputs[action], layout)
+    return selector_values + text_values, selector_states + text_states
 
 
 def encoded_name(value: str) -> list[int]:
@@ -192,6 +202,16 @@ def serialize_kb(template: dict[str, Any] | None = None) -> tuple[dict[str, Any]
             config["KBKeyMacro"][slot] = {
                 "MemMacId": mem_id, "grpGuid": GROUP_GUID, "macGuid": guid,
             }
+    # Joystick click is a separate native Enter slot, not another Alpha macro.
+    if "KBKey" in config:
+        config["KBKey"][JOYSTICK_CLICK_STORAGE] = 40
+    if "KBKeyMacro" in config:
+        config["KBKeyMacro"][JOYSTICK_CLICK_STORAGE] = empty_macro_binding()
+        # Never inherit a Space macro/MemMacId from a local template: its
+        # final Alpha binding is explicitly unresolved.
+        config["KBKeyMacro"]["btn_KBKey_Space"] = empty_macro_binding()
+    if "KBKey" in config:
+        config["KBKey"]["btn_KBKey_Space"] = 44
     alpha_group = {
         "GrpGuid": GROUP_GUID, "GrpName": encoded_name(GROUP_NAME),
         "MacroInfo": [macro_object(name, action, guid, "RU") for name, action, guid in MACROS],
@@ -222,7 +242,11 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
     manifest = {
         "generatorVersion": VERSION, "generatorCommit": os.environ.get("K15_GENERATOR_COMMIT", "working-tree"),
         "profileId": "native-ru-alpha", "requiredWindowsLayout": layout,
-        "inputProfileSelection": {"mode": "forced", "selected": layout},
+        "inputProfileSelection": {
+            "mode": "forced-self-select", "selected": layout,
+            "ruSelector": "Ctrl+Shift+2", "enSelector": "Ctrl+Shift+1",
+            "selectorOrder": "Ctrl down, Shift down, layout key down/up, Shift up, Ctrl up",
+        },
         "macroGroupGuid": GROUP_GUID,
         "macros": [{"name": n, "action": a, "guid": g} for n, a, g in MACROS],
         "physicalControls": [{"control": c, "action": a, "storage": CONTROL_STORAGE.get(c),
@@ -231,10 +255,25 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
                              for c, a in PHYSICAL_ACTIONS],
         "eventDelayMs": EVENT_DELAY_MS, "macRpt": 1, "rptType": 0,
         "unresolvedBindings": unresolved,
+        "bindingEvidence": {
+            "sub": "proven in observed native Profile B state; MemMacId=13",
+            "add": "proven in observed native Profile B state; MemMacId=14",
+            "space": "unresolved; no final Alpha MemMacId proof",
+            "memMacId13_14Scope": "Observed fixture evidence only; not asserted as a universal invariant",
+        },
+        "importValidationRequired": True,
+        "joystickClick": {
+            "storage": JOYSTICK_CLICK_STORAGE, "mode": "NATIVE_ENTER",
+            "keyValue": 40, "submitReady": "PASS",
+        },
+        "forcedLanguageSelectorModel": "PASS",
+        "ruTextMacrosSelfSelectLayout": True,
+        "manualPreselectRuRequired": False,
         "packages": {"macro": macro_path.name, "kb": kb_path.name},
         "sha256": {"macro": sha256(macro_path), "kb": sha256(kb_path)},
         "fixtureProvenance": [
             "corrected native Shift+Enter fixture SHA-256: " + CORRECTED_NEW_LINE_FIXTURE_SHA256,
+            "native bottom-binding fixture SHA-256: " + BOTTOM_BINDING_FIXTURE_SHA256,
             "native Profile B export pair supplied by the owner; only proven alpha bindings retained",
         ],
     }
@@ -249,6 +288,19 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "ALL_TEXT_MACROS_10MS=PASS\n"
         "SHIFT_ENTER_SEQUENCE=PASS\n"
         "SHIFT_ENTER_10MS=PASS\n"
+        "FORCED_LANGUAGE_SELECTOR_MODEL=PASS\n"
+        "RU_SELECTOR=Ctrl+Shift+2\n"
+        "EN_SELECTOR=Ctrl+Shift+1\n"
+        "RU_TEXT_MACROS_SELF_SELECT_LAYOUT=PASS\n"
+        "MANUAL_PRESELECT_RU_REQUIRED=NO\n"
+        "SUB_BINDING_SERIALIZATION=PROVEN\n"
+        "ADD_BINDING_SERIALIZATION=PROVEN\n"
+        "MEMMACID_13_14_ASSIGNMENT_SCOPE=observed fixture state only; universal invariant not claimed\n"
+        "IMPORT_VALIDATION_REQUIRED=YES\n"
+        "SPACE_BINDING=UNRESOLVED\n"
+        "JOYSTICK_CLICK_STORAGE=btn_KBKey_Enter\n"
+        "JOYSTICK_CLICK_MODE=NATIVE_ENTER\n"
+        "JOYSTICK_CLICK_SUBMIT_READY=PASS\n"
         "NO_AUTO_SUBMIT=PASS\n"
         "MACRO_CONFIG_PACKAGE_READY=PASS\n"
         "KB_CONFIG_PACKAGE_READY=PARTIAL\n"
@@ -258,7 +310,7 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "- Playback: `macRpt=1`, `rptType=0`\n"
         "- Shift+Enter: `225,40,40,225 / 1,1,2,2 / 10ms` (native proven)\n"
         f"- Corrected NEW_LINE fixture SHA-256: `{CORRECTED_NEW_LINE_FIXTURE_SHA256}`\n"
-        f"- MemMacId proof: `{len(PROVEN_BINDINGS)}/15` controls proven\n"
+        f"- MemMacId proof: `{len(PROVEN_BINDINGS)}/15` controls proven; Space remains unresolved\n"
         f"- Unresolved bindings: {', '.join(unresolved)}\n"
         f"- Macro SHA-256: `{sha256(macro_path)}`\n- KB SHA-256: `{sha256(kb_path)}`\n"
         "- LIVE_DEVICE_CHANGED=NO\n- LIVE_VOROTEX_CONFIG_CHANGED=NO\n",

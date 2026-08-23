@@ -1,0 +1,7 @@
+{
+  "fixtureRole": "sanitized-joystick-click-evidence",
+  "storageField": "btn_KBKey_Enter",
+  "mode": "NATIVE_ENTER",
+  "KBKey": 40,
+  "macroBinding": false
+}

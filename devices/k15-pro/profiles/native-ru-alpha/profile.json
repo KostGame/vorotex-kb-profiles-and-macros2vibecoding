@@ -3,7 +3,15 @@
   "profileId": "native-ru-alpha",
   "device": {"vendor": "VOROTEX", "model": "K15 Pro"},
   "requiredWindowsLayout": "RU",
-  "inputProfileSelection": {"mode": "forced", "supported": ["RU", "EN"], "default": "RU"},
+  "importValidationRequired": true,
+  "memMacIdScope": "13/14 are proven for minus/plus in one observed native profile state; universal invariance is not claimed",
+  "inputProfileSelection": {
+    "mode": "forced-self-select",
+    "supported": ["RU", "EN"],
+    "default": "RU",
+    "selectors": {"RU": "Ctrl+Shift+2", "EN": "Ctrl+Shift+1"},
+    "modifierOrder": "Ctrl down, Shift down, layout key down/up, Shift up, Ctrl up"
+  },
   "macroGroup": {
     "name": "K15_VIBECODING_RU_ALPHA",
     "guid": "55492475-3604-4D74-996C-50B165062B5E"
@@ -21,9 +29,10 @@
     {"physicalControl": "0", "semanticAction": "DONE", "macro": "VIBE_10_DONE_RU", "storageField": "btn_KBKey_KeyPad0", "memMacId": 0, "bindingProof": "native-fixture"},
     {"physicalControl": ".", "semanticAction": "STATUS", "macro": "VIBE_11_STATUS_RU", "storageField": "btn_KBKey_KeyPadPoint", "memMacId": 10, "bindingProof": "native-fixture"},
     {"physicalControl": "Enter", "semanticAction": "NEW_LINE", "macro": "VIBE_12_NEW_LINE_RU", "storageField": "btn_KBKey_KeyPadEnter", "memMacId": 11, "bindingProof": "native-fixture"},
-    {"physicalControl": "-", "semanticAction": "STOP", "macro": "VIBE_13_STOP_RU", "storageField": "btn_KBKey_KeyPadSub", "memMacId": null, "bindingProof": "unresolved"},
-    {"physicalControl": "*", "semanticAction": "REPORT", "macro": "VIBE_14_REPORT_RU", "storageField": "btn_KBKey_KeyPadMulti", "memMacId": null, "bindingProof": "unresolved"},
+    {"physicalControl": "-", "semanticAction": "STOP", "macro": "VIBE_13_STOP_RU", "storageField": "btn_KBKey_KeyPadSub", "memMacId": 13, "bindingProof": "native-fixture-observed-state"},
+    {"physicalControl": "+", "semanticAction": "REPORT", "macro": "VIBE_14_REPORT_RU", "storageField": "btn_KBKey_KeyPadAdd", "memMacId": 14, "bindingProof": "native-fixture-observed-state"},
     {"physicalControl": "Space", "semanticAction": "ACCEPT_OR_APPROVE", "macro": "VIBE_15_ACCEPT_RU", "storageField": "btn_KBKey_Space", "memMacId": null, "bindingProof": "unresolved"}
   ],
-  "safety": {"autoSubmit": false, "joystick": "out-of-scope", "encoder": "out-of-scope"}
+  "joystickClick": {"storageField": "btn_KBKey_Enter", "mode": "NATIVE_ENTER", "keyValue": 40},
+  "safety": {"autoSubmit": false, "joystick": "native-click-enter-only", "encoder": "out-of-scope"}
 }

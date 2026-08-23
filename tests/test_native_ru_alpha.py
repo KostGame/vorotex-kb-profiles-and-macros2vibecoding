@@ -33,6 +33,23 @@ class NativeFixtureTests(unittest.TestCase):
         self.assertEqual(fixture["after"]["MemMacId"], 11)
         self.assertEqual(fixture["after"]["grpGuid"], gen.GROUP_GUID)
 
+    def test_bottom_binding_fixture_is_observed_not_universal(self):
+        fixture = self.read_fixture("native-bottom-binding.example.json")
+        self.assertEqual(fixture["minus"]["MemMacId"], 13)
+        self.assertEqual(fixture["plus"]["MemMacId"], 14)
+        self.assertIsNone(fixture["space"]["MemMacId"])
+
+    def test_language_selector_fixture(self):
+        fixture = self.read_fixture("native-language-selector.example.json")
+        self.assertEqual(fixture["RU"]["values"], [224, 225, 31, 31, 225, 224])
+        self.assertEqual(fixture["EN"]["values"], [224, 225, 30, 30, 225, 224])
+
+    def test_joystick_click_fixture(self):
+        fixture = self.read_fixture("native-joystick-click.example.json")
+        self.assertEqual(fixture["storageField"], "btn_KBKey_Enter")
+        self.assertEqual(fixture["KBKey"], 40)
+        self.assertFalse(fixture["macroBinding"])
+
     def test_export_current_and_export_all_mode_fixture(self):
         fixture = self.read_fixture("native-profile-mode.example.json")
         self.assertEqual(fixture["exportCurrent"]["SingleProfile"], 1)
@@ -71,13 +88,27 @@ class SerializerTests(unittest.TestCase):
         self.assertEqual(macros["btn_KBKey_KeyPad1"]["MemMacId"], 2)
         self.assertEqual(macros["btn_KBKey_KeyPad2"]["MemMacId"], 1)
         self.assertEqual(macros["btn_KBKey_KeyPadEnter"]["MemMacId"], 11)
-        self.assertEqual(unresolved, ["-", "*", "Space"])
+        self.assertEqual(macros["btn_KBKey_KeyPadSub"]["MemMacId"], 13)
+        self.assertEqual(macros["btn_KBKey_KeyPadAdd"]["MemMacId"], 14)
+        self.assertEqual(unresolved, ["Space"])
+        self.assertEqual(macros["btn_KBKey_Space"]["MemMacId"], 0)
+        self.assertEqual(macros["btn_KBKey_Space"]["grpGuid"], "")
+        self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_Space"], 44)
+        self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_Enter"], 40)
+        self.assertEqual(package["KBconfig"]["KBKeyMacro"]["btn_KBKey_Enter"]["MemMacId"], 0)
         self.assertEqual(package["SingleProfile"], 1)
         self.assertEqual(len(package["MacroGrpInfo"][0]["MacroInfo"]), 15)
 
     def test_forced_english_profile_is_supported(self):
         package = gen.serialize_macro("EN")
-        self.assertEqual(package["MacroInfo"][0]["macData"]["macVal"][:10], [6, 6, 11, 11, 8, 8, 6, 6, 14, 14])
+        self.assertEqual(package["MacroInfo"][0]["macData"]["macVal"][:16], [224, 225, 30, 30, 225, 224, 6, 6, 11, 11, 8, 8, 6, 6, 14, 14])
+
+    def test_russian_text_self_selects_russian_layout(self):
+        package = gen.serialize_macro("RU")
+        values = package["MacroInfo"][0]["macData"]["macVal"]
+        states = package["MacroInfo"][0]["macData"]["macSta"]
+        self.assertEqual(values[:6], [224, 225, 31, 31, 225, 224])
+        self.assertEqual(states[:6], [1, 1, 1, 2, 2, 2])
 
 
 if __name__ == "__main__":
