@@ -45,8 +45,9 @@ observation only; it does not generalize to other VOROTEX versions.
 The supplied Profile B pair proves `MemMacId` and GUID relationships for the
 numeric keypad slots, decimal point, and Enter. A later observed Profile B
 state proves serialized macro bindings for minus (`MemMacId=13`) and plus
-(`MemMacId=14`). This is scoped to that observed native profile state, not a
-universal invariant. Space has no final direct proof and remains unresolved.
+(`MemMacId=14`). A complete native profile then proves Space at
+`MemMacId=12`. These are scoped to observed profile-memory allocation states,
+not universal semantic control IDs.
 
 The joystick click is separately represented by `btn_KBKey_Enter` with native
 key value `40`; it remains a plain Enter and is not converted into another

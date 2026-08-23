@@ -20,9 +20,10 @@ from typing import Any, Iterable
 VERSION = "0.1.0"
 CORRECTED_NEW_LINE_FIXTURE_SHA256 = "f356f32c6acdf062115d1fc2b7023aa0cb6ec00752dbae2c6502808b7f12017a"
 BOTTOM_BINDING_FIXTURE_SHA256 = "6bb6e1e2a7b2fb896cd046c3323612e25b34c1aa006150784d6556bdc4e39279"
+SPACE_BINDING_FIXTURE_SHA256 = "be038530f798511301e49f9a1d13ea4babf556db64714a8e8fb77bbe7f4fab34"
 JOYSTICK_CLICK_STORAGE = "btn_KBKey_Enter"
 GROUP_NAME = "K15_VIBECODING_RU_ALPHA"
-GROUP_GUID = "55492475-3604-4D74-996C-50B165062B5E"
+GROUP_GUID = "67FAE5A1-B383-4CC8-A99C-AD70C6DAA277"
 EVENT_CAPACITY = 500
 EVENT_DELAY_MS = 10
 
@@ -30,7 +31,7 @@ EVENT_DELAY_MS = 10
 # Windows layout these positions produce Cyrillic letters.
 RU_HID = {
     "й": 20, "ц": 26, "у": 8, "к": 21, "е": 23, "н": 28,
-    "г": 10, "ш": 12, "щ": 18, "з": 19, "х": 47, "ъ": 48,
+    "г": 24, "ш": 12, "щ": 18, "з": 19, "х": 47, "ъ": 48,
     "ф": 4, "ы": 22, "в": 7, "а": 9, "п": 10, "р": 11,
     "о": 13, "л": 14, "д": 15, "ж": 51, "э": 52,
     "я": 29, "ч": 27, "с": 6, "м": 25, "и": 5, "т": 17,
@@ -75,8 +76,9 @@ MACROS = [
     ("VIBE_15_ACCEPT_RU", "ACCEPT_OR_APPROVE", "9C22A63B-A5F8-4D2A-A473-F49DFD668F17"),
 ]
 
-# Native evidence proves these MemMacId values.  The three remaining controls
-# are intentionally absent: no value is fabricated for them.
+# Native evidence proves these MemMacId values for the observed complete
+# profile state.  Slot allocation is profile evidence, not a universal control
+# identity invariant.
 PROVEN_BINDINGS = {
     "1": ("btn_KBKey_KeyPad1", 2), "2": ("btn_KBKey_KeyPad2", 1),
     "3": ("btn_KBKey_KeyPad3", 3), "4": ("btn_KBKey_KeyPad4", 4),
@@ -85,8 +87,9 @@ PROVEN_BINDINGS = {
     "9": ("btn_KBKey_KeyPad9", 9), "0": ("btn_KBKey_KeyPad0", 0),
     ".": ("btn_KBKey_KeyPadPoint", 10), "Enter": ("btn_KBKey_KeyPadEnter", 11),
     "-": ("btn_KBKey_KeyPadSub", 13), "+": ("btn_KBKey_KeyPadAdd", 14),
+    "Space": ("btn_KBKey_Space", 12),
 }
-UNRESOLVED_CONTROLS = ["Space"]
+UNRESOLVED_CONTROLS = []
 CONTROL_STORAGE = {
     **{control: slot for control, (slot, _) in PROVEN_BINDINGS.items()},
     "Space": "btn_KBKey_Space",
@@ -207,11 +210,10 @@ def serialize_kb(template: dict[str, Any] | None = None) -> tuple[dict[str, Any]
         config["KBKey"][JOYSTICK_CLICK_STORAGE] = 40
     if "KBKeyMacro" in config:
         config["KBKeyMacro"][JOYSTICK_CLICK_STORAGE] = empty_macro_binding()
-        # Never inherit a Space macro/MemMacId from a local template: its
-        # final Alpha binding is explicitly unresolved.
-        config["KBKeyMacro"]["btn_KBKey_Space"] = empty_macro_binding()
-    if "KBKey" in config:
-        config["KBKey"]["btn_KBKey_Space"] = 44
+    for control in UNRESOLVED_CONTROLS:
+        slot = CONTROL_STORAGE[control]
+        if "KBKeyMacro" in config:
+            config["KBKeyMacro"][slot] = empty_macro_binding()
     alpha_group = {
         "GrpGuid": GROUP_GUID, "GrpName": encoded_name(GROUP_NAME),
         "MacroInfo": [macro_object(name, action, guid, "RU") for name, action, guid in MACROS],
@@ -241,7 +243,7 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
     write_json(kb_path, kb)
     manifest = {
         "generatorVersion": VERSION, "generatorCommit": os.environ.get("K15_GENERATOR_COMMIT", "working-tree"),
-        "profileId": "native-ru-alpha", "requiredWindowsLayout": layout,
+        "profileId": "native-ru-alpha", "release": "v1-rc", "requiredWindowsLayout": layout,
         "inputProfileSelection": {
             "mode": "forced-self-select", "selected": layout,
             "ruSelector": "Ctrl+Shift+2", "enSelector": "Ctrl+Shift+1",
@@ -258,7 +260,7 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "bindingEvidence": {
             "sub": "proven in observed native Profile B state; MemMacId=13",
             "add": "proven in observed native Profile B state; MemMacId=14",
-            "space": "unresolved; no final Alpha MemMacId proof",
+            "space": "proven in complete native profile state; MemMacId=12",
             "memMacId13_14Scope": "Observed fixture evidence only; not asserted as a universal invariant",
         },
         "importValidationRequired": True,
@@ -274,6 +276,7 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "fixtureProvenance": [
             "corrected native Shift+Enter fixture SHA-256: " + CORRECTED_NEW_LINE_FIXTURE_SHA256,
             "native bottom-binding fixture SHA-256: " + BOTTOM_BINDING_FIXTURE_SHA256,
+            "native Space-binding fixture SHA-256: " + SPACE_BINDING_FIXTURE_SHA256,
             "native Profile B export pair supplied by the owner; only proven alpha bindings retained",
         ],
     }
@@ -282,10 +285,12 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
     report.write_text(
         "# Native RU Alpha generation report\n\n"
         "STATUS=READY_FOR_OFFICIAL_IMPORT_ALPHA_TEST\n\n"
+        "RELEASE=V1_RC\n"
         "NATIVE_RU_ALPHA_10MS_READY=PASS\n"
         "ALL_15_MACROS_PRESENT=PASS\n"
         "ALL_15_CYCLE_SERIALIZATION=PASS\n"
         "ALL_TEXT_MACROS_10MS=PASS\n"
+        "ALL_15_PHYSICAL_BINDINGS=PASS\n"
         "SHIFT_ENTER_SEQUENCE=PASS\n"
         "SHIFT_ENTER_10MS=PASS\n"
         "FORCED_LANGUAGE_SELECTOR_MODEL=PASS\n"
@@ -297,21 +302,24 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "ADD_BINDING_SERIALIZATION=PROVEN\n"
         "MEMMACID_13_14_ASSIGNMENT_SCOPE=observed fixture state only; universal invariant not claimed\n"
         "IMPORT_VALIDATION_REQUIRED=YES\n"
-        "SPACE_BINDING=UNRESOLVED\n"
+        "SPACE_BINDING=PROVEN\n"
+        "SPACE_STORAGE=btn_KBKey_Space\n"
+        "SPACE_MEMMACID=12\n"
+        "SPACE_MACRO=VIBE_15_ACCEPT_RU\n"
         "JOYSTICK_CLICK_STORAGE=btn_KBKey_Enter\n"
         "JOYSTICK_CLICK_MODE=NATIVE_ENTER\n"
         "JOYSTICK_CLICK_SUBMIT_READY=PASS\n"
         "NO_AUTO_SUBMIT=PASS\n"
         "MACRO_CONFIG_PACKAGE_READY=PASS\n"
-        "KB_CONFIG_PACKAGE_READY=PARTIAL\n"
+        "KB_CONFIG_PACKAGE_READY=PASS\n"
         "SINGLE_PROFILE_FORMAT_PROVEN=PASS\n"
-        "MEMMACID_MAPPING_PROVEN=PARTIAL\n\n"
+        "MEMMACID_MAPPING_PROVEN=PASS\n\n"
         f"- Layout: `{layout}` (forced)\n- Event delay: `{EVENT_DELAY_MS} ms`\n"
         "- Playback: `macRpt=1`, `rptType=0`\n"
         "- Shift+Enter: `225,40,40,225 / 1,1,2,2 / 10ms` (native proven)\n"
         f"- Corrected NEW_LINE fixture SHA-256: `{CORRECTED_NEW_LINE_FIXTURE_SHA256}`\n"
-        f"- MemMacId proof: `{len(PROVEN_BINDINGS)}/15` controls proven; Space remains unresolved\n"
-        f"- Unresolved bindings: {', '.join(unresolved)}\n"
+        f"- MemMacId proof: `{len(PROVEN_BINDINGS)}/15` controls proven in the observed profile state\n"
+        f"- Unresolved bindings: {', '.join(unresolved) if unresolved else 'NONE'}\n"
         f"- Macro SHA-256: `{sha256(macro_path)}`\n- KB SHA-256: `{sha256(kb_path)}`\n"
         "- LIVE_DEVICE_CHANGED=NO\n- LIVE_VOROTEX_CONFIG_CHANGED=NO\n",
         encoding="utf-8",

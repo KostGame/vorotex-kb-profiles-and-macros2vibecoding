@@ -31,7 +31,14 @@ class NativeFixtureTests(unittest.TestCase):
         fixture = self.read_fixture("native-enter-binding.example.json")
         self.assertEqual(fixture["before"]["MemMacId"], 0)
         self.assertEqual(fixture["after"]["MemMacId"], 11)
-        self.assertEqual(fixture["after"]["grpGuid"], gen.GROUP_GUID)
+        self.assertEqual(fixture["after"]["grpGuid"], "55492475-3604-4D74-996C-50B165062B5E")
+
+    def test_space_binding_fixture(self):
+        fixture = self.read_fixture("native-space-binding.example.json")
+        self.assertEqual(fixture["KBKey"], 700)
+        self.assertEqual(fixture["MemMacId"], 12)
+        self.assertEqual(fixture["grpGuid"], gen.GROUP_GUID)
+        self.assertEqual(fixture["macro"], "VIBE_15_ACCEPT_RU")
 
     def test_bottom_binding_fixture_is_observed_not_universal(self):
         fixture = self.read_fixture("native-bottom-binding.example.json")
@@ -82,6 +89,11 @@ class SerializerTests(unittest.TestCase):
         self.assertEqual(values, [10, 10, 11, 11, 13, 13, 7, 7, 23, 23, 11, 11, 16, 16])
         self.assertEqual(states, [1, 2] * 7)
 
+    def test_cyrillic_ge_uses_ru_u_key_position(self):
+        values, states = gen.hid_events("г", "RU")
+        self.assertEqual(values, [24, 24])
+        self.assertEqual(states, [1, 2])
+
     def test_kb_proven_bindings_and_unresolved_controls(self):
         package, unresolved = gen.serialize_kb()
         macros = package["KBconfig"]["KBKeyMacro"]
@@ -90,10 +102,10 @@ class SerializerTests(unittest.TestCase):
         self.assertEqual(macros["btn_KBKey_KeyPadEnter"]["MemMacId"], 11)
         self.assertEqual(macros["btn_KBKey_KeyPadSub"]["MemMacId"], 13)
         self.assertEqual(macros["btn_KBKey_KeyPadAdd"]["MemMacId"], 14)
-        self.assertEqual(unresolved, ["Space"])
-        self.assertEqual(macros["btn_KBKey_Space"]["MemMacId"], 0)
-        self.assertEqual(macros["btn_KBKey_Space"]["grpGuid"], "")
-        self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_Space"], 44)
+        self.assertEqual(unresolved, [])
+        self.assertEqual(macros["btn_KBKey_Space"]["MemMacId"], 12)
+        self.assertEqual(macros["btn_KBKey_Space"]["grpGuid"], gen.GROUP_GUID)
+        self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_Space"], 700)
         self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_Enter"], 40)
         self.assertEqual(package["KBconfig"]["KBKeyMacro"]["btn_KBKey_Enter"]["MemMacId"], 0)
         self.assertEqual(package["SingleProfile"], 1)

@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "profileId": "native-ru-alpha",
+  "release": "v1-rc",
   "device": {"vendor": "VOROTEX", "model": "K15 Pro"},
   "requiredWindowsLayout": "RU",
   "importValidationRequired": true,
@@ -31,7 +32,7 @@
     {"physicalControl": "Enter", "semanticAction": "NEW_LINE", "macro": "VIBE_12_NEW_LINE_RU", "storageField": "btn_KBKey_KeyPadEnter", "memMacId": 11, "bindingProof": "native-fixture"},
     {"physicalControl": "-", "semanticAction": "STOP", "macro": "VIBE_13_STOP_RU", "storageField": "btn_KBKey_KeyPadSub", "memMacId": 13, "bindingProof": "native-fixture-observed-state"},
     {"physicalControl": "+", "semanticAction": "REPORT", "macro": "VIBE_14_REPORT_RU", "storageField": "btn_KBKey_KeyPadAdd", "memMacId": 14, "bindingProof": "native-fixture-observed-state"},
-    {"physicalControl": "Space", "semanticAction": "ACCEPT_OR_APPROVE", "macro": "VIBE_15_ACCEPT_RU", "storageField": "btn_KBKey_Space", "memMacId": null, "bindingProof": "unresolved"}
+    {"physicalControl": "Space", "semanticAction": "ACCEPT_OR_APPROVE", "macro": "VIBE_15_ACCEPT_RU", "storageField": "btn_KBKey_Space", "memMacId": 12, "bindingProof": "native-fixture-observed-state"}
   ],
   "joystickClick": {"storageField": "btn_KBKey_Enter", "mode": "NATIVE_ENTER", "keyValue": 40},
   "safety": {"autoSubmit": false, "joystick": "native-click-enter-only", "encoder": "out-of-scope"}

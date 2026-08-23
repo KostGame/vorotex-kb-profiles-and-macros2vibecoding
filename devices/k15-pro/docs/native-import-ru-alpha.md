@@ -42,9 +42,9 @@ python tools/generate_native_ru_alpha.py `
 The template is read-only and is not copied into the repository. The
 serializer retains the native KB sections and replaces `MacroGrpInfo` with
 the single intended RU Alpha group. Numeric, decimal-point, Enter, minus and
-plus bindings are emitted from observed native evidence. The observed
-minus/plus `MemMacId` values 13/14 are not claimed as universal invariants.
-Space remains unresolved and is listed in the manifest/report.
+plus and Space bindings are emitted from observed native evidence. The
+observed slot values 12/13/14 are profile-memory allocation evidence, not
+universal semantic control IDs.
 
 The joystick click is preserved as the native `btn_KBKey_Enter` key with
 `KBKey=40`. It is a plain Enter submit action and does not consume an Alpha
