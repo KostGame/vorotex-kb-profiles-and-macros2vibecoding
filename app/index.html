@@ -3,144 +3,173 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VOROTEX Vibecoding Configurator</title>
+  <title>VOROTEX K15 Configurator</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <div class="eyebrow">K15 Pro · local-first</div>
-      <h1>VOROTEX Vibecoding Configurator</h1>
+    <a class="brand" href="#" aria-label="VOROTEX K15 Configurator">
+      <span class="brand-mark">VK</span>
+      <span>
+        <strong>VOROTEX K15 Configurator</strong>
+        <small>local export editor</small>
+      </span>
+    </a>
+    <div class="topbar-meta">
+      <span id="runtimeStatus" class="runtime-status">загрузка…</span>
+      <span class="version">v0.1.1</span>
     </div>
-    <span class="badge">v0.1 alpha</span>
   </header>
 
-  <main class="layout">
-    <section class="card hero">
-      <div>
-        <h2>Открой экспорт VOROTEX</h2>
-        <p>Файл обрабатывается только в браузере. Приложение не меняет установленный VOROTEX и не обращается к клавиатуре напрямую.</p>
+  <main class="page-shell">
+    <section class="welcome-panel">
+      <div class="welcome-copy">
+        <span class="kicker">K15 Pro · локально · без сервера</span>
+        <h1>Открой экспорт VOROTEX, измени его и импортируй обратно.</h1>
+        <p>Приложение работает с официальными файлами <code>.Macro.Config</code> и <code>.KB.Config</code>. Ничего не отправляется в интернет и ничего не пишет в клавиатуру напрямую.</p>
       </div>
-      <div class="actions">
-        <button id="openMacroBtn" class="primary">Открыть .Macro.Config</button>
-        <button id="openProfileBtn">Открыть .KB.Config</button>
-        <input id="fileInput" type="file" hidden>
+
+      <div class="file-actions" aria-label="Открыть VOROTEX export">
+        <input id="macroFileInput" class="native-file-input" type="file" accept=".Config">
+        <label class="file-choice primary-choice" for="macroFileInput">
+          <span class="file-choice-icon">M</span>
+          <span>
+            <strong>Открыть макросы</strong>
+            <small>.Macro.Config</small>
+          </span>
+          <span class="arrow">→</span>
+        </label>
+
+        <input id="profileFileInput" class="native-file-input" type="file" accept=".Config">
+        <label class="file-choice" for="profileFileInput">
+          <span class="file-choice-icon">K</span>
+          <span>
+            <strong>Открыть профиль</strong>
+            <small>.KB.Config</small>
+          </span>
+          <span class="arrow">→</span>
+        </label>
+      </div>
+
+      <div id="dropZone" class="drop-zone" tabindex="0">
+        <span>или перетащи сюда любой экспорт VOROTEX</span>
+        <small>Тип файла определится автоматически</small>
       </div>
     </section>
 
-    <section id="emptyState" class="card empty-state">
-      <div class="empty-icon">⌨</div>
-      <h2>Файл пока не открыт</h2>
-      <p>Поддерживаются официальные JSON-экспорты VOROTEX: <code>.Macro.Config</code> и <code>.KB.Config</code>.</p>
+    <section id="emptyState" class="empty-state">
+      <div class="empty-graphic" aria-hidden="true">
+        <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span>
+        <span>6</span><span>7</span><span>8</span><span>9</span><span>0</span>
+        <span>−</span><span>+</span><span>↵</span><span>·</span><span>␠</span>
+      </div>
+      <h2>Здесь появится профиль K15</h2>
+      <p>Сначала открой экспорт. Для выбора файла используются обычные системные диалоги Windows, они работают даже при запуске страницы через <code>file://</code>.</p>
     </section>
 
     <section id="workspace" class="workspace hidden">
-      <aside class="card sidebar">
-        <div class="section-title">
-          <h2>Документ</h2>
-          <button id="closeBtn" class="ghost small">Закрыть</button>
+      <aside class="panel sidebar">
+        <div class="panel-heading">
+          <div>
+            <span class="kicker">Документ</span>
+            <h2 id="fileName">—</h2>
+          </div>
+          <button id="closeBtn" class="button subtle small" type="button">Закрыть</button>
         </div>
-        <dl class="facts">
-          <div><dt>Файл</dt><dd id="fileName">—</dd></div>
-          <div><dt>Тип</dt><dd id="fileType">—</dd></div>
-          <div><dt>Групп</dt><dd id="groupCount">0</dd></div>
-          <div><dt>Макросов</dt><dd id="macroCount">0</dd></div>
-          <div><dt>Привязок</dt><dd id="bindingCount">0</dd></div>
-        </dl>
 
-        <div class="divider"></div>
+        <div class="facts">
+          <div><span>Тип</span><strong id="fileType">—</strong></div>
+          <div><span>Групп</span><strong id="groupCount">0</strong></div>
+          <div><span>Макросов</span><strong id="macroCount">0</strong></div>
+          <div><span>Привязок</span><strong id="bindingCount">0</strong></div>
+        </div>
 
-        <h3>Группы</h3>
-        <div id="groupList" class="list"></div>
+        <div class="section-label">Группы и макросы</div>
+        <div id="groupList" class="group-list"></div>
 
         <div id="bindingsPanel" class="hidden">
-          <div class="divider"></div>
-          <h3>Активные привязки</h3>
+          <div class="section-label">Активные привязки</div>
           <div id="bindingList" class="binding-list"></div>
         </div>
       </aside>
 
-      <section class="card editor">
-        <div class="section-title">
+      <section class="panel editor">
+        <div class="panel-heading">
           <div>
-            <div class="eyebrow">Выбранный макрос</div>
+            <span class="kicker">Редактор макроса</span>
             <h2 id="macroTitle">—</h2>
           </div>
-          <span id="dirtyBadge" class="badge warning hidden">изменён</span>
+          <span id="dirtyBadge" class="changed-badge hidden">изменён</span>
         </div>
 
-        <div id="noMacro" class="empty-inline">Выбери макрос слева.</div>
+        <div id="noMacro" class="placeholder">Выбери макрос слева.</div>
 
         <div id="macroEditor" class="hidden">
           <div class="form-grid">
             <label>
-              Имя макроса
+              <span>Имя макроса</span>
               <input id="macroNameInput" type="text">
             </label>
             <label>
-              GUID
+              <span>GUID</span>
               <input id="macroGuidInput" type="text" readonly>
             </label>
             <label>
-              Событий
+              <span>Событий</span>
               <input id="macroEventCount" type="text" readonly>
             </label>
             <label>
-              Цикл
+              <span>Режим выполнения</span>
               <select id="cycleSelect">
-                <option value="cycle1">Цикл = 1 (macRpt=1, rptType=0)</option>
                 <option value="preserve">Не менять</option>
+                <option value="cycle1">Цикл = 1 · подтверждённый формат</option>
               </select>
             </label>
           </div>
 
-          <div class="divider"></div>
-
-          <div class="language-box">
+          <section class="language-card">
             <div>
-              <div class="eyebrow">Язык текстового макроса</div>
-              <h3>Прямой выбор раскладки Windows</h3>
-              <p>Подтверждённая схема: EN = Ctrl+Shift+1, RU = Ctrl+Shift+2. В этой версии настройка хранится как проектная подсказка и не переписывает HID-последовательность автоматически.</p>
+              <span class="kicker">Windows input language</span>
+              <h3>Прямой выбор раскладки</h3>
+              <p>Подтверждено на текущей системе: English через <b>Ctrl+Shift+1</b>, Russian через <b>Ctrl+Shift+2</b>. Автоматическая компиляция текста появится следующим этапом.</p>
             </div>
             <div class="selector-grid">
-              <label>English <input id="enSelector" value="Ctrl+Shift+1"></label>
-              <label>Русский <input id="ruSelector" value="Ctrl+Shift+2"></label>
+              <label><span>English</span><input id="enSelector" value="Ctrl+Shift+1" readonly></label>
+              <label><span>Русский</span><input id="ruSelector" value="Ctrl+Shift+2" readonly></label>
             </div>
-          </div>
+          </section>
 
-          <div class="divider"></div>
-
-          <details>
-            <summary>Показать события макроса</summary>
+          <details class="event-details">
+            <summary>Низкоуровневые HID-события</summary>
             <div id="eventTableWrap" class="table-wrap"></div>
           </details>
         </div>
       </section>
 
-      <section class="card raw-panel">
-        <div class="section-title">
+      <section class="panel raw-panel">
+        <div class="panel-heading">
           <div>
-            <div class="eyebrow">Loss-preserving view</div>
+            <span class="kicker">Экспертный режим</span>
             <h2>Raw JSON</h2>
           </div>
-          <button id="formatBtn" class="ghost small">Форматировать</button>
+          <button id="formatBtn" class="button subtle small" type="button">Применить и форматировать</button>
         </div>
         <textarea id="rawJson" spellcheck="false"></textarea>
-        <p class="hint">Неизвестные поля сохраняются. Ручное редактирование JSON считается экспертным режимом.</p>
+        <p class="hint">Неизвестные поля исходного экспорта сохраняются. Ручное редактирование здесь делай только если понимаешь структуру VOROTEX.</p>
       </section>
 
-      <section class="card footer-actions">
+      <section class="panel command-bar">
         <div id="statusText" class="status ok">Готово.</div>
-        <div class="actions">
-          <button id="validateBtn">Проверить</button>
-          <button id="downloadBtn" class="primary">Экспортировать как…</button>
+        <div class="command-actions">
+          <button id="validateBtn" class="button" type="button">Проверить структуру</button>
+          <button id="downloadBtn" class="button primary" type="button">Экспортировать файл</button>
         </div>
       </section>
     </section>
   </main>
 
   <footer>
-    Локальная утилита. Никакие файлы не отправляются на сервер.
+    VOROTEX K15 Configurator · данные остаются на этом компьютере
   </footer>
 
   <script src="app.js"></script>
