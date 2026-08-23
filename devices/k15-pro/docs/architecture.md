@@ -38,13 +38,16 @@ Automatic device synchronization merely from loading generated files has not bee
 
 ## Vibecoding control layers
 
-The intended user-facing architecture separates hardware from application semantics:
+The intended user-facing architecture separates hardware identity, semantic meaning, language, and application behavior:
 
 ```text
 K15 physical control
         |
         v
 semantic trigger
+        |
+        v
+selected locale pack
         |
         v
 app-aware dispatcher
@@ -57,6 +60,24 @@ app-aware dispatcher
 ```
 
 This makes one physical control context-aware without repeatedly rewriting K15 onboard memory.
+
+### Why language is a separate layer
+
+A separate onboard hardware profile per natural language would scale poorly and consume scarce profile slots. It would also make text macros dependent on the active keyboard layout.
+
+Instead, the physical profile emits stable semantic triggers such as `CHECK`, `FIX`, or `REVIEW`. The host-side dispatcher selects `ru-RU`, `en-US`, `de-DE`, `it-IT`, `zh-CN`, or another locale pack and inserts the corresponding Unicode text.
+
+This separation is particularly important for Chinese, Japanese, and Korean, where IME state makes ordinary keystroke replay an unreliable representation of the intended text.
+
+The canonical language packs are data, not vendor configuration snapshots. They can later feed an AutoHotkey, PowerToys, Stream Deck-style, custom Windows, or other dispatcher without changing their semantics.
+
+## Hardware-family compatibility layer
+
+The project treats K15 Pro as a hardware analogue of the W909 / SXS-W909 family for research and search purposes. Compatibility evidence is tracked separately from the proven K15 configuration model.
+
+Never infer low-level compatibility merely from physical similarity. Firmware, VID/PID, Bluetooth identity, configuration filenames, JSON schema, RGB protocol, and device-write protocol remain K15-specific unless separately demonstrated.
+
+See [`w909-compatibility.md`](w909-compatibility.md).
 
 ## Reference design principles
 
@@ -78,3 +99,4 @@ The K15 implementation is independent and adapts these principles to the control
 - Generated profiles should be reproducible from sanitized declarative input.
 - Unknown physical-storage mappings remain unsupported rather than inferred.
 - Native VOROTEX device writes are preferred until a lower-level protocol is independently understood and justified.
+- W909-family similarity must not be promoted to binary/configuration compatibility without direct evidence.

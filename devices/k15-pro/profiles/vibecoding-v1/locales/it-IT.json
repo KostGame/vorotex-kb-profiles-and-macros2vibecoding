@@ -1,0 +1,20 @@
+{
+  "schemaVersion":1,"profileId":"vibecoding-v1","locale":"it-IT","languageName":"Italiano","script":"Latin","tier":"primary","delivery":"software-dispatcher","inputMethod":"direct-unicode",
+  "actions":{
+    "CHECK":{"type":"text","text":"Controlla il lavoro corrente. Trova errori, omissioni e incoerenze."},
+    "NEXT":{"type":"text","text":"Procedi con il prossimo passo logico."},
+    "AGENT_PROMPT":{"type":"text","text":"Prepara un prompt preciso per il prossimo agente con contesto, attività, vincoli e criteri di completamento."},
+    "FIX":{"type":"text","text":"Correggi i problemi individuati nell'ambito concordato, poi verifica di nuovo il risultato."},
+    "PUBLISH":{"type":"text","text":"Prepara il risultato corrente per la pubblicazione. Non eseguire azioni irreversibili senza una conferma separata."},
+    "MERGE":{"type":"text","text":"Prepara la modifica per il merge, verifica i criteri di prontezza e richiedi una conferma separata prima del merge."},
+    "CREATE":{"type":"text","text":"Crea l'artefatto o la modifica richiesta nell'ambito attualmente concordato."},
+    "CONTINUE":{"type":"text","text":"Continua il lavoro corrente dall'ultimo punto confermato."},
+    "REVIEW":{"type":"text","text":"Esegui una revisione del risultato corrente ed elenca i problemi trovati in ordine di priorità."},
+    "TEST":{"type":"text","text":"Esegui o controlla i test pertinenti e comunica il risultato effettivo."},
+    "STATUS":{"type":"text","text":"Comunica uno stato corrente sintetico: lavoro completato, blocchi e prossimo passo."},
+    "NEW_LINE":{"type":"dispatcher","command":"NEW_LINE"},
+    "REJECT_OR_STOP":{"type":"text","text":"Interrompi il percorso corrente e prepara un rollback sicuro o un'alternativa. Non eseguire azioni irreversibili."},
+    "ACCEPT_OR_APPROVE":{"type":"text","text":"Registra la decisione corrente come approvata nell'ambito già concordato."},
+    "PUSH_TO_TALK":{"type":"dispatcher","command":"PUSH_TO_TALK"}
+  }
+}

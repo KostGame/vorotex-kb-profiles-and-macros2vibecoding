@@ -1,0 +1,20 @@
+{
+  "schemaVersion":1,"profileId":"vibecoding-v1","locale":"ja-JP","languageName":"日本語","script":"Japanese","tier":"extended","delivery":"software-dispatcher","inputMethod":"ime-or-direct-unicode",
+  "actions":{
+    "CHECK":{"type":"text","text":"現在の作業を確認し、エラー、抜け、矛盾を見つけてください。"},
+    "NEXT":{"type":"text","text":"次の論理的なステップに進んでください。"},
+    "AGENT_PROMPT":{"type":"text","text":"次のエージェント向けに、コンテキスト、タスク、制約、完了条件を含む正確なプロンプトを作成してください。"},
+    "FIX":{"type":"text","text":"合意済みの範囲で見つかった問題を修正し、その後もう一度結果を検証してください。"},
+    "PUBLISH":{"type":"text","text":"現在の結果を公開できる状態に準備してください。別途確認なしに不可逆な操作を実行しないでください。"},
+    "MERGE":{"type":"text","text":"変更をマージできる状態に準備し、準備条件を確認して、マージ前に別途確認を求めてください。"},
+    "CREATE":{"type":"text","text":"現在合意されている範囲で、要求された成果物または変更を作成してください。"},
+    "CONTINUE":{"type":"text","text":"最後に確認された地点から現在の作業を続けてください。"},
+    "REVIEW":{"type":"text","text":"現在の結果をレビューし、見つかった問題を優先度順に列挙してください。"},
+    "TEST":{"type":"text","text":"関連するテストを実行または確認し、実際の結果を報告してください。"},
+    "STATUS":{"type":"text","text":"現在の状態を簡潔に報告してください。完了した作業、ブロッカー、次のステップを含めてください。"},
+    "NEW_LINE":{"type":"dispatcher","command":"NEW_LINE"},
+    "REJECT_OR_STOP":{"type":"text","text":"現在の方針を停止し、安全なロールバックまたは代替案を準備してください。不可逆な操作を実行しないでください。"},
+    "ACCEPT_OR_APPROVE":{"type":"text","text":"すでに合意されている範囲内で、現在の決定を承認済みとして記録してください。"},
+    "PUSH_TO_TALK":{"type":"dispatcher","command":"PUSH_TO_TALK"}
+  }
+}

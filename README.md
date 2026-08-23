@@ -16,6 +16,29 @@ The first supported device is the **VOROTEX K15 Pro**.
 
 - [`devices/k15-pro/`](devices/k15-pro/) — VOROTEX K15 Pro research and VIBECODING profile design.
 
+## W909 hardware-family note
+
+For research, discovery, and compatibility investigation, this project treats the **VOROTEX K15 Pro as a VOROTEX-branded hardware analogue of the W909 / SXS-W909 family**.
+
+The match is based on the distinctive hardware concept: 15 programmable mechanical keys, tri-mode USB-C / Bluetooth / 2.4 GHz connectivity, a rotary control, a 5-way joystick, hot-swappable switches, and RGB lighting. Public W909-family documentation describes the same overall control layout and behavior.
+
+This statement is intentionally limited to **hardware-family equivalence**. It does **not** claim proven interchangeability of firmware, drivers, USB/Bluetooth identifiers, configuration JSON, battery electronics, RGB protocol, or device-write protocol.
+
+See [`devices/k15-pro/docs/w909-compatibility.md`](devices/k15-pro/docs/w909-compatibility.md) for the evidence boundary and compatibility research rules.
+
+## Multilingual VIBECODING profiles
+
+VIBECODING v1 uses one stable physical/semantic layout and separate language packs. A physical key keeps the same meaning in every language; only the command rendered by the software-side dispatcher changes.
+
+Current language packs:
+
+- primary: Russian (`ru-RU`), English (`en-US`), German (`de-DE`), Italian (`it-IT`), Simplified Chinese (`zh-CN`);
+- extended: Spanish (`es-ES`), French (`fr-FR`), Brazilian Portuguese (`pt-BR`), Japanese (`ja-JP`), Korean (`ko-KR`).
+
+The canonical machine-readable files live under [`devices/k15-pro/profiles/vibecoding-v1/`](devices/k15-pro/profiles/vibecoding-v1/).
+
+This architecture avoids consuming a separate onboard hardware profile for every spoken language and avoids relying on fragile keyboard-layout-dependent HID text entry for Unicode/IME languages. The K15 emits stable semantic triggers; the host-side dispatcher inserts localized Unicode text or performs application-specific actions.
+
 ## Manual installation of generated configuration files
 
 For K15 Pro, the currently proven practical path uses generated files plus the official VOROTEX application.
@@ -40,7 +63,7 @@ The vibecoding UX is informed by the OpenAI + Work Louder **Codex Micro** contro
 
 Reference: https://openai.com/supply/co-lab/work-louder/
 
-This repository is an independent community project and is not affiliated with or endorsed by VOROTEX, OpenAI, or Work Louder.
+This repository is an independent community project and is not affiliated with or endorsed by VOROTEX, OpenAI, Work Louder, or W909-family sellers/manufacturers.
 
 ## Public-repository safety
 

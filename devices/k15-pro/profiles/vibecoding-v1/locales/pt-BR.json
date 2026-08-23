@@ -1,0 +1,20 @@
+{
+  "schemaVersion":1,"profileId":"vibecoding-v1","locale":"pt-BR","languageName":"Português (Brasil)","script":"Latin","tier":"extended","delivery":"software-dispatcher","inputMethod":"direct-unicode",
+  "actions":{
+    "CHECK":{"type":"text","text":"Verifique o trabalho atual. Encontre erros, omissões e inconsistências."},
+    "NEXT":{"type":"text","text":"Prossiga para o próximo passo lógico."},
+    "AGENT_PROMPT":{"type":"text","text":"Prepare um prompt preciso para o próximo agente com contexto, tarefa, restrições e critérios de conclusão."},
+    "FIX":{"type":"text","text":"Corrija os problemas identificados dentro do escopo acordado e depois verifique novamente o resultado."},
+    "PUBLISH":{"type":"text","text":"Prepare o resultado atual para publicação. Não execute ações irreversíveis sem confirmação separada."},
+    "MERGE":{"type":"text","text":"Prepare a alteração para merge, verifique os critérios de prontidão e solicite confirmação separada antes do merge."},
+    "CREATE":{"type":"text","text":"Crie o artefato ou a alteração solicitada dentro do escopo atualmente acordado."},
+    "CONTINUE":{"type":"text","text":"Continue o trabalho atual a partir do último ponto confirmado."},
+    "REVIEW":{"type":"text","text":"Revise o resultado atual e liste os problemas encontrados por ordem de prioridade."},
+    "TEST":{"type":"text","text":"Execute ou verifique os testes relevantes e informe o resultado real."},
+    "STATUS":{"type":"text","text":"Informe de forma breve o status atual: trabalho concluído, bloqueios e próximo passo."},
+    "NEW_LINE":{"type":"dispatcher","command":"NEW_LINE"},
+    "REJECT_OR_STOP":{"type":"text","text":"Interrompa o caminho atual e prepare uma reversão segura ou uma alternativa. Não execute ações irreversíveis."},
+    "ACCEPT_OR_APPROVE":{"type":"text","text":"Registre a decisão atual como aprovada dentro do escopo já acordado."},
+    "PUSH_TO_TALK":{"type":"dispatcher","command":"PUSH_TO_TALK"}
+  }
+}
