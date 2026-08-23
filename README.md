@@ -16,6 +16,34 @@ The first supported device is the **VOROTEX K15 Pro**.
 
 - [`devices/k15-pro/`](devices/k15-pro/) — VOROTEX K15 Pro research and VIBECODING profile design.
 
+## Local configurator
+
+A first local-only configurator prototype lives in [`app/`](app/).
+
+It is a static HTML/CSS/JavaScript application with no build step. Clone or pull the repository and open `app/index.html` directly in a modern browser.
+
+Current v0.1 alpha support includes:
+
+- opening official VOROTEX `.Macro.Config` and `.KB.Config` exports;
+- inspecting macro groups, macros, profile bindings and low-level event arrays;
+- preserving unknown fields while editing supported fields;
+- renaming existing macros while keeping their GUIDs;
+- applying the confirmed GUI `Cycle = 1` serialization (`macRpt=1`, `rptType=0`);
+- validating the supported structural subset;
+- exporting an edited file for native VOROTEX Import.
+
+The intended user-facing path is:
+
+```text
+VOROTEX Export
+    -> local configurator
+    -> edited .Macro.Config / .KB.Config
+    -> official VOROTEX Import
+    -> K15
+```
+
+See [`app/README.md`](app/README.md) for current scope and limitations.
+
 ## Manual installation of generated configuration files
 
 For K15 Pro, the currently proven practical path uses generated files plus the official VOROTEX application.
