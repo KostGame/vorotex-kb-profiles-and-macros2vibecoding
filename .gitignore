@@ -1,0 +1,35 @@
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+*.log
+
+# Python / test / editor state
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+TestResults/
+*.trx
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local runtime / research output
+artifacts/
+runtime/
+.local/
+**/evidence/
+**/original/
+**/rollback/
+**/baseline*/
+**/connected-canary*/
+**/direct-config-canary/
+
+# Raw VOROTEX live files. Publish sanitized .example.* derivatives instead.
+**/Profile0.json
+**/Profile1.json
+**/macroConfig.json
+**/DeviceFeature.ini
+*.bak

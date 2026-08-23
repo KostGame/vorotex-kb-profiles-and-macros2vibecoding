@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "device": {
+    "vendor": "VOROTEX",
+    "model": "K15 Pro"
+  },
+  "controls": {
+    "TOP_1": {"storageField": "btn_KBKey_KeyPad1", "status": "confirmed", "generatorSupported": true},
+    "TOP_2": {"storageField": "btn_KBKey_KeyPad2", "status": "confirmed", "generatorSupported": true},
+    "TOP_3": {"storageField": "btn_KBKey_KeyPad3", "status": "confirmed", "generatorSupported": true},
+    "TOP_4": {"storageField": "btn_KBKey_KeyPad4", "status": "confirmed", "generatorSupported": true},
+    "TOP_5": {"storageField": "btn_KBKey_KeyPad5", "status": "confirmed", "generatorSupported": true},
+    "TOP_6": {"storageField": "btn_KBKey_KeyPad6", "status": "confirmed", "generatorSupported": true},
+    "MID_7": {"storageField": "btn_KBKey_KeyPad7", "status": "confirmed", "generatorSupported": true},
+    "MID_8": {"storageField": "btn_KBKey_KeyPad8", "status": "confirmed", "generatorSupported": true},
+    "MID_9": {"storageField": "btn_KBKey_KeyPad9", "status": "confirmed", "generatorSupported": true},
+    "MID_0": {"storageField": "btn_KBKey_KeyPad0", "status": "confirmed", "generatorSupported": true},
+    "MID_DOT": {"storageField": "btn_KBKey_KeyPadPoint", "status": "confirmed", "generatorSupported": false},
+    "MID_ENTER": {"storageField": "btn_KBKey_KeyPadEnter", "status": "confirmed", "generatorSupported": false},
+    "BOTTOM_MINUS": {"storageField": "btn_KBKey_KeyPadSub", "status": "confirmed", "generatorSupported": false},
+    "BOTTOM_PLUS": {"storageField": "btn_KBKey_KeyPadAdd", "status": "confirmed", "generatorSupported": false},
+    "BOTTOM_SPACE": {"storageField": "btn_KBKey_Space", "status": "confirmed", "generatorSupported": false}
+  },
+  "specialControls": {
+    "ROLLER_LEFT": {"functionalBehavior": "volume_down", "storageStatus": "unresolved"},
+    "ROLLER_RIGHT": {"functionalBehavior": "volume_up", "storageStatus": "unresolved"},
+    "ROLLER_CLICK": {"functionalBehavior": "profile_switch", "storageStatus": "unresolved"},
+    "JOYSTICK_UP": {"functionalBehavior": "cursor_up", "storageStatus": "unresolved"},
+    "JOYSTICK_DOWN": {"functionalBehavior": "cursor_down", "storageStatus": "unresolved"},
+    "JOYSTICK_LEFT": {"functionalBehavior": "cursor_left", "storageStatus": "unresolved"},
+    "JOYSTICK_RIGHT": {"functionalBehavior": "cursor_right", "storageStatus": "unresolved"},
+    "JOYSTICK_CLICK": {"functionalBehavior": null, "storageStatus": "unresolved"}
+  }
+}
