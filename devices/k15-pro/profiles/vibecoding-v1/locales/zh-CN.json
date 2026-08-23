@@ -1,0 +1,20 @@
+{
+  "schemaVersion":1,"profileId":"vibecoding-v1","locale":"zh-CN","languageName":"简体中文","script":"Han","tier":"primary","delivery":"software-dispatcher","inputMethod":"ime-or-direct-unicode",
+  "actions":{
+    "CHECK":{"type":"text","text":"检查当前工作，找出错误、遗漏和不一致之处。"},
+    "NEXT":{"type":"text","text":"继续执行下一个合乎逻辑的步骤。"},
+    "AGENT_PROMPT":{"type":"text","text":"为下一个代理准备一个精确提示，包含上下文、任务、约束和完成标准。"},
+    "FIX":{"type":"text","text":"在已约定的范围内修复已发现的问题，然后再次验证结果。"},
+    "PUBLISH":{"type":"text","text":"准备发布当前结果。未经单独确认，不要执行不可逆操作。"},
+    "MERGE":{"type":"text","text":"准备合并该变更，检查就绪标准，并在合并前请求单独确认。"},
+    "CREATE":{"type":"text","text":"在当前已约定的范围内创建所请求的工件或变更。"},
+    "CONTINUE":{"type":"text","text":"从最后一个已确认的节点继续当前工作。"},
+    "REVIEW":{"type":"text","text":"审查当前结果，并按优先级列出发现的问题。"},
+    "TEST":{"type":"text","text":"运行或检查相关测试，并报告实际结果。"},
+    "STATUS":{"type":"text","text":"简要报告当前状态：已完成工作、阻塞项和下一步。"},
+    "NEW_LINE":{"type":"dispatcher","command":"NEW_LINE"},
+    "REJECT_OR_STOP":{"type":"text","text":"停止当前路径并准备安全回滚或替代方案。不要执行不可逆操作。"},
+    "ACCEPT_OR_APPROVE":{"type":"text","text":"在已约定的范围内将当前决定记录为已批准。"},
+    "PUSH_TO_TALK":{"type":"dispatcher","command":"PUSH_TO_TALK"}
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schemaVersion":1,"profileId":"vibecoding-v1","locale":"en-US","languageName":"English","script":"Latin","tier":"primary","delivery":"software-dispatcher","inputMethod":"direct-unicode",
+  "actions":{
+    "CHECK":{"type":"text","text":"Check the current work. Find errors, omissions, and inconsistencies."},
+    "NEXT":{"type":"text","text":"Proceed to the next logical step."},
+    "AGENT_PROMPT":{"type":"text","text":"Prepare a precise prompt for the next agent with context, task, constraints, and completion criteria."},
+    "FIX":{"type":"text","text":"Fix the identified problems within the agreed scope, then verify the result again."},
+    "PUBLISH":{"type":"text","text":"Prepare the current result for publication. Do not perform irreversible actions without separate confirmation."},
+    "MERGE":{"type":"text","text":"Prepare the change for merge, verify readiness criteria, and request separate confirmation before merging."},
+    "CREATE":{"type":"text","text":"Create the requested artifact or change within the current agreed scope."},
+    "CONTINUE":{"type":"text","text":"Continue the current work from the last confirmed point."},
+    "REVIEW":{"type":"text","text":"Review the current result and list the issues found in priority order."},
+    "TEST":{"type":"text","text":"Run or inspect the relevant tests and report the actual result."},
+    "STATUS":{"type":"text","text":"Report a concise current status: completed work, blockers, and the next step."},
+    "NEW_LINE":{"type":"dispatcher","command":"NEW_LINE"},
+    "REJECT_OR_STOP":{"type":"text","text":"Stop the current path and prepare a safe rollback or alternative. Do not perform irreversible actions."},
+    "ACCEPT_OR_APPROVE":{"type":"text","text":"Record the current decision as approved within the already agreed scope."},
+    "PUSH_TO_TALK":{"type":"dispatcher","command":"PUSH_TO_TALK"}
+  }
+}

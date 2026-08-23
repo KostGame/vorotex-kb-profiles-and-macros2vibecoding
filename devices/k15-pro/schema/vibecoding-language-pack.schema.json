@@ -1,0 +1,44 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://github.com/KostGame/vorotex-kb-profiles-and-macros2vibecoding/devices/k15-pro/schema/vibecoding-language-pack.schema.json",
+  "title":"K15 VIBECODING language pack",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["schemaVersion","profileId","locale","languageName","script","tier","delivery","inputMethod","actions"],
+  "properties":{
+    "schemaVersion":{"const":1},
+    "profileId":{"const":"vibecoding-v1"},
+    "locale":{"type":"string","minLength":2},
+    "languageName":{"type":"string","minLength":1},
+    "script":{"type":"string","minLength":1},
+    "tier":{"enum":["primary","extended"]},
+    "delivery":{"const":"software-dispatcher"},
+    "inputMethod":{"enum":["direct-unicode","ime-or-direct-unicode"]},
+    "actions":{
+      "type":"object",
+      "additionalProperties":false,
+      "required":["CHECK","NEXT","AGENT_PROMPT","FIX","PUBLISH","MERGE","CREATE","CONTINUE","REVIEW","TEST","STATUS","NEW_LINE","REJECT_OR_STOP","ACCEPT_OR_APPROVE","PUSH_TO_TALK"],
+      "properties":{
+        "CHECK":{"$ref":"#/$defs/textAction"},
+        "NEXT":{"$ref":"#/$defs/textAction"},
+        "AGENT_PROMPT":{"$ref":"#/$defs/textAction"},
+        "FIX":{"$ref":"#/$defs/textAction"},
+        "PUBLISH":{"$ref":"#/$defs/textAction"},
+        "MERGE":{"$ref":"#/$defs/textAction"},
+        "CREATE":{"$ref":"#/$defs/textAction"},
+        "CONTINUE":{"$ref":"#/$defs/textAction"},
+        "REVIEW":{"$ref":"#/$defs/textAction"},
+        "TEST":{"$ref":"#/$defs/textAction"},
+        "STATUS":{"$ref":"#/$defs/textAction"},
+        "REJECT_OR_STOP":{"$ref":"#/$defs/textAction"},
+        "ACCEPT_OR_APPROVE":{"$ref":"#/$defs/textAction"},
+        "NEW_LINE":{"$ref":"#/$defs/dispatcherAction"},
+        "PUSH_TO_TALK":{"$ref":"#/$defs/dispatcherAction"}
+      }
+    }
+  },
+  "$defs":{
+    "textAction":{"type":"object","additionalProperties":false,"required":["type","text"],"properties":{"type":{"const":"text"},"text":{"type":"string","minLength":1}}},
+    "dispatcherAction":{"type":"object","additionalProperties":false,"required":["type","command"],"properties":{"type":{"const":"dispatcher"},"command":{"enum":["NEW_LINE","PUSH_TO_TALK"]}}}
+  }
+}

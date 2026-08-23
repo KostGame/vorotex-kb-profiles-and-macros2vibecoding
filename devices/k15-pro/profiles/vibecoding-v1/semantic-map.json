@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "profileId": "vibecoding-v1",
+  "device": {"vendor":"VOROTEX","model":"K15 Pro"},
+  "bindings": [
+    {"physicalId":"TOP_1","keyLabel":"1","semanticAction":"CHECK","generatorSupported":true,"consequence":"safe"},
+    {"physicalId":"TOP_2","keyLabel":"2","semanticAction":"NEXT","generatorSupported":true,"consequence":"safe"},
+    {"physicalId":"TOP_3","keyLabel":"3","semanticAction":"AGENT_PROMPT","generatorSupported":true,"consequence":"safe"},
+    {"physicalId":"TOP_4","keyLabel":"4","semanticAction":"FIX","generatorSupported":true,"consequence":"safe"},
+    {"physicalId":"TOP_5","keyLabel":"5","semanticAction":"PUBLISH","generatorSupported":true,"consequence":"confirmation-required"},
+    {"physicalId":"TOP_6","keyLabel":"6","semanticAction":"MERGE","generatorSupported":true,"consequence":"confirmation-required"},
+    {"physicalId":"MID_7","keyLabel":"7","semanticAction":"CREATE","generatorSupported":true,"consequence":"safe"},
+    {"physicalId":"MID_8","keyLabel":"8","semanticAction":"CONTINUE","generatorSupported":true,"consequence":"safe"},
+    {"physicalId":"MID_9","keyLabel":"9","semanticAction":"REVIEW","generatorSupported":true,"consequence":"safe"},
+    {"physicalId":"MID_0","keyLabel":"0","semanticAction":"TEST","generatorSupported":true,"consequence":"safe"},
+    {"physicalId":"MID_DOT","keyLabel":".","semanticAction":"STATUS","generatorSupported":false,"consequence":"safe"},
+    {"physicalId":"MID_ENTER","keyLabel":"Enter","semanticAction":"NEW_LINE","generatorSupported":false,"consequence":"safe"},
+    {"physicalId":"BOTTOM_MINUS","keyLabel":"-","semanticAction":"REJECT_OR_STOP","generatorSupported":false,"consequence":"confirmation-required"},
+    {"physicalId":"BOTTOM_PLUS","keyLabel":"+","semanticAction":"ACCEPT_OR_APPROVE","generatorSupported":false,"consequence":"confirmation-required"},
+    {"physicalId":"BOTTOM_SPACE","keyLabel":"Space","semanticAction":"PUSH_TO_TALK","generatorSupported":false,"consequence":"safe"}
+  ]
+}

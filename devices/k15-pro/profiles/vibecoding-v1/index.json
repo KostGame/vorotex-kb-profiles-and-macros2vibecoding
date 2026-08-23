@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "profileId": "vibecoding-v1",
+  "defaultLocale": "ru-RU",
+  "locales": [
+    {"locale":"ru-RU","languageName":"Русский","tier":"primary","path":"locales/ru-RU.json"},
+    {"locale":"en-US","languageName":"English","tier":"primary","path":"locales/en-US.json"},
+    {"locale":"de-DE","languageName":"Deutsch","tier":"primary","path":"locales/de-DE.json"},
+    {"locale":"it-IT","languageName":"Italiano","tier":"primary","path":"locales/it-IT.json"},
+    {"locale":"zh-CN","languageName":"简体中文","tier":"primary","path":"locales/zh-CN.json"},
+    {"locale":"es-ES","languageName":"Español","tier":"extended","path":"locales/es-ES.json"},
+    {"locale":"fr-FR","languageName":"Français","tier":"extended","path":"locales/fr-FR.json"},
+    {"locale":"pt-BR","languageName":"Português (Brasil)","tier":"extended","path":"locales/pt-BR.json"},
+    {"locale":"ja-JP","languageName":"日本語","tier":"extended","path":"locales/ja-JP.json"},
+    {"locale":"ko-KR","languageName":"한국어","tier":"extended","path":"locales/ko-KR.json"}
+  ]
+}

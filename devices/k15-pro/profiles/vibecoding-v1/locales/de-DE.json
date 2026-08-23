@@ -1,0 +1,20 @@
+{
+  "schemaVersion":1,"profileId":"vibecoding-v1","locale":"de-DE","languageName":"Deutsch","script":"Latin","tier":"primary","delivery":"software-dispatcher","inputMethod":"direct-unicode",
+  "actions":{
+    "CHECK":{"type":"text","text":"Prüfe die aktuelle Arbeit. Finde Fehler, Lücken und Widersprüche."},
+    "NEXT":{"type":"text","text":"Fahre mit dem nächsten logischen Schritt fort."},
+    "AGENT_PROMPT":{"type":"text","text":"Erstelle einen präzisen Prompt für den nächsten Agenten mit Kontext, Aufgabe, Einschränkungen und Abnahmekriterien."},
+    "FIX":{"type":"text","text":"Behebe die gefundenen Probleme im vereinbarten Umfang und prüfe das Ergebnis anschließend erneut."},
+    "PUBLISH":{"type":"text","text":"Bereite das aktuelle Ergebnis zur Veröffentlichung vor. Führe keine irreversiblen Aktionen ohne separate Bestätigung aus."},
+    "MERGE":{"type":"text","text":"Bereite die Änderung für den Merge vor, prüfe die Freigabekriterien und fordere vor dem Merge eine separate Bestätigung an."},
+    "CREATE":{"type":"text","text":"Erstelle das angeforderte Artefakt oder die Änderung im aktuell vereinbarten Umfang."},
+    "CONTINUE":{"type":"text","text":"Setze die aktuelle Arbeit ab dem letzten bestätigten Punkt fort."},
+    "REVIEW":{"type":"text","text":"Führe ein Review des aktuellen Ergebnisses durch und liste die gefundenen Probleme nach Priorität auf."},
+    "TEST":{"type":"text","text":"Führe die relevanten Tests aus oder prüfe sie und melde das tatsächliche Ergebnis."},
+    "STATUS":{"type":"text","text":"Melde kurz den aktuellen Status: erledigte Arbeit, Blocker und den nächsten Schritt."},
+    "NEW_LINE":{"type":"dispatcher","command":"NEW_LINE"},
+    "REJECT_OR_STOP":{"type":"text","text":"Stoppe den aktuellen Pfad und bereite einen sicheren Rollback oder eine Alternative vor. Führe keine irreversiblen Aktionen aus."},
+    "ACCEPT_OR_APPROVE":{"type":"text","text":"Halte die aktuelle Entscheidung im bereits vereinbarten Umfang als genehmigt fest."},
+    "PUSH_TO_TALK":{"type":"dispatcher","command":"PUSH_TO_TALK"}
+  }
+}

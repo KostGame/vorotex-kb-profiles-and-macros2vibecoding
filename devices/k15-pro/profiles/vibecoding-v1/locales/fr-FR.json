@@ -1,0 +1,20 @@
+{
+  "schemaVersion":1,"profileId":"vibecoding-v1","locale":"fr-FR","languageName":"Français","script":"Latin","tier":"extended","delivery":"software-dispatcher","inputMethod":"direct-unicode",
+  "actions":{
+    "CHECK":{"type":"text","text":"Vérifie le travail en cours. Recherche les erreurs, les omissions et les incohérences."},
+    "NEXT":{"type":"text","text":"Passe à l'étape logique suivante."},
+    "AGENT_PROMPT":{"type":"text","text":"Prépare un prompt précis pour l'agent suivant avec le contexte, la tâche, les contraintes et les critères d'achèvement."},
+    "FIX":{"type":"text","text":"Corrige les problèmes identifiés dans le périmètre convenu, puis vérifie de nouveau le résultat."},
+    "PUBLISH":{"type":"text","text":"Prépare le résultat actuel pour publication. N'effectue aucune action irréversible sans confirmation séparée."},
+    "MERGE":{"type":"text","text":"Prépare la modification pour le merge, vérifie les critères de préparation et demande une confirmation séparée avant le merge."},
+    "CREATE":{"type":"text","text":"Crée l'artefact ou la modification demandé dans le périmètre actuellement convenu."},
+    "CONTINUE":{"type":"text","text":"Poursuis le travail actuel à partir du dernier point confirmé."},
+    "REVIEW":{"type":"text","text":"Effectue une revue du résultat actuel et liste les problèmes trouvés par ordre de priorité."},
+    "TEST":{"type":"text","text":"Exécute ou vérifie les tests pertinents et indique le résultat réel."},
+    "STATUS":{"type":"text","text":"Indique brièvement l'état actuel : travail terminé, blocages et prochaine étape."},
+    "NEW_LINE":{"type":"dispatcher","command":"NEW_LINE"},
+    "REJECT_OR_STOP":{"type":"text","text":"Arrête la voie actuelle et prépare un retour arrière sûr ou une alternative. N'effectue aucune action irréversible."},
+    "ACCEPT_OR_APPROVE":{"type":"text","text":"Enregistre la décision actuelle comme approuvée dans le périmètre déjà convenu."},
+    "PUSH_TO_TALK":{"type":"dispatcher","command":"PUSH_TO_TALK"}
+  }
+}

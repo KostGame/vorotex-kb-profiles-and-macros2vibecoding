@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://github.com/KostGame/vorotex-kb-profiles-and-macros2vibecoding/devices/k15-pro/schema/vibecoding-semantic-map.schema.json",
+  "title":"K15 VIBECODING semantic map",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["schemaVersion","profileId","device","bindings"],
+  "properties":{
+    "schemaVersion":{"const":1},
+    "profileId":{"const":"vibecoding-v1"},
+    "device":{"type":"object","additionalProperties":false,"required":["vendor","model"],"properties":{"vendor":{"const":"VOROTEX"},"model":{"const":"K15 Pro"}}},
+    "bindings":{"type":"array","minItems":15,"maxItems":15,"items":{"type":"object","additionalProperties":false,"required":["physicalId","keyLabel","semanticAction","generatorSupported","consequence"],"properties":{"physicalId":{"type":"string","minLength":1},"keyLabel":{"type":"string","minLength":1},"semanticAction":{"enum":["CHECK","NEXT","AGENT_PROMPT","FIX","PUBLISH","MERGE","CREATE","CONTINUE","REVIEW","TEST","STATUS","NEW_LINE","REJECT_OR_STOP","ACCEPT_OR_APPROVE","PUSH_TO_TALK"]},"generatorSupported":{"type":"boolean"},"consequence":{"enum":["safe","confirmation-required"]}}}}
+  }
+}
