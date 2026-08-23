@@ -46,6 +46,8 @@ Rollback likewise has two parts: restore the backed-up files, then reassign the 
 ## Contents
 
 - [`docs/architecture.md`](docs/architecture.md) — working architecture and safety boundaries.
+- [`docs/native-format-notes.md`](docs/native-format-notes.md) — sanitized native export schema evidence.
+- [`docs/native-import-ru-alpha.md`](docs/native-import-ru-alpha.md) — RU Alpha serializer and owner import boundary.
 - [`docs/physical-layout.md`](docs/physical-layout.md) — human-readable control map.
 - [`docs/vibecoding-v1.md`](docs/vibecoding-v1.md) — first vibecoding UX draft.
 - [`schema/physical-layout.json`](schema/physical-layout.json) — machine-readable confirmed mappings.

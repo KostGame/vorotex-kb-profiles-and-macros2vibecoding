@@ -1,0 +1,10 @@
+{
+  "storageField": "btn_KBKey_KeyPadEnter",
+  "before": {"MemMacId": 0, "grpGuid": "", "macGuid": ""},
+  "after": {
+    "MemMacId": 11,
+    "grpGuid": "55492475-3604-4D74-996C-50B165062B5E",
+    "macGuid": "C7D4A090-E957-4AD1-B34C-A2FBC473CA33"
+  },
+  "fixtureRole": "sanitized-enter-binding-delta"
+}

@@ -1,0 +1,5 @@
+{
+  "before": {"macro": "VIBE_11_STATUS_RU", "macRpt": 1, "rptType": 1},
+  "after": {"macro": "VIBE_11_STATUS_RU", "macRpt": 1, "rptType": 0},
+  "fixtureRole": "sanitized-cycle-delta"
+}

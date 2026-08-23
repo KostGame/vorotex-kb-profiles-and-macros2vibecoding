@@ -1,0 +1,5 @@
+{
+  "exportCurrent": {"SingleProfile": 1, "profileCount": 1, "macroGroupCount": 4},
+  "exportAll": {"SingleProfile": 0, "profileCount": 2, "macroGroupCount": 4},
+  "fixtureRole": "sanitized-profile-mode-delta"
+}
