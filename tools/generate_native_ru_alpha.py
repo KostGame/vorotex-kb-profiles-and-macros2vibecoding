@@ -22,6 +22,7 @@ from typing import Any, Iterable
 VERSION = "0.2.0"
 DEFAULT_EVENT_DELAY_MS = 5
 EVENT_DELAY_MS = DEFAULT_EVENT_DELAY_MS
+TEXT_COMMAND_SUFFIX = " "
 EVENT_CAPACITY = 500
 SELECTOR_SETTLE_DELAY_MS = 0
 CORRECTED_NEW_LINE_FIXTURE_SHA256 = "f356f32c6acdf062115d1fc2b7023aa0cb6ec00752dbae2c6502808b7f12017a"
@@ -179,8 +180,14 @@ def key_chord(key: int, modifiers: tuple[int, ...] = ()) -> tuple[list[int], lis
     return values, states
 
 
-def text_events(text: str, layout: str) -> tuple[list[int], list[int]]:
-    return concat_events(selector_events(layout), hid_events(text, layout))
+def text_events(text: str, layout: str, append_suffix: bool = True) -> tuple[list[int], list[int]]:
+    """Compile an ordinary text command from clean semantic source text.
+
+    The suffix is deliberately compiler-owned so semantic strings remain
+    punctuation-free and structural macros can opt out explicitly.
+    """
+    visible = text + (TEXT_COMMAND_SUFFIX if append_suffix else "")
+    return concat_events(selector_events(layout), hid_events(visible, layout))
 
 
 def shift_enter_events() -> tuple[list[int], list[int]]:
@@ -197,7 +204,8 @@ def code_fence_events(return_to_ru: bool = True) -> tuple[list[int], list[int]]:
 
 def safe_continue_events() -> tuple[list[int], list[int]]:
     return concat_events(selector_events("RU"), hid_events("Давай дальше, без ", "RU"),
-                         selector_events("EN"), hid_events("push/merge", "EN"), selector_events("RU"))
+                         selector_events("EN"), hid_events("push/merge", "EN"),
+                         selector_events("RU"), hid_events(TEXT_COMMAND_SUFFIX, "RU"))
 
 
 def macro_events(profile: str, action: str, layout: str = "RU") -> tuple[list[int], list[int]]:
@@ -220,7 +228,7 @@ def macro_events(profile: str, action: str, layout: str = "RU") -> tuple[list[in
     if action == "CODE_FENCE":
         return code_fence_events()
     if action == "REPORT_FROM_CLIPBOARD":
-        return concat_events(text_events("Вот отчет", "RU"), shift_enter_events(), code_fence_events(False),
+        return concat_events(text_events("Вот отчет", "RU", append_suffix=False), shift_enter_events(), code_fence_events(False),
                              shift_enter_events(), key_chord(25, (224,)), shift_enter_events(),
                              code_fence_events(False), selector_events("RU"))
     if action in {"CHECK", "NEXT", "AGENT_PROMPT", "FIX", "PUBLISH", "MERGE", "CREATE",
@@ -361,6 +369,7 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "selectorOrder": "Ctrl down, Shift down, layout key down/up, Shift up, Ctrl up",
         "selectorSettleDelayMs": SELECTOR_SETTLE_DELAY_MS},
         "eventDelayMs": event_delay_ms, "defaultEventDelayMs": DEFAULT_EVENT_DELAY_MS,
+        "textCommandSuffix": TEXT_COMMAND_SUFFIX, "autoPunctuation": False,
         "oneMsConfigSupported": True, "macRpt": 1, "rptType": 0, "packages": package_info,
         "semanticMaps": maps_path.name, "physicalSlotModel": [{"control": c, "storage": s, "memMacId": m}
         for c, (s, m) in PROVEN_BINDINGS.items()], "unresolvedBindings": [],
@@ -379,6 +388,7 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "PROFILE_A_CUT=PASS", "PROFILE_A_UNDO=PASS", "PROFILE_A_REDO=PASS", "PROFILE_A_SELECT_ALL=PASS",
         "PROFILE_A_REPORT=PASS", "PROFILE_A_HERE_IS_REPORT=PASS", "PROFILE_A_CODE_FENCE=PASS",
         "PROFILE_A_REPORT_FROM_CLIPBOARD=PASS", "REPORT_FROM_CLIPBOARD_AUTO_SUBMIT=NO",
+        'TEXT_COMMAND_SUFFIX=" "', "AUTO_PUNCTUATION=NO", "ALL_TEXT_SUFFIX_TESTS=PASS",
         f"DEFAULT_KEY_EVENT_DELAY_MS={DEFAULT_EVENT_DELAY_MS}", "ONE_MS_CONFIG_SUPPORTED=YES",
         "ALL_PROFILE_A_RU_TEXT_ROUNDTRIP=PASS", "ALL_PROFILE_B_RU_TEXT_ROUNDTRIP=PASS",
         "SHIFT_ENTER_5MS=PASS", "JOYSTICK_NATIVE_ENTER=PASS", "ALL_15_PHYSICAL_BINDINGS_PROFILE_A=PASS",

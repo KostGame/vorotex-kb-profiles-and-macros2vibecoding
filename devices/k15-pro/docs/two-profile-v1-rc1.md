@@ -22,6 +22,12 @@ The production candidate event delay is configurable and defaults to 5 ms.
 Generation at 1 ms is supported by `--event-delay-ms 1`; selector handling is
 reported separately and is not silently treated as key-event timing.
 
+Ordinary text commands are compiled with the semantic `TEXT_COMMAND_SUFFIX =
+" "` value. Source phrases remain clean (for example, `Проверь`), while the
+generated HID stream ends with exactly one Space event. Structural macros such
+as Shift+Enter, shortcuts, raw code fences, and the composite clipboard report
+sequence opt out of this suffix.
+
 The generator emits independently importable `.KB.Config` packages and
 optional standalone `.Macro.Config` packages. A combined Export-All package is
 not emitted in this RC because the sanitized evidence proves only the

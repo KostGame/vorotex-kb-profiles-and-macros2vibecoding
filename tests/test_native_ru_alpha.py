@@ -122,6 +122,18 @@ class SerializerTests(unittest.TestCase):
         self.assertNotIn("ACCEPT_OR_APPROVE", [a for _, a in gen.PROFILE_SPECS["B"]["bindings"]])
         self.assertEqual(gen.RU_OUTPUTS["SAFE_CONTINUE"], "Давай дальше, без push/merge")
 
+    def test_ordinary_text_commands_append_exactly_one_ascii_space(self):
+        self.assertEqual(gen.TEXT_COMMAND_SUFFIX, " ")
+        for profile, action, visible in (("B", "CHECK", "Проверь"),
+                                         ("B", "NEXT", "Следующий шаг"),
+                                         ("A", "ACCEPT_OR_APPROVE", "Подтверждаю")):
+            data = self.macro(profile, action)["macData"]
+            expected_values, expected_states = gen.hid_events(visible + gen.TEXT_COMMAND_SUFFIX, "RU")
+            self.assertEqual(data["macVal"][6:6 + len(expected_values)], expected_values)
+            self.assertEqual(data["macSta"][6:6 + len(expected_states)], expected_states)
+            self.assertEqual(data["macVal"][6 + len(expected_values) - 2:6 + len(expected_values)], [44, 44])
+        self.assertNotEqual(gen.TEXT_COMMAND_SUFFIX, ". ")
+
     def test_shortcut_macros(self):
         expected = {"COPY": [224, 6, 6, 224], "PASTE": [224, 25, 25, 224],
                     "CUT": [224, 27, 27, 224], "UNDO": [224, 29, 29, 224],
@@ -144,6 +156,8 @@ class SerializerTests(unittest.TestCase):
         self.assertEqual(values.count(40), 6)
         self.assertEqual(values.count(53), 12)
         self.assertEqual(values[-6:], [224, 225, 31, 31, 225, 224])
+        self.assertNotEqual(values[6 + len(gen.hid_events("Вот отчет", "RU")[0]) - 2:]
+                            [0:2], [44, 44])
 
     def test_ru_hid_mapping_and_cyrillic_ge(self):
         values, states = gen.hid_events("Проверь", "RU")
