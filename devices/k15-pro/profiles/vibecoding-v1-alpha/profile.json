@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "profileId": "k15-pro-vibecoding-v1-alpha",
+  "status": "alpha",
+  "targetUiProfile": 2,
+  "profilePolicy": {
+    "uiProfile1": "preserve-existing",
+    "uiProfile2": "vibecoding-v1-alpha"
+  },
+  "triggerTransport": {
+    "type": "numeric-sentinel",
+    "prefix": "771337",
+    "notes": "Digit-only sentinels are intentionally layout-independent on standard Windows EN/RU layouts. The Windows dispatcher removes them and emits the semantic action."
+  },
+  "bindings": [
+    {"physicalId":"TOP_1","semantic":"CHECK","trigger":"77133701","binding":"generator"},
+    {"physicalId":"TOP_2","semantic":"NEXT","trigger":"77133702","binding":"generator"},
+    {"physicalId":"TOP_3","semantic":"AGENT_PROMPT","trigger":"77133703","binding":"generator"},
+    {"physicalId":"TOP_4","semantic":"FIX","trigger":"77133704","binding":"generator"},
+    {"physicalId":"TOP_5","semantic":"PUBLISH","trigger":"77133705","binding":"generator"},
+    {"physicalId":"TOP_6","semantic":"MERGE","trigger":"77133706","binding":"generator"},
+    {"physicalId":"MID_7","semantic":"CREATE","trigger":"77133707","binding":"generator"},
+    {"physicalId":"MID_8","semantic":"CONTINUE","trigger":"77133708","binding":"generator"},
+    {"physicalId":"MID_9","semantic":"REVIEW","trigger":"77133709","binding":"generator"},
+    {"physicalId":"MID_0","semantic":"TEST","trigger":"77133710","binding":"generator"},
+    {"physicalId":"MID_DOT","semantic":"STATUS","trigger":"77133711","binding":"native-gui-until-generator-support"},
+    {"physicalId":"MID_ENTER","semantic":"NEW_LINE","trigger":"77133712","binding":"native-gui-until-generator-support"},
+    {"physicalId":"BOTTOM_MINUS","semantic":"REJECT_OR_STOP","trigger":"77133713","binding":"native-gui-until-generator-support"},
+    {"physicalId":"BOTTOM_PLUS","semantic":"SUBMIT","trigger":"77133714","binding":"native-gui-until-joystick-click"},
+    {"physicalId":"BOTTOM_SPACE","semantic":"ACCEPT_OR_APPROVE","trigger":"77133715","binding":"native-gui-until-generator-support"}
+  ],
+  "specialControls": {
+    "joystick": {
+      "directions": "keep-current-cursor-behavior-in-alpha",
+      "click": {"desiredSemantic":"SUBMIT","storageStatus":"unresolved"}
+    },
+    "encoder": {
+      "rotation": "keep-current-volume-behavior-in-alpha",
+      "click": "keep-current-profile-switch-behavior"
+    }
+  },
+  "safety": {
+    "consequentialCommandsAutoSubmit": false,
+    "notes": "PUBLISH, MERGE, CREATE, FIX and similar command keys only insert text. Submission is a separate physical action."
+  }
+}
