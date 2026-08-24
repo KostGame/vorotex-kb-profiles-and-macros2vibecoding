@@ -95,8 +95,8 @@ if ($journalSource -notmatch 'MaxFileBytes' -or $journalSource -notmatch 'MaxArc
 if ($hookLoggerSource -notmatch 'Rotate-JournalIfNeeded') {
     throw 'Codex hook transport must rotate the shared journal independently of the tray process.'
 }
-if ($appSource -notmatch 'Подробный журнал' -or $appSource -notmatch 'RGB-индикация') {
-    throw 'Tray must expose detailed-log switch and production RGB-indication naming.'
+if ($appSource -notmatch '_loggingItem' -or $appSource -notmatch 'ToggleDetailedLogging' -or $appSource -notmatch 'RefreshTrackingIndicator') {
+    throw 'Tray must expose detailed-log switch and tracking indicator wiring.'
 }
 
 $labSource = (Get-Content -LiteralPath $lightingLabForm -Raw -Encoding UTF8) + (Get-Content -LiteralPath $lightingLabSession -Raw -Encoding UTF8)
