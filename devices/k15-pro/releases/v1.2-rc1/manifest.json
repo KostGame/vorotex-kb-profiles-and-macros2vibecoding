@@ -30,7 +30,7 @@
   "officialReleaseMinDelayMs": 1,
   "researchUnsafeDelayOverride": false,
   "fiveMsImportCompatibility": "PROVEN_POSSIBLE",
-  "oneMsImportCompatibility": "UNTESTED_AND_DISABLED",
+  "oneMsImportCompatibility": "PHYSICALLY_ACCEPTED_FOR_TEXT_POLICY",
   "textCommandSuffix": " ",
   "autoPunctuation": false,
   "oneMsConfigSupported": true,
