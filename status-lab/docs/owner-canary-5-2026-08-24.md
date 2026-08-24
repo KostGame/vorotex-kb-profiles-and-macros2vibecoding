@@ -1,85 +1,127 @@
 # Status Lab owner canary 5 — 2026-08-24
 
-Sanitized findings from the next physical owner run. Raw journal, notification text, session IDs and machine-specific details are intentionally not committed.
+Sanitized findings from the profile-switch / RGB-state owner canary. Raw local journals, notification text, machine-specific paths, session IDs and turn IDs are intentionally not committed.
 
-## Observed problems
+## Result
 
-### 1. Approval inside Codex can leave normalized WAITING
+```text
+PROFILE_SWITCH_DETECTION = PASS
+PROFILE_SWITCH_5S_OVERLAY = PASS_WITH_RESIDUE_BUG
+PROFILE_A_BASELINE = RED_CONSTANT_CONFIRMED
+PROFILE_B_BASELINE = BLUE_CONSTANT_EXPECTED_BUT_PREVIOUS_OVERLAY_PERSISTED
+RGB_DISABLE = FAIL_WITH_INVALID_SLOT_EXCEPTION
+RUNNING_WHITE_SLOW = REJECTED_BY_OWNER
+WAITING_WHITE_FAST = WORKING_BUT_TOO_SIMILAR_TO_RUNNING
+NORMAL_RESTORE = PASS_WITH_VISIBLE_TRANSIENT
+R_G_WIRE_SWAP = RETAIN_G_R_B
+```
 
-The owner approved the system permission from the Codex UI itself. The Windows toast did not provide a reliable acknowledgement/removal signal, so the previous reducer could remain in `WAITING` until a later `Stop` or manual action.
+## Persisted Profile B overlay
+
+The journal proves the residue mechanism rather than a native Profile B setting change.
+
+One run began on Profile A with the expected Constant mode (`0x81`). The owner switched to B and Status Lab started the five-second Profile B overlay. Before that B overlay completed, the owner switched back to A. No `rgb_profile_flash_completed` event for B was emitted before the A switch.
+
+A later RGB enable while Profile B was active observed `originalMode = 0x84` (Single-color breathing), not the accepted blue Constant baseline. Therefore the previous canary had persisted its B breathing header into the onboard profile. This is why Profile B could continue blinking even after RGB automation was disabled.
 
 Correction:
+
+1. when the user switches A/B, remember the profile being left;
+2. temporarily select that previous onboard slot with the proven `0x02 / selector 2` command;
+3. restore its exact cached baseline;
+4. immediately select the user's new slot again;
+5. only then run the new profile's five-second overlay;
+6. a first-seen A/B profile whose header is stale notifier mode `0x84` or `0x86` is self-healed back to Constant `0x81`, preserving the untouched Constant-mode data.
+
+## Approval inside Codex
+
+Approving permission directly in Codex does not have to remove the Windows toast. `PostToolUse` is therefore installed as a fifth lifecycle hook:
 
 ```text
 PermissionRequest -> WAITING
 successful PostToolUse -> RUNNING
 ```
 
-`PostToolUse` is now installed as a fifth Codex hook. Windows-notification removal remains an additional resume path, not the only path.
+Windows-notification removal remains an additional resume path, not the only path.
 
-### 2. RGB transport error appeared after DONE
+## Disable crash
 
-The tray showed:
+The owner reproduced an unhandled .NET exception while disabling RGB:
 
 ```text
-state = DONE_PENDING_ATTENTION
-RGB = ERROR: No matching K15 HID response for command 0x82
+System.IO.InvalidDataException:
+K15 returned an invalid active onboard slot.
 ```
 
-This was not a semantic Codex error. The normalized state remained `DONE_PENDING_ATTENTION`; only the K15 active-slot HID read timed out.
+The failure occurred through `ReadActiveSlot -> Restore -> DisableAsync` during a profile transition.
 
 Correction:
 
-- HID read requests retry the complete request with fresh sequence IDs;
-- transient transport failures are reported as `RGB: RETRYING` / `RECONNECTED`;
-- USB/HID transport failures never create semantic `ERROR` and never request red error lighting by themselves.
+- an invalid transient slot value is no longer a fatal `InvalidDataException`;
+- active-slot reads retry until the device stabilizes, then surface a transport timeout if necessary;
+- `DisableAsync` catches restore failures and always disposes the HID handle instead of allowing an async WinForms event handler to crash the process.
 
-### 3. Profile switching is a normal UX action, not a safety failure
+## RUNNING vs WAITING UX
 
-Owner baseline:
+The owner rejected white slow breathing vs white fast breathing because the two states are too similar by peripheral vision.
 
-```text
-Profile A = red
-Profile B = blue
-```
-
-Required behavior:
+New policy:
 
 ```text
-switch -> A
-  red fast breathing for 5s
-  then resume current notification state
-
-switch -> B
-  blue fast breathing for 5s
-  then resume current notification state
+RUNNING  -> built-in Tetris blocks effect (0x86)
+WAITING  -> white fast single-color breathing
+DONE     -> green breathing
+ERROR    -> red fast breathing, reserved for high-confidence error
+NORMAL   -> exact red/blue profile baseline
 ```
 
-If normalized state is `NORMAL`, the exact baseline of the newly selected profile is restored after the 5-second profile indication.
+Tetris is selected by changing the lighting mode header only. The existing onboard Tetris detail record is left untouched.
 
-Status Lab now monitors the active onboard slot, keeps separate baseline snapshots per profile, and treats a profile switch as a temporary high-priority visual overlay.
+## Red/green transient and NORMAL red blink
 
-### 4. Color policy simplified
+The protocol still intentionally stores colors as G,R,B on the wire. The open W910 implementation uses the same byte ordering, and earlier physical tests identified the R/G inversion. The canary did reveal an ordering artifact: Status Lab previously switched the lighting header to breathing before writing the new breathing palette, briefly exposing old palette bytes. That could look like a wrong red/green flash.
 
-Yellow/amber were not reliably distinguishable on the physical K15. State colors are restricted to primary, highly visible colors plus white:
+Correction:
 
-```text
-NORMAL A                exact red profile baseline
-NORMAL B                exact blue profile baseline
-RUNNING                 white slow breathing
-WAITING                 white fast breathing
-DONE_PENDING_ATTENTION  green breathing
-ERROR                    red fast breathing (reserved for high-confidence failure source)
-```
+- notification/profile breathing: write hidden breathing detail first, activate the breathing header second;
+- restore to NORMAL: write the Constant baseline header first, restore the hidden breathing record second.
 
-Toast text heuristics no longer create semantic `ERROR` because false positives were physically observed after `Stop`.
+This should remove the red blink seen immediately before NORMAL as well as stale-color flashes during state changes without reversing the proven G,R,B mapping.
+
+## RGB transport failures are not semantic ERROR
+
+A transient `0x82` HID failure is reported as transport `RETRYING` / `RECONNECTED`. It does not create semantic `ERROR` and does not request red error lighting. Toast keyword heuristics also remain forbidden from creating semantic ERROR because they previously produced false positives after `Stop`.
 
 ## Next owner gate
 
-Verify the new build with:
+Run two smaller tests instead of one long mixed canary.
 
-1. approval inside Codex -> `WAITING` returns to `RUNNING` through `PostToolUse` even if the toast remains;
-2. `DONE` does not turn the tray into semantic error on a transient `0x82` failure;
-3. Profile A/B switch produces red/blue 5-second profile indication;
-4. after 5 seconds the active notification state resumes;
-5. `DONE` removal or 15-second timeout restores the exact baseline of the profile that is active at that moment.
+### A. Profile switching / cleanup only
+
+```text
+A NORMAL red constant
+A -> B
+B blue profile overlay for 5s
+B -> blue constant
+
+rapid B -> A before the 5s B overlay finishes
+A red profile overlay
+then red constant
+
+RGB OFF
+switch A/B manually
+both profiles must remain constant baseline
+no .NET exception
+```
+
+### B. Codex states
+
+```text
+UserPromptSubmit -> Tetris
+PermissionRequest -> white fast breathing
+approved/PostToolUse -> Tetris
+Stop -> green breathing
+completion removed or 15s -> current profile constant baseline
+```
+
+Profile switching during a state must still show the new profile color for five seconds and then resume the current state.
