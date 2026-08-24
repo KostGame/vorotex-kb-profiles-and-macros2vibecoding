@@ -9,45 +9,53 @@ Confirmed in controlled testing:
 - Profile A and Profile B `.KB.Config` packages import successfully;
 - all 15 bindings and embedded macros work in both profiles;
 - RU/EN layout forcing works from the configured direct selectors;
-- Profile A lighting is preserved by the embedded native LED bank;
+- Profile A/B `.KB.Config` packages include embedded macro groups and physical key → macro GUID bindings;
+- Profile A serialized lighting is preserved by the embedded native LED bank;
+- Profile B serialized lighting is also preserved, but physical V1.2 owner testing observed white lighting after Import; this is an accepted non-blocking discrepancy;
 - Profile A encoder rotation uses vertical scroll (`304`/`305`);
 - physical Enter emits Shift+Enter and joystick click remains native Enter/Send;
 - A0 report-from-clipboard and A2 paste-plus-safe-newline work physically;
-- 5 ms event timing and one trailing ASCII space on ordinary text commands work.
+- V1.2 ordinary text at 1 ms and layout/structural events at 5 ms work physically;
+- ordinary text commands append exactly one trailing ASCII space.
 
 Practical apply path currently proven:
 
 ```text
-generated config
-    -> official VOROTEX GUI
-    -> native GUI assignment/reassignment
-    -> K15 onboard memory
+generated .KB.Config
+    -> official VOROTEX Import
+    -> embedded macros + key bindings
+    -> K15
 ```
+
+For the supported Profile A/B packages, official profile Import is the canonical installation boundary. Direct replacement of live `Profile*.json` / `macroConfig.json` files is legacy research only.
 
 Still intentionally bounded or unresolved:
 
-- automatic device apply from generated files alone and the low-level sync trigger;
-- universal RGB channel ordering (the native serialized value is preserved exactly);
+- deterministic physical lighting parity after Import, especially Profile B;
+- universal RGB channel ordering beyond the preserved native serialized banks;
 - maximum number of onboard profiles beyond the two observed device slots;
 - joystick directions and other controls outside the proven profile scope.
 
-## Manual install, K15 Pro
+## Installation, K15 Pro
 
-The root [`README.md`](../../README.md#manual-installation-of-generated-configuration-files) contains the full manual-install procedure. K15-specific locations, relative to the VOROTEX installation directory, are currently:
+Use the official VOROTEX `.KB.Config` Import workflow for the current generated profiles. The imported package carries the supported embedded macro group and physical key bindings.
+
+Current canonical release:
+
+`devices/k15-pro/releases/v1.2-rc1/`
+
+Import both Profile A and Profile B `.KB.Config` files, verify the resulting macros and bindings in VOROTEX, then test the real keyboard. VOROTEX Import is non-pruning and repeated imports can leave duplicate or stale macro groups.
+
+The old live-file locations below remain relevant only for forensic/recovery research, not normal installation:
 
 ```text
-res/KeyboardDock/KeyboardA/Config/Profile0.json   # UI Profile1
-res/KeyboardDock/KeyboardA/Config/Profile1.json   # UI Profile2
+res/KeyboardDock/KeyboardA/Config/Profile0.json
+res/KeyboardDock/KeyboardA/Config/Profile1.json
 res/KeyboardDock/KeyboardA/Config/DeviceFeature.ini
 res/MacroDock/MacroData/macroConfig.json
 ```
 
-Always back up the live files first. Use the official VOROTEX `.KB.Config`
-Import workflow, then verify the imported macros, bindings, lighting, and
-encoder behavior in the native GUI. VOROTEX Import is non-pruning and repeated
-imports can leave duplicate macro groups.
-
-Rollback likewise has two parts: restore the backed-up files, then reassign the original action through VOROTEX so the keyboard's onboard state matches the restored files.
+Always keep backups before low-level experiments. Do not use firmware/update/reset/restore actions as part of profile installation.
 
 ## Contents
 
@@ -58,6 +66,7 @@ Rollback likewise has two parts: restore the backed-up files, then reassign the 
 - [`docs/vibecoding-v1.md`](docs/vibecoding-v1.md) — first vibecoding UX draft.
 - [`docs/two-profile-v1-rc1.md`](docs/two-profile-v1-rc1.md) — Profile A/Profile B V1 RC semantics and package boundary.
 - V1.1 RC1 changes Profile B `+` to `Принимается ` while preserving its proven slot, MemMacId, and macro GUID.
+- [`releases/v1.2-rc1/`](releases/v1.2-rc1/) — current physically accepted baseline: FULL/SHORT STATUS split, corrected SAFE_CONTINUE punctuation, 1 ms text timing, 5 ms layout/structural timing.
 - [`schema/physical-layout.json`](schema/physical-layout.json) — machine-readable confirmed mappings.
 
 ## Safety
