@@ -100,16 +100,22 @@ Require(report.Length == 41, "HID report must be 41 bytes.");
 Require(report[0] == 0x06 && report[3] == 0x09 && report[4] == 0x12, "HID report header mismatch.");
 Require(report[6] == 0x64 && report[7] == 0x00 && report[8] == 3, "HID report address/length mismatch.");
 
-var runningRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Running, speed: 2);
-Require(runningRecord[4] == 0xFF && runningRecord[5] == 0xFF && runningRecord[6] == 0xFF,
-    "RUNNING must encode white in G,R,B wire order.");
+var originalHeader = Enumerable.Range(0, 25).Select(value => (byte)value).ToArray();
+var runningHeader = K15HidProtocol.CreateRunningHeader(originalHeader);
+Require(runningHeader[0] == K15HidProtocol.TetrisMode,
+    "RUNNING must select the hardware Tetris/Enraptured mode.");
+Require(runningHeader.Skip(1).SequenceEqual(originalHeader.Skip(1)),
+    "RUNNING must preserve non-mode lighting header bytes.");
 
 var waitingRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Waiting, speed: 6);
 Require(waitingRecord.Length == 25, "Lighting detail must be 25 bytes.");
 Require(waitingRecord[3] == 0x01, "Single-color breathing should enable one palette slot.");
 Require(waitingRecord[4] == 0xFF && waitingRecord[5] == 0xFF && waitingRecord[6] == 0xFF,
-    "WAITING must also use white; speed distinguishes it from RUNNING.");
-Require(waitingRecord[0] > runningRecord[0], "WAITING white breathing must be faster than RUNNING.");
+    "WAITING must encode white in G,R,B wire order.");
+
+var doneRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.DonePendingAttention, speed: 3);
+Require(doneRecord[4] == 0xFF && doneRecord[5] == 0x00 && doneRecord[6] == 0x00,
+    "DONE must encode green in G,R,B wire order.");
 
 var profileA = K15HidProtocol.CreateProfileFlashLightingRecord(0);
 Require(profileA[4] == 0x00 && profileA[5] == 0xFF && profileA[6] == 0x00,
@@ -118,10 +124,18 @@ var profileB = K15HidProtocol.CreateProfileFlashLightingRecord(1);
 Require(profileB[4] == 0x00 && profileB[5] == 0x00 && profileB[6] == 0xFF,
     "Profile B flash must encode blue in G,R,B wire order.");
 
-var originalHeader = Enumerable.Range(0, 25).Select(value => (byte)value).ToArray();
 var alertHeader = K15HidProtocol.CreateAlertHeader(originalHeader);
-Require(alertHeader[0] == 0x84, "Alert header must select single-color breathing.");
-Require(alertHeader.Skip(1).SequenceEqual(originalHeader.Skip(1)), "Alert header must preserve non-mode bytes.");
+Require(alertHeader[0] == K15HidProtocol.SingleColorBreathingMode,
+    "Alert header must select single-color breathing.");
+Require(alertHeader.Skip(1).SequenceEqual(originalHeader.Skip(1)),
+    "Alert header must preserve non-mode bytes.");
+
+var constantHeader = K15HidProtocol.CreateConstantHeader(alertHeader);
+Require(constantHeader[0] == K15HidProtocol.ConstantMode,
+    "Stale notifier residue must be repairable back to Constant mode.");
+Require(constantHeader.Skip(1).SequenceEqual(alertHeader.Skip(1)),
+    "Constant baseline repair must preserve non-mode header bytes.");
+
 Require(K15HidProtocol.IsSupportedDevice(0xB6A4, 0x4100), "Physical K15 VID/PID must be accepted.");
 Require(!K15HidProtocol.IsSupportedDevice(0x1234, 0x4100), "Unrelated VID must be rejected.");
 
