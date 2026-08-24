@@ -6,8 +6,8 @@ internal sealed class OverlayForm : Form
 {
     private readonly System.Windows.Forms.Timer _autoHideTimer;
     private readonly string _hotkeyHint;
-    private readonly float _requestedSizeScale;
-    private readonly OverlayPosition _overlayPosition;
+    private float _requestedSizeScale;
+    private OverlayPosition _overlayPosition;
     private IReadOnlyList<ProfileDefinition> _profiles = Array.Empty<ProfileDefinition>();
     private float _renderScale = 1f;
 
@@ -26,8 +26,7 @@ internal sealed class OverlayForm : Form
     public OverlayForm(int autoHideMs, string hotkeyHint, OverlayOptions overlayOptions)
     {
         _hotkeyHint = hotkeyHint;
-        _requestedSizeScale = overlayOptions.GetSizeScale();
-        _overlayPosition = overlayOptions.GetPosition();
+        ApplyPreferencesInternal(overlayOptions);
 
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
@@ -53,6 +52,20 @@ internal sealed class OverlayForm : Form
             cp.ExStyle |= NativeMethods.WsExToolWindow | NativeMethods.WsExNoActivate;
             return cp;
         }
+    }
+
+    public void ApplyPreferences(OverlayOptions overlayOptions, Point cursor)
+    {
+        ApplyPreferencesInternal(overlayOptions);
+
+        if (Visible && _profiles.Count > 0)
+            ShowProfiles(_profiles, cursor);
+    }
+
+    private void ApplyPreferencesInternal(OverlayOptions overlayOptions)
+    {
+        _requestedSizeScale = overlayOptions.GetSizeScale();
+        _overlayPosition = overlayOptions.GetPosition();
     }
 
     public void ShowProfiles(IReadOnlyList<ProfileDefinition> profiles, Point cursor)
@@ -99,8 +112,17 @@ internal sealed class OverlayForm : Form
     {
         switch (_overlayPosition)
         {
+            case OverlayPosition.TopLeft:
+                PositionCorner(work, dpiScale, left: true, top: true);
+                break;
+            case OverlayPosition.TopRight:
+                PositionCorner(work, dpiScale, left: false, top: true);
+                break;
+            case OverlayPosition.BottomLeft:
+                PositionCorner(work, dpiScale, left: true, top: false);
+                break;
             case OverlayPosition.BottomRight:
-                PositionBottomRight(work, dpiScale);
+                PositionCorner(work, dpiScale, left: false, top: false);
                 break;
             default:
                 PositionAboveCursor(cursor, work, dpiScale);
@@ -122,11 +144,15 @@ internal sealed class OverlayForm : Form
         Location = new Point(x, y);
     }
 
-    private void PositionBottomRight(Rectangle work, float dpiScale)
+    private void PositionCorner(Rectangle work, float dpiScale, bool left, bool top)
     {
         var margin = (int)Math.Round(16 * dpiScale);
-        var x = work.Right - Width - margin;
-        var y = work.Bottom - Height - margin;
+        var x = left
+            ? work.Left + margin
+            : work.Right - Width - margin;
+        var y = top
+            ? work.Top + margin
+            : work.Bottom - Height - margin;
 
         x = Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - Width));
         y = Math.Clamp(y, work.Top, Math.Max(work.Top, work.Bottom - Height));
