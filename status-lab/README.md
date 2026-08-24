@@ -86,12 +86,14 @@ powershell -ExecutionPolicy Bypass -File .\status-lab\install-codex-hooks.ps1
 
 Инсталлятор:
 
-- работает с `%USERPROFILE%\.codex\hooks.json`;
-- сохраняет существующие hook groups;
-- делает one-time backup `hooks.json.vorotex-k15-status-lab.bak`;
+- автоматически ищет существующие Codex homes, включая `%USERPROFILE%\.codex-agentloop`, `%USERPROFILE%\.codex` и другие `%USERPROFILE%\.codex-*`;
+- если `CODEX_HOME` задан в окружении запуска, использует его как приоритетный target;
+- сохраняет существующие hook groups в каждом найденном home;
+- делает one-time backup `hooks.json.vorotex-k15-status-lab.bak` рядом с каждым изменённым `hooks.json`;
+- после записи перечитывает файл и проверяет наличие ровно одного Status Lab handler для каждого события;
 - повторный запуск идемпотентен и не создаёт второй набор Status Lab handlers.
 
-После установки перезапусти Codex. Если Codex попросит подтвердить доверие к пользовательским hooks, подтверди их.
+После установки **полностью перезапусти Codex**, потому что hooks обнаруживаются при загрузке Codex config/session. Если Codex попросит подтвердить доверие к пользовательским hooks, подтверди их.
 
 Codex upstream:
 
