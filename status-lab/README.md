@@ -21,14 +21,15 @@
 - источник (`codex_hook` / `windows_notification`);
 - тип события;
 - Codex `session_id`, `turn_id`, model, cwd, tool name, permission mode;
-- Windows notification id, creation time, app display name, AppUserModelId и PackageFamilyName.
+- Windows notification id, creation time, app display name, AppUserModelId и PackageFamilyName;
+- privacy-safe fingerprint текста toast, число/длины текстовых элементов и только вычисленные hint-флаги `permission/completion/error`.
 
 Status Lab намеренно **не сохраняет**:
 
 - prompt text;
 - assistant response text;
 - tool input;
-- notification title/body;
+- notification title/body в открытом виде;
 - transcript contents.
 
 ## Windows notifications
@@ -44,6 +45,8 @@ Windows.UI.Notifications.Management.UserNotificationListener
 Polling выбран намеренно. Для unpackaged desktop apps чтение текущих уведомлений работает, но подписка на `NotificationChanged` имеет известные ограничения/ошибки на части Windows 11 builds. Для нашего notifier задержка до ~2 секунд приемлема, а упаковка MSIX пока не требуется.
 
 При первом запуске Windows может запросить разрешение на доступ к уведомлениям.
+
+Текст toast используется только в памяти процесса для SHA-256 fingerprint и грубой классификации по ключевым словам; исходный текст в JSONL не сохраняется.
 
 События:
 
