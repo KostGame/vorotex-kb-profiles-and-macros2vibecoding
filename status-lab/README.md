@@ -169,6 +169,38 @@ Smoke test проверяет:
 - [`docs/owner-canary-2026-08-24.md`](docs/owner-canary-2026-08-24.md) — sanitized findings from the first Windows owner canary, including the `.codex` vs `.codex-agentloop` hook-target correction and notification baseline rules.
 - [`docs/owner-canary-2-2026-08-24.md`](docs/owner-canary-2-2026-08-24.md) — second canary: `UserPromptSubmit`, `PermissionRequest`, `Stop` and Windows notification correlation physically observed; dry-run state normalizer is the next gate.
 
+## Dry-run normalized state
+
+After the second owner canary, Status Lab also computes a **dry-run** state without writing K15 lighting:
+
+```text
+NORMAL
+RUNNING
+WAITING
+DONE_PENDING_ATTENTION
+ERROR
+```
+
+The tray shows the current state. Each transition is appended as `source=state_normalizer`, `event=normalized_state_changed`.
+
+Current reducer rules:
+
+- `UserPromptSubmit` → `RUNNING`;
+- `PermissionRequest` → `WAITING`;
+- the specific correlated OpenAI permission notification disappearing → `RUNNING`;
+- `Stop` → `DONE_PENDING_ATTENTION`;
+- a specific post-Stop OpenAI notification is tracked as completion attention;
+- removing that tracked completion notification → `NORMAL`;
+- a post-Stop notification with a coarse error hint may temporarily produce `ERROR`;
+- `SessionEnd` → `NORMAL`;
+- repeated `PermissionRequest` events are idempotent.
+
+A 400 ms reorder buffer is used because hook and Windows-notification writers are independent processes and their JSONL append order can differ slightly from event timestamps.
+
+The tray action **Сбросить состояние в NORMAL** provides manual acknowledgement during the canary.
+
+RGB writes are still disabled in this stage.
+
 ## Следующий gate
 
 После физического канареечного прогона на Windows:
