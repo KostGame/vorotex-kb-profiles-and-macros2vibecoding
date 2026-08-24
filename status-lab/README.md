@@ -201,6 +201,51 @@ The tray action **Сбросить состояние в NORMAL** provides manua
 
 RGB writes are still disabled in this stage.
 
+## Opt-in K15 RGB canary
+
+After the third owner canary, the source and dry-run normalization layers are accepted for a guarded physical lighting test.
+
+RGB remains **OFF by default**. Enable it manually from the tray:
+
+```text
+Включить K15 RGB canary
+```
+
+The canary:
+
+- opens only the vendor HID collection for the proven K15/W909/W910 family (`36A4/B6A4 : 4100/4101`, usage page `FF01`, usage `0001`, 41-byte feature report);
+- captures the current onboard profile slot;
+- captures the exact 25-byte lighting header and exact 25-byte single-color-breathing record before the first write;
+- changes only the lighting header and the single-color-breathing record;
+- verifies every write with HID readback;
+- restores the exact captured bytes on `NORMAL`, manual disable, and application exit;
+- refuses writes if the active onboard profile changes while the snapshot is held;
+- never writes key mappings, macros, power settings, firmware, or other profile banks.
+
+Close the official VOROTEX software and W910 WebDriver before enabling the RGB canary. Do not switch the K15 hardware profile while the canary is active.
+
+Current canary colors use hardware single-color breathing:
+
+```text
+RUNNING                blue
+WAITING                amber
+DONE_PENDING_ATTENTION green
+ERROR                  red
+NORMAL                 restore exact original lighting bytes
+```
+
+The RGB implementation uses the same report framing proven by the open W910 protocol research:
+
+```text
+report id       = 0x06
+report size     = 41
+lighting write  = 0x09
+lighting read   = 0x89
+detail record   = 25 bytes
+wire color order = G,R,B
+```
+
+Every RGB action is logged as `source=k15_rgb`.
 ## Следующий gate
 
 После физического канареечного прогона на Windows:
