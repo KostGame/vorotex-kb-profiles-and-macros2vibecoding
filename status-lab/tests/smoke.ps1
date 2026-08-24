@@ -80,7 +80,7 @@ try {
         throw 'Installer did not preserve existing hook groups.'
     }
 
-    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'Stop', 'SessionEnd')) {
+    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd')) {
         $groups = @($installed.hooks.$eventName)
         $statusLabHandlers = @(
             foreach ($group in $groups) {
@@ -119,7 +119,7 @@ try {
         throw 'Installer did not install hooks into .codex-agentloop.'
     }
     $agentLoopInstalled = Get-Content -LiteralPath $agentLoopHooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'Stop', 'SessionEnd')) {
+    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd')) {
         if (@($agentLoopInstalled.hooks.$eventName).Count -lt 1) {
             throw "Missing $eventName in .codex-agentloop hooks.json."
         }
