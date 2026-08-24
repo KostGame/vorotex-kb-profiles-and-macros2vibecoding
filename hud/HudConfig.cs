@@ -8,6 +8,7 @@ internal sealed class HudConfig
     public int AutoHideMs { get; set; } = 9000;
     public string DefaultProfile { get; set; } = "B";
     public HotkeyOptions Hotkeys { get; set; } = HotkeyOptions.CreateDefault();
+    public OverlayOptions Overlay { get; set; } = OverlayOptions.CreateDefault();
     public List<ProfileDefinition> Profiles { get; set; } = [];
 
     public static HudConfig Load()
@@ -24,6 +25,7 @@ internal sealed class HudConfig
                 if (parsed is { Profiles.Count: > 0 })
                 {
                     parsed.Hotkeys ??= HotkeyOptions.CreateDefault();
+                    parsed.Overlay ??= OverlayOptions.CreateDefault();
                     return parsed;
                 }
             }
@@ -41,6 +43,7 @@ internal sealed class HudConfig
         AutoHideMs = 9000,
         DefaultProfile = "B",
         Hotkeys = HotkeyOptions.CreateDefault(),
+        Overlay = OverlayOptions.CreateDefault(),
         Profiles =
         [
             ProfileDefinition.Create("A", "TOOLS / AUTH", "red", new Dictionary<string, HudKeyDefinition>
@@ -79,6 +82,73 @@ internal sealed class HotkeyOptions
     public string ShowBoth { get; set; } = "Ctrl+Alt+Shift+K";
 
     public static HotkeyOptions CreateDefault() => new();
+}
+
+internal sealed class OverlayOptions
+{
+    public string Size { get; set; } = "medium";
+    public string Position { get; set; } = "aboveCursor";
+
+    public static OverlayOptions CreateDefault() => new();
+
+    public OverlayOptions CloneNormalized() => new()
+    {
+        Size = NormalizeSize(Size),
+        Position = NormalizePosition(Position)
+    };
+
+    public static string NormalizeSize(string? value, string fallback = "medium")
+    {
+        var normalized = value?.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "extrasmall" or "extra-small" or "extra_small" or "xs" => "extraSmall",
+            "small" => "small",
+            "medium" => "medium",
+            "large" => "large",
+            _ => fallback
+        };
+    }
+
+    public static string NormalizePosition(string? value, string fallback = "aboveCursor")
+    {
+        var normalized = value?.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "abovecursor" or "above-cursor" or "above_cursor" => "aboveCursor",
+            "topleft" or "top-left" or "top_left" => "topLeft",
+            "topright" or "top-right" or "top_right" => "topRight",
+            "bottomleft" or "bottom-left" or "bottom_left" => "bottomLeft",
+            "bottomright" or "bottom-right" or "bottom_right" => "bottomRight",
+            _ => fallback
+        };
+    }
+
+    public float GetSizeScale() => NormalizeSize(Size) switch
+    {
+        "extraSmall" => 0.62f,
+        "small" => 0.78f,
+        "large" => 1.25f,
+        _ => 1.0f
+    };
+
+    public OverlayPosition GetPosition() => NormalizePosition(Position) switch
+    {
+        "topLeft" => OverlayPosition.TopLeft,
+        "topRight" => OverlayPosition.TopRight,
+        "bottomLeft" => OverlayPosition.BottomLeft,
+        "bottomRight" => OverlayPosition.BottomRight,
+        _ => OverlayPosition.AboveCursor
+    };
+}
+
+internal enum OverlayPosition
+{
+    AboveCursor,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight
 }
 
 internal sealed class ProfileDefinition

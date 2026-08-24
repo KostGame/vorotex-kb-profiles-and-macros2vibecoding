@@ -6,6 +6,10 @@
     "cycleProfile": "Ctrl+Alt+P",
     "showBoth": "Ctrl+Alt+Shift+K"
   },
+  "overlay": {
+    "size": "medium",
+    "position": "aboveCursor"
+  },
   "profiles": [
     {
       "id": "A",

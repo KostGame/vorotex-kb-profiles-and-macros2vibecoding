@@ -7,16 +7,20 @@ internal sealed class HudApplicationContext : ApplicationContext
     private const int HotkeyBothProfiles = 3;
 
     private readonly HudConfig _config;
+    private readonly HudUserSettings _userSettings;
     private readonly Dictionary<int, HotkeyBinding> _hotkeys;
     private readonly OverlayForm _overlay;
     private readonly HotkeyWindow _hotkeyWindow;
     private readonly NotifyIcon _trayIcon;
     private readonly Icon _trayGlyph;
+    private ToolStripMenuItem _sizeMenu = null!;
+    private ToolStripMenuItem _positionMenu = null!;
     private string _currentProfileId;
 
     public HudApplicationContext()
     {
         _config = HudConfig.Load();
+        _userSettings = HudUserSettings.Load(_config.Overlay);
         _currentProfileId = _config.Profiles.Any(p => p.Id == _config.DefaultProfile)
             ? _config.DefaultProfile
             : _config.Profiles.First().Id;
@@ -29,7 +33,7 @@ internal sealed class HudApplicationContext : ApplicationContext
         };
 
         var hint = $"{_hotkeys[HotkeyToggle].Display} показать · {_hotkeys[HotkeyNextProfile].Display} профиль · {_hotkeys[HotkeyBothProfiles].Display} оба";
-        _overlay = new OverlayForm(_config.AutoHideMs, hint);
+        _overlay = new OverlayForm(_config.AutoHideMs, hint, _userSettings.ToOverlayOptions());
         _hotkeyWindow = new HotkeyWindow();
         _hotkeyWindow.HotkeyPressed += HandleHotkey;
 
@@ -53,8 +57,15 @@ internal sealed class HudApplicationContext : ApplicationContext
         menu.Items.Add($"Следующий профиль\t{_hotkeys[HotkeyNextProfile].Display}", null, (_, _) => CycleProfile());
         menu.Items.Add($"Оба профиля\t{_hotkeys[HotkeyBothProfiles].Display}", null, (_, _) => ShowBoth());
         menu.Items.Add(new ToolStripSeparator());
+
         menu.Items.Add("Показать профиль A", null, (_, _) => ShowProfile("A"));
         menu.Items.Add("Показать профиль B", null, (_, _) => ShowProfile("B"));
+        menu.Items.Add(new ToolStripSeparator());
+
+        _sizeMenu = BuildSizeMenu();
+        _positionMenu = BuildPositionMenu();
+        menu.Items.Add(_sizeMenu);
+        menu.Items.Add(_positionMenu);
         menu.Items.Add(new ToolStripSeparator());
 
         var startupItem = new ToolStripMenuItem("Запускать с Windows")
@@ -78,6 +89,87 @@ internal sealed class HudApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Выход", null, (_, _) => ExitThread());
         return menu;
+    }
+
+    private ToolStripMenuItem BuildSizeMenu()
+    {
+        var menu = new ToolStripMenuItem("Размер");
+        AddSizeChoice(menu, "Очень маленький", "extraSmall");
+        AddSizeChoice(menu, "Маленький", "small");
+        AddSizeChoice(menu, "Средний", "medium");
+        AddSizeChoice(menu, "Большой", "large");
+        return menu;
+    }
+
+    private ToolStripMenuItem BuildPositionMenu()
+    {
+        var menu = new ToolStripMenuItem("Расположение");
+        AddPositionChoice(menu, "Над курсором", "aboveCursor");
+        menu.DropDownItems.Add(new ToolStripSeparator());
+        AddPositionChoice(menu, "Левый верхний угол", "topLeft");
+        AddPositionChoice(menu, "Правый верхний угол", "topRight");
+        AddPositionChoice(menu, "Левый нижний угол", "bottomLeft");
+        AddPositionChoice(menu, "Правый нижний угол", "bottomRight");
+        return menu;
+    }
+
+    private void AddSizeChoice(ToolStripMenuItem parent, string label, string value)
+    {
+        var canonical = OverlayOptions.NormalizeSize(value);
+        var item = new ToolStripMenuItem(label)
+        {
+            Tag = canonical,
+            Checked = _userSettings.Size.Equals(canonical, StringComparison.OrdinalIgnoreCase)
+        };
+        item.Click += (_, _) =>
+        {
+            _userSettings.Size = canonical;
+            UpdateChoiceChecks(parent, canonical);
+            SaveAndApplyOverlaySettings();
+        };
+        parent.DropDownItems.Add(item);
+    }
+
+    private void AddPositionChoice(ToolStripMenuItem parent, string label, string value)
+    {
+        var canonical = OverlayOptions.NormalizePosition(value);
+        var item = new ToolStripMenuItem(label)
+        {
+            Tag = canonical,
+            Checked = _userSettings.Position.Equals(canonical, StringComparison.OrdinalIgnoreCase)
+        };
+        item.Click += (_, _) =>
+        {
+            _userSettings.Position = canonical;
+            UpdateChoiceChecks(parent, canonical);
+            SaveAndApplyOverlaySettings();
+        };
+        parent.DropDownItems.Add(item);
+    }
+
+    private static void UpdateChoiceChecks(ToolStripMenuItem parent, string selected)
+    {
+        foreach (ToolStripItem child in parent.DropDownItems)
+        {
+            if (child is not ToolStripMenuItem item || item.Tag is not string value)
+                continue;
+
+            item.Checked = value.Equals(selected, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private void SaveAndApplyOverlaySettings()
+    {
+        try
+        {
+            _userSettings.Save();
+        }
+        catch (Exception ex)
+        {
+            ShowTrayError($"Настройка применена, но не сохранена: {ex.Message}");
+        }
+
+        _overlay.ApplyPreferences(_userSettings.ToOverlayOptions(), Cursor.Position);
     }
 
     private void RegisterHotkeys()

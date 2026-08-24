@@ -6,7 +6,10 @@ internal sealed class OverlayForm : Form
 {
     private readonly System.Windows.Forms.Timer _autoHideTimer;
     private readonly string _hotkeyHint;
+    private float _requestedSizeScale;
+    private OverlayPosition _overlayPosition;
     private IReadOnlyList<ProfileDefinition> _profiles = Array.Empty<ProfileDefinition>();
+    private float _renderScale = 1f;
 
     private static readonly Color BackgroundColor = Color.FromArgb(17, 21, 25);
     private static readonly Color PanelColor = Color.FromArgb(25, 32, 36);
@@ -20,9 +23,11 @@ internal sealed class OverlayForm : Form
         Color Flow,
         Color Send);
 
-    public OverlayForm(int autoHideMs, string hotkeyHint)
+    public OverlayForm(int autoHideMs, string hotkeyHint, OverlayOptions overlayOptions)
     {
         _hotkeyHint = hotkeyHint;
+        ApplyPreferencesInternal(overlayOptions);
+
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
@@ -30,7 +35,7 @@ internal sealed class OverlayForm : Form
         BackColor = BackgroundColor;
         Opacity = 0.97;
         DoubleBuffered = true;
-        MinimumSize = new Size(640, 450);
+        MinimumSize = Size.Empty;
 
         _autoHideTimer = new System.Windows.Forms.Timer { Interval = Math.Max(0, autoHideMs) };
         _autoHideTimer.Tick += (_, _) => HideOverlay();
@@ -49,15 +54,41 @@ internal sealed class OverlayForm : Form
         }
     }
 
+    public void ApplyPreferences(OverlayOptions overlayOptions, Point cursor)
+    {
+        ApplyPreferencesInternal(overlayOptions);
+
+        if (Visible && _profiles.Count > 0)
+            ShowProfiles(_profiles, cursor);
+    }
+
+    private void ApplyPreferencesInternal(OverlayOptions overlayOptions)
+    {
+        _requestedSizeScale = overlayOptions.GetSizeScale();
+        _overlayPosition = overlayOptions.GetPosition();
+    }
+
     public void ShowProfiles(IReadOnlyList<ProfileDefinition> profiles, Point cursor)
     {
         _profiles = profiles;
-        var scale = Math.Max(1f, DeviceDpi / 96f);
-        var logicalWidth = profiles.Count > 1 ? 1180 : 680;
-        var logicalHeight = 495;
-        ClientSize = new Size((int)(logicalWidth * scale), (int)(logicalHeight * scale));
-        ApplyRoundedRegion((int)(18 * scale));
-        PositionNearCursor(cursor, (int)(16 * scale));
+
+        var dpiScale = Math.Max(1f, DeviceDpi / 96f);
+        var logicalWidth = profiles.Count > 1 ? 1180f : 680f;
+        const float logicalHeight = 495f;
+        var work = Screen.FromPoint(cursor).WorkingArea;
+        var fitMargin = 20f * dpiScale;
+
+        var maxScaleX = Math.Max(0.35f, (work.Width - (2 * fitMargin)) / (logicalWidth * dpiScale));
+        var maxScaleY = Math.Max(0.35f, (work.Height - (2 * fitMargin)) / (logicalHeight * dpiScale));
+        var effectiveSizeScale = Math.Min(_requestedSizeScale, Math.Min(maxScaleX, maxScaleY));
+        _renderScale = dpiScale * effectiveSizeScale;
+
+        ClientSize = new Size(
+            Math.Max(1, (int)Math.Round(logicalWidth * _renderScale)),
+            Math.Max(1, (int)Math.Round(logicalHeight * _renderScale)));
+
+        ApplyRoundedRegion((int)(18 * _renderScale));
+        PositionOverlay(cursor, work, dpiScale);
         Invalidate();
 
         if (!Visible)
@@ -77,16 +108,51 @@ internal sealed class OverlayForm : Form
         Hide();
     }
 
-    private void PositionNearCursor(Point cursor, int gap)
+    private void PositionOverlay(Point cursor, Rectangle work, float dpiScale)
     {
-        var work = Screen.FromPoint(cursor).WorkingArea;
-        var x = cursor.X + gap;
-        var y = cursor.Y + gap;
+        switch (_overlayPosition)
+        {
+            case OverlayPosition.TopLeft:
+                PositionCorner(work, dpiScale, left: true, top: true);
+                break;
+            case OverlayPosition.TopRight:
+                PositionCorner(work, dpiScale, left: false, top: true);
+                break;
+            case OverlayPosition.BottomLeft:
+                PositionCorner(work, dpiScale, left: true, top: false);
+                break;
+            case OverlayPosition.BottomRight:
+                PositionCorner(work, dpiScale, left: false, top: false);
+                break;
+            default:
+                PositionAboveCursor(cursor, work, dpiScale);
+                break;
+        }
+    }
 
-        if (x + Width > work.Right)
-            x = cursor.X - Width - gap;
-        if (y + Height > work.Bottom)
-            y = cursor.Y - Height - gap;
+    private void PositionAboveCursor(Point cursor, Rectangle work, float dpiScale)
+    {
+        var gap = (int)Math.Round(16 * dpiScale);
+        var x = cursor.X - (Width / 2);
+        var y = cursor.Y - Height - gap;
+
+        if (y < work.Top)
+            y = cursor.Y + gap;
+
+        x = Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - Width));
+        y = Math.Clamp(y, work.Top, Math.Max(work.Top, work.Bottom - Height));
+        Location = new Point(x, y);
+    }
+
+    private void PositionCorner(Rectangle work, float dpiScale, bool left, bool top)
+    {
+        var margin = (int)Math.Round(16 * dpiScale);
+        var x = left
+            ? work.Left + margin
+            : work.Right - Width - margin;
+        var y = top
+            ? work.Top + margin
+            : work.Bottom - Height - margin;
 
         x = Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - Width));
         y = Math.Clamp(y, work.Top, Math.Max(work.Top, work.Bottom - Height));
@@ -110,7 +176,7 @@ internal sealed class OverlayForm : Form
         using var backgroundBrush = new SolidBrush(BackgroundColor);
         g.FillRectangle(backgroundBrush, ClientRectangle);
 
-        var scale = Math.Max(1f, DeviceDpi / 96f);
+        var scale = _renderScale;
         var outer = RectangleF.Inflate(ClientRectangle, -1 * scale, -1 * scale);
         var outerBorder = _profiles.Count == 1
             ? PaletteFor(_profiles[0]).Border

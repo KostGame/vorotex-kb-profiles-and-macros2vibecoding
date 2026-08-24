@@ -1,6 +1,6 @@
 # VOROTEX K15 HUD
 
-Small Windows tray utility for showing the current VOROTEX K15 key map as a dark overlay next to the mouse cursor.
+Small Windows tray utility for showing the current VOROTEX K15 key map as a dark overlay.
 
 The HUD is intentionally separate from the VOROTEX driver/configurator. It does not write device configuration, inspect the keyboard, or require administrator rights.
 
@@ -9,22 +9,86 @@ The HUD is intentionally separate from the VOROTEX driver/configurator. It does 
 - starts as a tray application with a dedicated VOROTEX tray icon;
 - Profile A is rendered in the established dark red HUD palette;
 - Profile B is rendered in the established dark blue HUD palette;
-- `Ctrl+Alt+K` shows/hides the current profile near the cursor;
+- `Ctrl+Alt+K` shows/hides the current profile;
 - `Ctrl+Alt+P` cycles A -> B -> A and shows the selected profile;
 - `Ctrl+Alt+Shift+K` shows both profiles side by side;
-- hotkeys are editable in `profiles.json`;
+- the tray menu contains separate **Размер** and **Расположение** submenus;
+- size choices: **Очень маленький**, **Маленький**, **Средний**, **Большой**;
+- position choices: **Над курсором** plus all four monitor corners;
+- the selected size and position are applied immediately;
+- tray-selected preferences persist after restart;
+- defaults remain **Средний + Над курсором**;
 - overlay is topmost but does not intentionally take keyboard focus;
-- overlay is clamped to the working area of the monitor containing the cursor;
 - overlay auto-hides after 9 seconds by default;
 - clicking the overlay also hides it;
-- multiline action labels are supported again;
-- explicit line breaks in HUD labels are preserved;
-- long labels are wrapped and dynamically fitted inside the key bounds;
+- explicit multiline HUD labels are preserved and dynamically fitted inside key bounds;
 - Profile A shows an encoder badge for vertical scroll;
-- tray menu can show Profile A, Profile B, both profiles, enable per-user Windows autostart, or exit;
-- if `profiles.json` is absent or invalid, the application falls back to the accepted K15 V1.2 RC1 A/B map compiled into the executable.
+- tray menu can show Profile A, Profile B, both profiles, enable per-user Windows autostart, or exit.
 
 The physical V1.2 RC1 layout was accepted functionally by the owner. One hardware-only anomaly remains: after import, Profile B lighting was observed as white. The HUD intentionally keeps the established blue Profile B convention until the device-lighting issue is corrected; this does not change the accepted macro map.
+
+## Window settings from the tray
+
+Right-click the tray icon.
+
+### Размер
+
+- **Очень маленький** = 62% of medium;
+- **Маленький** = 78% of medium;
+- **Средний** = accepted current HUD size;
+- **Большой** = 125% of medium.
+
+The entire HUD scales together: window, buttons, spacing, borders, and typography. If the selected size would not fit on the current monitor, the effective size is capped so the whole overlay remains visible.
+
+### Расположение
+
+- **Над курсором** = horizontally centered above the mouse cursor with a small gap; if there is not enough room above, it falls back below the cursor;
+- **Левый верхний угол**;
+- **Правый верхний угол**;
+- **Левый нижний угол**;
+- **Правый нижний угол**.
+
+Corner positions use the working area of the monitor containing the cursor, so the HUD does not intentionally overlap the Windows taskbar.
+
+### Persistence
+
+Tray selections are stored per Windows user in:
+
+```text
+%LOCALAPPDATA%\VOROTEX\K15 HUD\settings.json
+```
+
+They survive application and Windows restarts.
+
+The `overlay` block in `profiles.json` provides defaults for a user who does not yet have persisted tray settings:
+
+```json
+"overlay": {
+  "size": "medium",
+  "position": "aboveCursor"
+}
+```
+
+Once a tray preference has been saved, the per-user setting overrides these defaults.
+
+## Configuration values
+
+Supported `overlay.size` values:
+
+- `extraSmall`
+- `small`
+- `medium`
+- `large`
+
+Supported `overlay.position` values:
+
+- `aboveCursor`
+- `topLeft`
+- `topRight`
+- `bottomLeft`
+- `bottomRight`
+
+Unknown values fall back to `medium` and `aboveCursor`.
 
 ## V1.2 RC1 profile map
 
@@ -71,13 +135,11 @@ The compact HUD labels may use deliberate line breaks or slight wording compress
 
 ## Current default hotkeys
 
-The desktop-safe defaults are:
-
 - `Ctrl+Alt+K` — show/hide current HUD profile;
 - `Ctrl+Alt+P` — switch the HUD's local A/B profile and show it;
-- `Ctrl+Alt+Shift+K` — show both profiles.
+- `Ctrl+Alt+Shift+K` — show both profile cards.
 
-These are software-level defaults. Once a physical K15 trigger is accepted, the same chord can be emitted by a K15 macro or replaced in `profiles.json`.
+Hotkeys remain editable in `profiles.json`.
 
 ## Run from source
 
@@ -95,24 +157,7 @@ dotnet publish hud/Vorotex.K15.Hud.csproj -c Release -r win-x64 --self-contained
 
 The publish directory contains the executable plus `profiles.json`. Copy both files to any user-writable folder and run `Vorotex.K15.Hud.exe`.
 
-Autostart is opt-in from the tray menu and uses the current user's `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` entry. No service or scheduled task is installed.
-
-## Configuration
-
-`profiles.json` contains display and HUD-control metadata:
-
-- `autoHideMs`: overlay timeout, `0` disables auto-hide;
-- `defaultProfile`: `A` or `B`;
-- `hotkeys.toggle`: show/hide current profile;
-- `hotkeys.cycleProfile`: switch A/B and show it;
-- `hotkeys.showBoth`: show both profile cards;
-- `profiles[].title`: visible profile title;
-- `profiles[].color`: HUD palette, currently `red` for A and `blue` for B;
-- `profiles[].keys[].action`: canonical semantic meaning of the macro;
-- optional `profiles[].keys[].label`: HUD-only text, including explicit `\n` line breaks where useful;
-- optional `profiles[].keys[].accent`: `primary`, `flow`, or `send`, rendered as a brighter/darker variant of the profile color.
-
-Hotkey strings accept `Ctrl`, `Alt`, `Shift`, and `Win` modifiers plus a Windows key name, for example `Ctrl+Alt+K` or `Ctrl+Shift+F12`. Restart the HUD after editing the file.
+Autostart is opt-in from the tray menu and uses the current user's `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry. No service or scheduled task is installed.
 
 This file is not a VOROTEX import/export package and must never be treated as the source of truth for hardware serialization.
 
