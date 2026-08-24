@@ -8,7 +8,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 {
     private readonly StatusLabConfig _config;
     private readonly WindowsNotificationPoller _notificationPoller = new();
-    private readonly JournalStateNormalizer _stateNormalizer = new();
+    private readonly JournalStateNormalizer _stateNormalizer;
     private readonly K15RgbCanary _rgbCanary;
     private readonly NotifyIcon _trayIcon;
     private readonly ToolStripMenuItem _stateStatusItem;
@@ -22,6 +22,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     {
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
+        _stateNormalizer = new JournalStateNormalizer(_config.States.Done.DurationSeconds);
         _rgbCanary = new K15RgbCanary(_config);
 
         EventJournal.Append(new
@@ -32,6 +33,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             version = typeof(StatusLabApplicationContext).Assembly.GetName().Version?.ToString(),
             rgbConfigPath = StatusLabConfig.FilePath,
             wireColorOrder = _config.WireColorOrder.ToString(),
+            doneAttentionTimeoutSeconds = _config.States.Done.DurationSeconds,
             configWarning = _config.LoadWarning
         });
 
