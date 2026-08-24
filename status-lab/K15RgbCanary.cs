@@ -32,6 +32,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             _controller = K15HidLightingController.Open();
             _snapshot = _controller.CaptureLightingSnapshot();
             _snapshots[_snapshot.OnboardSlot] = _snapshot;
+            LogBaselineRepairIfNeeded(_snapshot, "enable");
+
             _desiredState = currentState;
             _appliedState = K15NormalizedState.Normal;
             _transportFailures = 0;
@@ -184,12 +186,23 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         if (stableSlot != newSlot)
             newSlot = stableSlot;
 
-        if (!_snapshots.TryGetValue(newSlot, out var newSnapshot))
+        K15HidLightingController.LightingSnapshot newSnapshot;
+        if (_snapshots.TryGetValue(newSlot, out var knownSnapshot))
+        {
+            newSnapshot = knownSnapshot;
+
+            // If the user switched away before an earlier five-second overlay finished, that
+            // profile's persisted header can still contain the overlay. Heal the cached exact
+            // baseline immediately when the profile becomes active again, before flashing it.
+            _controller.Restore(newSnapshot);
+        }
+        else
         {
             newSnapshot = _controller.CaptureLightingSnapshot();
             if (newSnapshot.OnboardSlot != newSlot)
                 throw new InvalidOperationException("K15 profile did not remain stable while capturing its lighting baseline.");
             _snapshots[newSlot] = newSnapshot;
+            LogBaselineRepairIfNeeded(newSnapshot, "profile_switch");
         }
 
         _snapshot = newSnapshot;
@@ -257,8 +270,6 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             onboardSlot = _snapshot?.OnboardSlot
         });
 
-        // Transport problems are not semantic ERROR states. Do not turn the keyboard red and do
-        // not leave a sticky "RGB: ERROR" label. Retry and reconnect independently of Codex state.
         StatusChanged?.Invoke($"RGB: RETRYING · {ShortTransportMessage(ex)}");
 
         if (_transportFailures < 2)
@@ -304,11 +315,12 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         DateTimeOffset.UtcNow < _profileFlashUntilUtc;
 
     private static bool IsTransportFault(Exception ex) =>
-        ex is TimeoutException or IOException or System.ComponentModel.Win32Exception;
+        ex is TimeoutException or IOException or InvalidDataException or System.ComponentModel.Win32Exception;
 
     private static string ShortTransportMessage(Exception ex) => ex switch
     {
-        TimeoutException => "HID timeout",
+        TimeoutException => "HID transition/timeout",
+        InvalidDataException => "HID readback mismatch",
         _ => $"0x{ex.HResult:X8}"
     };
 
@@ -318,6 +330,22 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         1 => "B",
         _ => $"{slot + 1}"
     };
+
+    private static void LogBaselineRepairIfNeeded(
+        K15HidLightingController.LightingSnapshot snapshot,
+        string context)
+    {
+        if (!snapshot.BaselineModeRepaired)
+            return;
+
+        Log("rgb_stale_profile_mode_repaired", new
+        {
+            onboardSlot = snapshot.OnboardSlot,
+            profile = ProfileName(snapshot.OnboardSlot),
+            context,
+            repairedTo = "CONSTANT"
+        });
+    }
 
     public async Task DisableAsync(string reason = "manual_disable")
     {
@@ -333,27 +361,38 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
             try
             {
-                if (_controller is not null && _snapshot is not null &&
-                    (_appliedState != K15NormalizedState.Normal || IsProfileFlashActive()))
+                if (_controller is not null)
                 {
-                    _controller.Restore(_snapshot);
+                    var currentSlot = _controller.ReadActiveSlot();
+                    if (!_snapshots.TryGetValue(currentSlot, out var currentSnapshot))
+                    {
+                        currentSnapshot = _controller.CaptureLightingSnapshot();
+                        _snapshots[currentSlot] = currentSnapshot;
+                        LogBaselineRepairIfNeeded(currentSnapshot, "disable");
+                    }
+
+                    _snapshot = currentSnapshot;
+                    _controller.Restore(currentSnapshot);
                     Log("rgb_restored", new
                     {
                         reason,
-                        onboardSlot = _snapshot.OnboardSlot,
-                        profile = ProfileName(_snapshot.OnboardSlot)
+                        onboardSlot = currentSnapshot.OnboardSlot,
+                        profile = ProfileName(currentSnapshot.OnboardSlot)
                     });
                 }
             }
-            catch (Exception ex) when (IsTransportFault(ex))
+            catch (Exception ex)
             {
-                Log("rgb_restore_transport_failure", new
+                // Disabling a tray feature must never crash the WinForms process. We still dispose
+                // the HID handle and surface the failed restore in the journal/status for recovery.
+                Log("rgb_restore_failed_on_disable", new
                 {
                     reason,
                     exception = ex.GetType().FullName,
                     hresult = ex.HResult,
                     message = ex.Message
                 });
+                StatusChanged?.Invoke($"RGB: OFF · restore failed ({ShortTransportMessage(ex)})");
             }
             finally
             {
