@@ -54,7 +54,7 @@ internal sealed class OverlayForm : Form
         _profiles = profiles;
         var scale = Math.Max(1f, DeviceDpi / 96f);
         var logicalWidth = profiles.Count > 1 ? 1180 : 680;
-        var logicalHeight = 485;
+        var logicalHeight = 495;
         ClientSize = new Size((int)(logicalWidth * scale), (int)(logicalHeight * scale));
         ApplyRoundedRegion((int)(18 * scale));
         PositionNearCursor(cursor, (int)(16 * scale));
@@ -166,7 +166,7 @@ internal sealed class OverlayForm : Form
         var innerWidth = panel.Width - 24 * scale;
         var colGap = 6 * scale;
         var rowGap = 8 * scale;
-        var keyHeight = 92 * scale;
+        var keyHeight = 94 * scale;
         var colWidth = (innerWidth - (5 * colGap)) / 6f;
 
         var row1 = new[] { "1", "2", "3", "4", "5", "6" };
@@ -182,9 +182,9 @@ internal sealed class OverlayForm : Form
         }
 
         var bottomTop = gridTop + (2 * keyHeight) + (2 * rowGap);
-        var bottomHeight = Math.Max(106 * scale, panel.Bottom - bottomTop - 12 * scale);
+        var bottomHeight = Math.Max(110 * scale, panel.Bottom - bottomTop - 12 * scale);
         var unit = (innerWidth - (3 * colGap)) / 5.6f;
-        var widths = new[] { unit, 1.2f * unit, 2.0f * unit, 1.4f * unit };
+        var widths = new[] { 0.9f * unit, 1.65f * unit, 1.8f * unit, 1.25f * unit };
         var keys = new[] { "-", "+", "Space", "Joystick" };
 
         var x = innerLeft;
@@ -265,14 +265,14 @@ internal sealed class OverlayForm : Form
         g.DrawString(DisplayKey(key), keyFont, labelBrush, rect.Left + 7 * scale, rect.Top + 6 * scale);
 
         var actionRect = new RectangleF(
-            rect.Left + 7 * scale,
-            rect.Top + 30 * scale,
-            rect.Width - 14 * scale,
-            rect.Height - 38 * scale);
+            rect.Left + 6 * scale,
+            rect.Top + 29 * scale,
+            rect.Width - 12 * scale,
+            rect.Height - 35 * scale);
 
         var displayText = definition.DisplayText;
         using var format = CreateActionStringFormat();
-        using var actionFont = CreateActionFont(g, displayText, actionRect, format, scale);
+        using var actionFont = CreateActionFont(g, displayText, actionRect, scale);
 
         var state = g.Save();
         g.SetClip(Rectangle.Round(actionRect));
@@ -284,33 +284,57 @@ internal sealed class OverlayForm : Form
     {
         Alignment = StringAlignment.Center,
         LineAlignment = StringAlignment.Center,
-        FormatFlags = StringFormatFlags.LineLimit,
-        Trimming = StringTrimming.EllipsisWord
+        FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.LineLimit,
+        Trimming = StringTrimming.None
     };
 
     private static Font CreateActionFont(
         Graphics g,
         string action,
         RectangleF availableRect,
-        StringFormat format,
         float scale)
     {
         var size = ActionFontSize(action);
-        const float minimumSize = 7.4f;
-        var target = new SizeF(
-            Math.Max(1f, availableRect.Width - 2f * scale),
-            Math.Max(1f, availableRect.Height - 2f * scale));
+        const float minimumSize = 6.8f;
+        var targetWidth = Math.Max(1f, availableRect.Width - 2f * scale);
+        var targetHeight = Math.Max(1f, availableRect.Height - 2f * scale);
 
         while (size > minimumSize)
         {
             using var probe = new Font("Segoe UI Semibold", size * scale, FontStyle.Bold, GraphicsUnit.Pixel);
-            var measured = g.MeasureString(action, probe, target, format);
-            if (measured.Width <= target.Width && measured.Height <= target.Height)
+            if (FitsExplicitLines(g, action, probe, targetWidth, targetHeight))
                 return new Font("Segoe UI Semibold", size * scale, FontStyle.Bold, GraphicsUnit.Pixel);
-            size -= 0.35f;
+            size -= 0.3f;
         }
 
         return new Font("Segoe UI Semibold", minimumSize * scale, FontStyle.Bold, GraphicsUnit.Pixel);
+    }
+
+    private static bool FitsExplicitLines(
+        Graphics g,
+        string action,
+        Font font,
+        float targetWidth,
+        float targetHeight)
+    {
+        var lines = action.Replace("\r", string.Empty).Split('\n');
+        var lineHeight = font.GetHeight(g);
+        if (lineHeight * lines.Length > targetHeight)
+            return false;
+
+        foreach (var line in lines)
+        {
+            var measuredWidth = g.MeasureString(
+                line,
+                font,
+                int.MaxValue,
+                StringFormat.GenericTypographic).Width;
+
+            if (measuredWidth > targetWidth)
+                return false;
+        }
+
+        return true;
     }
 
     private static float ActionFontSize(string action)
@@ -323,9 +347,9 @@ internal sealed class OverlayForm : Form
 
         return longestLine switch
         {
-            > 24 => 11.4f,
-            > 17 => 12.2f,
-            > 12 => 13.2f,
+            > 24 => 11.0f,
+            > 17 => 12.0f,
+            > 12 => 13.0f,
             _ => 14.4f
         };
     }
