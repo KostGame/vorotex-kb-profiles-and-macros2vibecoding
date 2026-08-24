@@ -1,6 +1,11 @@
 {
   "autoHideMs": 9000,
   "defaultProfile": "B",
+  "hotkeys": {
+    "toggle": "Ctrl+Alt+K",
+    "cycleProfile": "Ctrl+Alt+P",
+    "showBoth": "Ctrl+Alt+Shift+K"
+  },
   "profiles": [
     {
       "id": "A",
