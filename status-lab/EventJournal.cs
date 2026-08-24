@@ -6,6 +6,8 @@ namespace Vorotex.K15.StatusLab;
 internal static class EventJournal
 {
     private const string MutexName = @"Local\VorotexK15StatusLabJournal";
+    private const long MaxFileBytes = 5L * 1024 * 1024;
+    private const int MaxArchives = 2;
 
     public static string DirectoryPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -13,6 +15,22 @@ internal static class EventJournal
         "K15 Status Lab");
 
     public static string FilePath { get; } = Path.Combine(DirectoryPath, "events.jsonl");
+    public static string DetailedLoggingMarkerPath { get; } = Path.Combine(DirectoryPath, "detailed-logging.disabled");
+    public static bool DetailedLoggingEnabled => !File.Exists(DetailedLoggingMarkerPath);
+
+    public static void SetDetailedLoggingEnabled(bool enabled)
+    {
+        Directory.CreateDirectory(DirectoryPath);
+        if (enabled)
+        {
+            if (File.Exists(DetailedLoggingMarkerPath))
+                File.Delete(DetailedLoggingMarkerPath);
+        }
+        else
+        {
+            File.WriteAllText(DetailedLoggingMarkerPath, "disabled", new UTF8Encoding(false));
+        }
+    }
 
     public static void Append(object record)
     {
@@ -22,6 +40,9 @@ internal static class EventJournal
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         });
 
+        if (!DetailedLoggingEnabled && !IsOperationalRecord(line))
+            return;
+
         using var mutex = new Mutex(false, MutexName);
         var locked = false;
         try
@@ -30,6 +51,7 @@ internal static class EventJournal
             if (!locked)
                 throw new TimeoutException("Timed out waiting for the Status Lab journal lock.");
 
+            RotateIfNeededLocked();
             File.AppendAllText(FilePath, line + Environment.NewLine, new UTF8Encoding(false));
         }
         finally
@@ -58,11 +80,66 @@ internal static class EventJournal
                 throw new TimeoutException("Timed out waiting for the Status Lab journal lock.");
 
             File.WriteAllText(FilePath, string.Empty, new UTF8Encoding(false));
+            for (var index = 1; index <= MaxArchives; index++)
+            {
+                var archive = ArchivePath(index);
+                if (File.Exists(archive))
+                    File.Delete(archive);
+            }
         }
         finally
         {
             if (locked)
                 mutex.ReleaseMutex();
         }
+    }
+
+    public static string ArchivePath(int index) => FilePath + "." + index;
+
+    private static bool IsOperationalRecord(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("source", out var sourceNode) || sourceNode.ValueKind != JsonValueKind.String)
+                return false;
+
+            var source = sourceNode.GetString() ?? string.Empty;
+            if (source == "codex_hook")
+                return true;
+
+            if (source != "windows_notification")
+                return false;
+
+            if (!root.TryGetProperty("packageFamilyName", out var packageNode) || packageNode.ValueKind != JsonValueKind.String)
+                return false;
+
+            return (packageNode.GetString() ?? string.Empty)
+                .StartsWith("OpenAI.Codex_", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void RotateIfNeededLocked()
+    {
+        if (!File.Exists(FilePath) || new FileInfo(FilePath).Length < MaxFileBytes)
+            return;
+
+        for (var index = MaxArchives; index >= 1; index--)
+        {
+            var destination = ArchivePath(index);
+            if (File.Exists(destination))
+                File.Delete(destination);
+
+            var source = index == 1 ? FilePath : ArchivePath(index - 1);
+            if (File.Exists(source))
+                File.Move(source, destination);
+        }
+
+        File.WriteAllText(FilePath, string.Empty, new UTF8Encoding(false));
     }
 }
