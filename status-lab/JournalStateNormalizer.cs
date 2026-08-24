@@ -8,10 +8,15 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private static readonly TimeSpan ReorderDelay = TimeSpan.FromMilliseconds(400);
 
     private readonly CancellationTokenSource _cts = new();
-    private readonly StateReducer _reducer = new();
+    private readonly StateReducer _reducer;
     private readonly List<StatusInputEvent> _pending = new();
     private Task? _loopTask;
     private int _processedLineCount;
+
+    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 15)
+    {
+        _reducer = new StateReducer(doneAttentionTimeoutSeconds);
+    }
 
     public event Action<K15NormalizedState, StateTransition?>? StateChanged;
 
