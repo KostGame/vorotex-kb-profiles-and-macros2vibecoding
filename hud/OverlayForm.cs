@@ -206,25 +206,43 @@ internal sealed class OverlayForm : Form
         g.DrawPath(keyPen, keyPath);
 
         using var keyFont = new Font("Segoe UI Semibold", 13.5f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
-        using var actionFont = new Font("Segoe UI Semibold", ActionFontSize(definition.Action) * scale, FontStyle.Bold, GraphicsUnit.Pixel);
         using var labelBrush = new SolidBrush(Color.FromArgb(240, 245, 245, 245));
         using var actionBrush = new SolidBrush(Color.White);
 
         g.DrawString(DisplayKey(key), keyFont, labelBrush, rect.Left + 7 * scale, rect.Top + 6 * scale);
 
         var actionRect = new RectangleF(rect.Left + 5 * scale, rect.Top + 30 * scale, rect.Width - 10 * scale, rect.Height - 34 * scale);
+        using var actionFont = CreateActionFont(g, definition.Action, actionRect.Width, scale);
         using var format = new StringFormat
         {
             Alignment = StringAlignment.Center,
             LineAlignment = StringAlignment.Center,
-            Trimming = StringTrimming.EllipsisWord
+            FormatFlags = StringFormatFlags.NoWrap,
+            Trimming = StringTrimming.EllipsisCharacter
         };
         g.DrawString(definition.Action, actionFont, actionBrush, actionRect, format);
     }
 
+    private static Font CreateActionFont(Graphics g, string action, float availableWidth, float scale)
+    {
+        var size = ActionFontSize(action);
+        const float minimumSize = 8.8f;
+
+        while (size > minimumSize)
+        {
+            using var probe = new Font("Segoe UI Semibold", size * scale, FontStyle.Bold, GraphicsUnit.Pixel);
+            var measuredWidth = g.MeasureString(action, probe, int.MaxValue, StringFormat.GenericTypographic).Width;
+            if (measuredWidth <= availableWidth)
+                return new Font("Segoe UI Semibold", size * scale, FontStyle.Bold, GraphicsUnit.Pixel);
+            size -= 0.4f;
+        }
+
+        return new Font("Segoe UI Semibold", minimumSize * scale, FontStyle.Bold, GraphicsUnit.Pixel);
+    }
+
     private static float ActionFontSize(string action)
     {
-        var length = action.Replace("\n", string.Empty).Length;
+        var length = action.Length;
         return length switch
         {
             > 24 => 11.4f,
