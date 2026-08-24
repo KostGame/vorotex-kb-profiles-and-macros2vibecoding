@@ -1,0 +1,46 @@
+{
+  "fixtureId": "tmac-generated-standalone-canary",
+  "evidenceClass": "generated-standalone-macro-import-canary",
+  "source": "repository-serializer-generated",
+  "transport": ".Macro.Config",
+  "verification": "official-vorotex-imported",
+  "officialStatus": {
+    "OFFICIAL_MACRO_EXPORT": "PROVEN",
+    "OFFICIAL_MACRO_IMPORT_UI": "PROVEN",
+    "UNMODIFIED_EXPORT_ROUNDTRIP_IMPORT": "PASS",
+    "GENERATED_MACRO_CONFIG_IMPORT": "PASS",
+    "STANDALONE_GENERATED_MACRO_TRANSPORT": "PROVEN",
+    "MINIMALLY_MODIFIED_EXPORT_IMPORT": "NOT_REQUIRED"
+  },
+  "ownerGuiObservation": {
+    "groupName": "TMAC_CANARY_GENERATED",
+    "macroName": "TMAC_GEN_TEXT",
+    "activeEventCount": 14,
+    "activeDelayMs": 1,
+    "cycle": 1,
+    "importedAsStandaloneGeneratedPackage": true
+  },
+  "parentAcceptanceMatrix": {
+    "TMAC001_K15TEST_FIXTURE": "PASS",
+    "TMAC001_EN_PROBE_EVIDENCE": "FAIL",
+    "TMAC001_RU_PROBE_EVIDENCE": "FAIL",
+    "TMAC001_CYCLE_REGRESSION": "PASS",
+    "TMAC001_UNMODIFIED_ROUNDTRIP": "PASS",
+    "TMAC001_GENERATED_IMPORT": "PASS",
+    "TMAC001_SANITIZATION": "PASS",
+    "TMAC001_FIXTURE_VALIDATION": "PASS",
+    "TMAC001_README_BOUNDARIES": "PASS",
+    "TMAC001_PARENT_READY_TO_CLOSE": "NO"
+  },
+  "parentGaps": [
+    "This task did not capture a fresh authoritative recorder-to-export English probe beyond the existing selector evidence.",
+    "This task did not capture a fresh authoritative recorder-to-export Russian probe or establish arbitrary RU character coverage.",
+    "Caps Lock state, uppercase/lowercase behavior, Shift ordering, punctuation, and Space behavior remain outside the K15TEST import canary proof."
+  ],
+  "publicArtifactPolicy": {
+    "rawMacroConfigPublished": false,
+    "realGuidsPublished": false,
+    "machinePathsPublished": false,
+    "privateEvidenceHashPublished": false
+  }
+}
