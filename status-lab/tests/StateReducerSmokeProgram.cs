@@ -100,43 +100,54 @@ Require(report.Length == 41, "HID report must be 41 bytes.");
 Require(report[0] == 0x06 && report[3] == 0x09 && report[4] == 0x12, "HID report header mismatch.");
 Require(report[6] == 0x64 && report[7] == 0x00 && report[8] == 3, "HID report address/length mismatch.");
 
+var config = StatusLabConfig.CreateDefault();
+Require(config.WireColorOrder == WireColorOrder.RGB,
+    "Physical K15 default must use RGB order after owner canary calibration.");
+Require(config.ActivationSignal.Mode == K15LightingMode.FlowingWater &&
+        config.ActivationSignal.Brightness == 4 &&
+        config.ActivationSignal.Speed == 7 &&
+        config.ActivationSignal.Colors.SequenceEqual(new[] { "red", "blue" }),
+    "Activation signal must default to fast red+blue Flowing Water at brightness 4.");
+Require(config.States.Running.Mode == K15LightingMode.TetrisBlocks,
+    "RUNNING must default to Tetris blocks.");
+Require(config.Profiles.A.Normal.Mode == K15LightingMode.Constant &&
+        config.Profiles.A.Normal.Colors.SequenceEqual(new[] { "red" }),
+    "Profile A configured normal must be constant red.");
+Require(config.Profiles.B.Normal.Mode == K15LightingMode.Constant &&
+        config.Profiles.B.Normal.Colors.SequenceEqual(new[] { "blue" }),
+    "Profile B configured normal must be constant blue.");
+
+Require(K15HidProtocol.ModeCode(K15LightingMode.FlowingWater) == 0x82,
+    "Flowing Water must map to native mode 0x82.");
+Require(K15HidProtocol.ModeCode(K15LightingMode.TetrisBlocks) == 0x86,
+    "Tetris blocks must map to native mode 0x86.");
+Require(K15HidProtocol.ModeRecordAddress(K15LightingMode.FlowingWater) == 50,
+    "Flowing Water detail record must use address 2*25.");
+Require(K15HidProtocol.ModeRecordAddress(K15LightingMode.TetrisBlocks) == 150,
+    "Tetris detail record must use address 6*25.");
+
+var activationRecord = K15HidProtocol.CreateEffectRecord(config.ActivationSignal, WireColorOrder.RGB);
+Require(activationRecord[0] == 7 && activationRecord[2] == 2,
+    "Activation speed/brightness encoding mismatch.");
+Require(activationRecord[3] == 0x03,
+    "Two activation colors must enable the first two palette slots.");
+Require(activationRecord[4] == 0xFF && activationRecord[5] == 0x00 && activationRecord[6] == 0x00,
+    "Physical red must be encoded as R,G,B after owner calibration.");
+Require(activationRecord[7] == 0x00 && activationRecord[8] == 0x00 && activationRecord[9] == 0xFF,
+    "Physical blue must be the second activation palette color.");
+
+var legacyOrderRecord = K15HidProtocol.CreateEffectRecord(config.Profiles.A.SwitchSignal, WireColorOrder.GRB);
+Require(legacyOrderRecord[4] == 0x00 && legacyOrderRecord[5] == 0xFF,
+    "GRB compatibility option must remain explicitly available.");
+
 var originalHeader = Enumerable.Range(0, 25).Select(value => (byte)value).ToArray();
-var runningHeader = K15HidProtocol.CreateRunningHeader(originalHeader);
+var runningHeader = K15HidProtocol.CreateEffectHeader(originalHeader, config.States.Running);
 Require(runningHeader[0] == K15HidProtocol.TetrisMode,
-    "RUNNING must select the hardware Tetris/Enraptured mode.");
+    "Configured RUNNING effect must select Tetris/Enraptured mode.");
 Require(runningHeader.Skip(1).SequenceEqual(originalHeader.Skip(1)),
-    "RUNNING must preserve non-mode lighting header bytes.");
-
-var waitingRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Waiting, speed: 6);
-Require(waitingRecord.Length == 25, "Lighting detail must be 25 bytes.");
-Require(waitingRecord[3] == 0x01, "Single-color breathing should enable one palette slot.");
-Require(waitingRecord[4] == 0xFF && waitingRecord[5] == 0xFF && waitingRecord[6] == 0xFF,
-    "WAITING must encode white in G,R,B wire order.");
-
-var doneRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.DonePendingAttention, speed: 3);
-Require(doneRecord[4] == 0xFF && doneRecord[5] == 0x00 && doneRecord[6] == 0x00,
-    "DONE must encode green in G,R,B wire order.");
-
-var profileA = K15HidProtocol.CreateProfileFlashLightingRecord(0);
-Require(profileA[4] == 0x00 && profileA[5] == 0xFF && profileA[6] == 0x00,
-    "Profile A flash must encode red in G,R,B wire order.");
-var profileB = K15HidProtocol.CreateProfileFlashLightingRecord(1);
-Require(profileB[4] == 0x00 && profileB[5] == 0x00 && profileB[6] == 0xFF,
-    "Profile B flash must encode blue in G,R,B wire order.");
-
-var alertHeader = K15HidProtocol.CreateAlertHeader(originalHeader);
-Require(alertHeader[0] == K15HidProtocol.SingleColorBreathingMode,
-    "Alert header must select single-color breathing.");
-Require(alertHeader.Skip(1).SequenceEqual(originalHeader.Skip(1)),
-    "Alert header must preserve non-mode bytes.");
-
-var constantHeader = K15HidProtocol.CreateConstantHeader(alertHeader);
-Require(constantHeader[0] == K15HidProtocol.ConstantMode,
-    "Stale notifier residue must be repairable back to Constant mode.");
-Require(constantHeader.Skip(1).SequenceEqual(alertHeader.Skip(1)),
-    "Constant baseline repair must preserve non-mode header bytes.");
+    "Configured effect header must preserve non-mode bytes.");
 
 Require(K15HidProtocol.IsSupportedDevice(0xB6A4, 0x4100), "Physical K15 VID/PID must be accepted.");
 Require(!K15HidProtocol.IsSupportedDevice(0x1234, 0x4100), "Unrelated VID must be rejected.");
 
-Console.WriteLine("State reducer + HID protocol smoke tests: PASS");
+Console.WriteLine("State reducer + editable RGB config + HID protocol smoke tests: PASS");
