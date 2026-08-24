@@ -14,6 +14,11 @@ schema_version = 3
 [device]
 wire_color_order = "rgb"
 
+[behavior]
+# Safety fallback: DONE_PENDING_ATTENTION не должен мигать бесконечно.
+# 0 = отключить fallback; default = 15 секунд.
+done_attention_timeout_seconds = 15
+
 [profiles.A]
 # RED / TOOLS-AUTH
 color = "#FF0000"
@@ -43,7 +48,7 @@ direction = 0
 duration_seconds = 0
 
 [states.done]
-# После STOP-сигнала: медленное напоминание до acknowledge/notification resolve.
+# После STOP-сигнала: медленное напоминание. Semantic timeout задаётся в [behavior].
 enabled = true
 effect = "single_color_breathing"
 palette = "profile"
@@ -63,14 +68,15 @@ direction = 0
 duration_seconds = 0
 
 [profile_switch]
-# Короткий эффект только в цвете уже физически выбранного НОВОГО профиля.
+# У K15 есть собственная тройная flash-анимация при физическом A/B switch.
+# Поэтому default 4s оставляет наш Flowing Water видимым после штатных flashes.
 enabled = true
 effect = "flowing_water"
 palette = "profile"
 brightness = 5
 speed = 5
 direction = 0
-duration_seconds = 2
+duration_seconds = 4
 
 [stop_signal]
 # Момент Stop: RED <-> BLUE, затем states.done.
@@ -83,7 +89,7 @@ direction = 0
 duration_seconds = 3
 
 [activation]
-# Включение RGB tracking: Flowing Water двумя основными цветами A/B.
+# Включение RGB-индикации: Flowing Water двумя основными цветами A/B.
 enabled = true
 effect = "flowing_water"
 palette = "profile_pair"
