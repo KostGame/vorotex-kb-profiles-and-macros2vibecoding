@@ -1,14 +1,15 @@
 # VOROTEX K15 Status Lab
 #
-# Цвет задаёт аппаратный профиль. NORMAL восстанавливает exact baseline.
-# В notifier разрешены только режимы с явно управляемым цветом/палитрой:
-# constant, flowing_water, single_color_breathing, off.
+# Цвета принадлежат аппаратным профилям A/B. NORMAL восстанавливает exact baseline.
+# palette = "profile"      -> цвет физически активного профиля
+# palette = "profile_pair" -> два основных цвета: A затем B
 #
-# Native mode 0x83 в OEM UI называется Horse race. Старое имя Status Lab: mono_water.
-# Он, cycle_breathing, tetris_blocks, neon и ambilight исследуются только через K15 Lighting Lab.
+# Production notifier modes:
+# constant, flowing_water, single_color_breathing, cycle_breathing, off.
+# Horse race / native 0x83, Tetris, Neon и Ambilight остаются в K15 Lighting Lab.
 # Status Lab НИКОГДА программно не переключает hardware Profile A/B.
 
-schema_version = 2
+schema_version = 3
 
 [device]
 wire_color_order = "rgb"
@@ -22,53 +23,74 @@ color = "#FF0000"
 color = "#0000FF"
 
 [states.running]
+# Работа Codex: спокойный Flowing Water в цвете активного профиля.
 enabled = true
-effect = "single_color_breathing"
+effect = "flowing_water"
+palette = "profile"
 brightness = 4
 speed = 3
 direction = 0
 duration_seconds = 0
 
 [states.waiting]
+# Запрос/ожидание: быстрое мигание, сразу заметно.
 enabled = true
 effect = "single_color_breathing"
+palette = "profile"
 brightness = 6
-speed = 6
+speed = 7
 direction = 0
 duration_seconds = 0
 
 [states.done]
+# После STOP-сигнала: медленное напоминание до acknowledge/notification resolve.
 enabled = true
 effect = "single_color_breathing"
+palette = "profile"
 brightness = 6
-speed = 3
+speed = 5
 direction = 0
-duration_seconds = 10
+duration_seconds = 0
 
 [states.error]
-enabled = true
+# Зарезервировано до появления high-confidence semantic ERROR source.
+enabled = false
 effect = "single_color_breathing"
+palette = "profile"
 brightness = 6
 speed = 7
 direction = 0
-duration_seconds = 15
+duration_seconds = 0
 
 [profile_switch]
-# Применяется напрямую к уже физически выбранному новому профилю.
+# Короткий эффект только в цвете уже физически выбранного НОВОГО профиля.
 enabled = true
-effect = "single_color_breathing"
-brightness = 6
+effect = "flowing_water"
+palette = "profile"
+brightness = 5
 speed = 5
 direction = 0
 duration_seconds = 2
 
-[activation]
-enabled = false
-effect = "single_color_breathing"
-brightness = 4
-speed = 4
+[stop_signal]
+# Момент Stop: RED <-> BLUE, затем states.done.
+enabled = true
+effect = "cycle_breathing"
+palette = "profile_pair"
+brightness = 6
+speed = 7
 direction = 0
-duration_seconds = 2
+duration_seconds = 3
+
+[activation]
+# Включение RGB tracking: Flowing Water двумя основными цветами A/B.
+enabled = true
+effect = "flowing_water"
+palette = "profile_pair"
+brightness = 5
+speed = 5
+direction = 0
+duration_seconds = 3
 
 [effect_lab]
 test_duration_seconds = 4

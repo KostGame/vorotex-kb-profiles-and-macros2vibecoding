@@ -21,16 +21,23 @@ internal enum WireColorOrder
     GRB
 }
 
+internal enum PaletteSource
+{
+    Profile,
+    ProfilePair
+}
+
 internal sealed class LightingEffectConfig
 {
     public bool Enabled { get; set; } = true;
     public K15LightingMode Mode { get; set; } = K15LightingMode.SingleColorBreathing;
+    public PaletteSource Palette { get; set; } = PaletteSource.Profile;
     public int Brightness { get; set; } = 5;
     public int Speed { get; set; } = 4;
     public int Direction { get; set; }
     public double DurationSeconds { get; set; }
 
-    // Runtime-only data. Canonical notifier TOML deliberately has no state colors or palette masks.
+    // Runtime-only data. Canonical notifier TOML uses palette = profile/profile_pair instead.
     public string[] Colors { get; set; } = [];
     public byte? PaletteMask { get; set; }
 
@@ -38,6 +45,7 @@ internal sealed class LightingEffectConfig
     {
         Enabled = Enabled,
         Mode = Mode,
+        Palette = Palette,
         Brightness = Brightness,
         Speed = Speed,
         Direction = Direction,
@@ -68,21 +76,23 @@ internal sealed class ProfileSetConfig
 
 internal sealed class StatusLabConfig
 {
+    public const int CurrentSchemaVersion = 3;
     public const int MaxNotifierColors = 2;
     public static string FilePath { get; } = Path.Combine(EventJournal.DirectoryPath, "config.toml");
 
     public string? LoadWarning { get; private set; }
-    public int SchemaVersion { get; set; } = 2;
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public WireColorOrder WireColorOrder { get; set; } = WireColorOrder.RGB;
     public ProfileSetConfig Profiles { get; set; } = new();
     public StateLightingConfig States { get; set; } = new();
     public LightingEffectConfig ProfileSwitch { get; set; } = new();
+    public LightingEffectConfig StopSignal { get; set; } = new();
     public LightingEffectConfig ActivationSignal { get; set; } = new();
     public double EffectLabDurationSeconds { get; set; } = 4;
 
     public static StatusLabConfig CreateDefault() => new()
     {
-        SchemaVersion = 2,
+        SchemaVersion = CurrentSchemaVersion,
         WireColorOrder = WireColorOrder.RGB,
         Profiles = new ProfileSetConfig
         {
@@ -91,24 +101,26 @@ internal sealed class StatusLabConfig
         },
         States = new StateLightingConfig
         {
-            Running = Effect(K15LightingMode.SingleColorBreathing, 4, 3, 0),
-            Waiting = Effect(K15LightingMode.SingleColorBreathing, 6, 6, 0),
-            Done = Effect(K15LightingMode.SingleColorBreathing, 6, 3, 10),
-            Error = Effect(K15LightingMode.SingleColorBreathing, 6, 7, 15)
+            Running = Effect(K15LightingMode.FlowingWater, PaletteSource.Profile, 4, 3, 0, 0),
+            Waiting = Effect(K15LightingMode.SingleColorBreathing, PaletteSource.Profile, 6, 7, 0, 0),
+            Done = Effect(K15LightingMode.SingleColorBreathing, PaletteSource.Profile, 6, 5, 0, 0),
+            Error = Effect(K15LightingMode.SingleColorBreathing, PaletteSource.Profile, 6, 7, 0, 0, enabled: false)
         },
-        ProfileSwitch = Effect(K15LightingMode.SingleColorBreathing, 6, 5, 2),
-        ActivationSignal = Effect(K15LightingMode.SingleColorBreathing, 4, 4, 2, enabled: false),
+        ProfileSwitch = Effect(K15LightingMode.FlowingWater, PaletteSource.Profile, 5, 5, 0, 2),
+        StopSignal = Effect(K15LightingMode.CycleBreathing, PaletteSource.ProfilePair, 6, 7, 0, 3),
+        ActivationSignal = Effect(K15LightingMode.FlowingWater, PaletteSource.ProfilePair, 5, 5, 0, 3),
         EffectLabDurationSeconds = 4
     };
 
-    private static LightingEffectConfig Effect(K15LightingMode mode, int brightness, int speed,
-        double duration, bool enabled = true) => new()
+    private static LightingEffectConfig Effect(K15LightingMode mode, PaletteSource palette, int brightness,
+        int speed, int direction, double duration, bool enabled = true) => new()
     {
         Enabled = enabled,
         Mode = mode,
+        Palette = palette,
         Brightness = brightness,
         Speed = speed,
-        Direction = 0,
+        Direction = direction,
         DurationSeconds = duration
     };
 
@@ -155,15 +167,23 @@ internal sealed class StatusLabConfig
     public LightingEffectConfig RenderForProfile(byte onboardSlot, LightingEffectConfig source)
     {
         var rendered = source.Clone();
-        rendered.Colors = [GetProfile(onboardSlot).Color];
+        rendered.Colors = source.Mode == K15LightingMode.Off
+            ? []
+            : source.Palette switch
+            {
+                PaletteSource.Profile => [GetProfile(onboardSlot).Color],
+                PaletteSource.ProfilePair => [Profiles.A.Color, Profiles.B.Color],
+                _ => throw new ArgumentOutOfRangeException(nameof(source.Palette))
+            };
         rendered.PaletteMask = null;
         return rendered;
     }
 
     public void Validate()
     {
-        if (SchemaVersion != 2)
-            throw new InvalidDataException($"Unsupported schema_version {SchemaVersion}; expected 2.");
+        if (SchemaVersion is not (2 or CurrentSchemaVersion))
+            throw new InvalidDataException(
+                $"Unsupported schema_version {SchemaVersion}; expected 2 or {CurrentSchemaVersion}.");
 
         _ = ParseColor(Profiles.A.Color);
         _ = ParseColor(Profiles.B.Color);
@@ -172,16 +192,24 @@ internal sealed class StatusLabConfig
         ValidateEffect(States.Done, "states.done");
         ValidateEffect(States.Error, "states.error");
         ValidateEffect(ProfileSwitch, "profile_switch");
+        ValidateEffect(StopSignal, "stop_signal");
         ValidateEffect(ActivationSignal, "activation");
 
         if (EffectLabDurationSeconds is < 0.5 or > 30)
             throw new InvalidDataException("effect_lab.test_duration_seconds must be 0.5..30.");
     }
 
+    internal void NormalizeLegacySchema()
+    {
+        if (SchemaVersion == 2)
+            SchemaVersion = CurrentSchemaVersion;
+    }
+
     internal static bool IsControlledPaletteMode(K15LightingMode mode) => mode is
         K15LightingMode.Constant or
         K15LightingMode.FlowingWater or
         K15LightingMode.SingleColorBreathing or
+        K15LightingMode.CycleBreathing or
         K15LightingMode.Off;
 
     private static void ValidateEffect(LightingEffectConfig effect, string path)
@@ -189,7 +217,8 @@ internal sealed class StatusLabConfig
         if (!IsControlledPaletteMode(effect.Mode))
             throw new InvalidDataException(
                 $"{path}.effect '{ModeName(effect.Mode)}' is not allowed for Status Lab notifier. " +
-                "Use constant, flowing_water, single_color_breathing or off; research other native modes in Lighting Lab.");
+                "Use constant, flowing_water, single_color_breathing, cycle_breathing or off; " +
+                "research other native modes in Lighting Lab.");
         if (effect.Brightness is < 1 or > 6)
             throw new InvalidDataException($"{path}.brightness must be 1..6.");
         if (effect.Speed is < 1 or > 7)
@@ -199,6 +228,20 @@ internal sealed class StatusLabConfig
         if (effect.DurationSeconds is < 0 or > 3600)
             throw new InvalidDataException($"{path}.duration_seconds must be 0..3600.");
     }
+
+    public static string PaletteName(PaletteSource palette) => palette switch
+    {
+        PaletteSource.Profile => "profile",
+        PaletteSource.ProfilePair => "profile_pair",
+        _ => throw new ArgumentOutOfRangeException(nameof(palette))
+    };
+
+    public static PaletteSource ParsePaletteName(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "profile" => PaletteSource.Profile,
+        "profile_pair" => PaletteSource.ProfilePair,
+        _ => throw new InvalidDataException($"Unknown palette source '{value}'. Use profile or profile_pair.")
+    };
 
     public static string ModeName(K15LightingMode mode) => mode switch
     {

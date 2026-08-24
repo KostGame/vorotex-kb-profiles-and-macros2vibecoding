@@ -54,9 +54,14 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             StartMonitorLocked();
 
             if (_config.ActivationSignal.Enabled && _config.ActivationSignal.DurationSeconds > 0)
-                BeginOverlayLocked(_config.ActivationSignal, "ACTIVATION", _config.ActivationSignal.DurationSeconds, "rgb_activation_signal_started");
+            {
+                BeginOverlayLocked(_config.ActivationSignal, "ACTIVATION",
+                    _config.ActivationSignal.DurationSeconds, "rgb_activation_signal_started");
+            }
             else
+            {
                 ApplyDesiredLocked();
+            }
         }
         catch
         {
@@ -73,7 +78,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         }
     }
 
-    public async Task ApplyStateAsync(K15NormalizedState state)
+    public async Task ApplyStateAsync(K15NormalizedState state, StateTransition? transition = null)
     {
         await _gate.WaitAsync();
         try
@@ -88,6 +93,22 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 if (currentSlot != _snapshot.OnboardSlot)
                 {
                     AdoptActiveProfileLocked(currentSlot, startProfileOverlay: true);
+                    return;
+                }
+
+                if (state == K15NormalizedState.Normal &&
+                    !_overlayKind.StartsWith("EFFECT_TEST_", StringComparison.Ordinal))
+                {
+                    ClearOverlayLocked();
+                    ApplyDesiredLocked();
+                    return;
+                }
+
+                if (transition?.Reason == "codex_stop" &&
+                    _config.StopSignal.Enabled && _config.StopSignal.DurationSeconds > 0)
+                {
+                    BeginOverlayLocked(_config.StopSignal, "STOP_SIGNAL",
+                        _config.StopSignal.DurationSeconds, "rgb_stop_signal_started");
                     return;
                 }
 
@@ -126,6 +147,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             {
                 Enabled = true,
                 Mode = mode,
+                Palette = PaletteSource.Profile,
                 Brightness = 5,
                 Speed = 4,
                 Direction = 0,
@@ -252,7 +274,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                             _appliedState = K15NormalizedState.Normal;
                             if (_desiredState != K15NormalizedState.Normal)
                                 _expiredState = _desiredState;
-                            StatusChanged?.Invoke($"RGB: Effect Lab restored baseline · profile {ProfileName(_snapshot.OnboardSlot)}");
+                            StatusChanged?.Invoke(
+                                $"RGB: Effect Lab restored baseline · profile {ProfileName(_snapshot.OnboardSlot)}");
                         }
                         else
                         {
@@ -267,7 +290,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                         _expiredState = _desiredState;
                         _controller.Restore(_snapshot);
                         _appliedState = K15NormalizedState.Normal;
-                        StatusChanged?.Invoke($"RGB: {JournalStateNormalizer.ToWireName(_desiredState)} expired · baseline {ProfileName(_snapshot.OnboardSlot)}");
+                        StatusChanged?.Invoke(
+                            $"RGB: {JournalStateNormalizer.ToWireName(_desiredState)} expired · baseline {ProfileName(_snapshot.OnboardSlot)}");
                     }
                 }
                 catch (K15HidLightingController.K15ProfileChangedException ex)
@@ -299,7 +323,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         if (_snapshot?.OnboardSlot == observedSlot)
             return;
 
-        if (_snapshots.TryGetValue(observedSlot, out var knownSnapshot))
+        var cachedSnapshot = _snapshots.TryGetValue(observedSlot, out var knownSnapshot);
+        if (cachedSnapshot)
         {
             _snapshot = knownSnapshot;
         }
@@ -321,7 +346,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             onboardSlot = observedSlot,
             profile = ProfileName(observedSlot),
             programmaticProfileSelection = false,
-            cachedSnapshot = _snapshots.ContainsKey(observedSlot)
+            cachedSnapshot
         });
 
         if (startProfileOverlay && _config.ProfileSwitch.Enabled && _config.ProfileSwitch.DurationSeconds > 0)
@@ -353,7 +378,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             onboardSlot = _snapshot.OnboardSlot,
             profile = ProfileName(_snapshot.OnboardSlot),
             mode = rendered.Mode.ToString(),
-            color = rendered.Colors.Single(),
+            palette = StatusLabConfig.PaletteName(source.Palette),
+            colors = rendered.Colors,
             brightness = rendered.Brightness,
             speed = rendered.Speed,
             durationSeconds,
@@ -394,11 +420,13 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             state = JournalStateNormalizer.ToWireName(_desiredState),
             onboardSlot = _snapshot.OnboardSlot,
             mode = rendered.Mode.ToString(),
-            color = rendered.Colors.Single(),
+            palette = StatusLabConfig.PaletteName(source.Palette),
+            colors = rendered.Colors,
             brightness = rendered.Brightness,
             speed = rendered.Speed
         });
-        StatusChanged?.Invoke($"RGB: {JournalStateNormalizer.ToWireName(_desiredState)} · {rendered.Mode} · profile {ProfileName(_snapshot.OnboardSlot)}");
+        StatusChanged?.Invoke(
+            $"RGB: {JournalStateNormalizer.ToWireName(_desiredState)} · {rendered.Mode} · profile {ProfileName(_snapshot.OnboardSlot)}");
     }
 
     private void HandleTransportFaultLocked(Exception ex)
@@ -497,7 +525,14 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
                     var deferred = _snapshots.Keys.Where(slot => slot != currentSlot).OrderBy(slot => slot).ToArray();
                     if (deferred.Length > 0)
-                        Log("rgb_inactive_profile_restore_deferred", new { reason, activeSlot = currentSlot, deferredSlots = deferred });
+                    {
+                        Log("rgb_inactive_profile_restore_deferred", new
+                        {
+                            reason,
+                            activeSlot = currentSlot,
+                            deferredSlots = deferred
+                        });
+                    }
                 }
             }
             catch (Exception ex)

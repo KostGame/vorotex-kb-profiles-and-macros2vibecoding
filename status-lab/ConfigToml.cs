@@ -8,7 +8,7 @@ internal static class ConfigToml
     private static readonly HashSet<string> KnownSections = new(StringComparer.Ordinal)
     {
         "device", "profiles.A", "profiles.B", "states.running", "states.waiting",
-        "states.done", "states.error", "profile_switch", "activation", "effect_lab"
+        "states.done", "states.error", "profile_switch", "stop_signal", "activation", "effect_lab"
     };
 
     public static StatusLabConfig Parse(string text)
@@ -48,19 +48,21 @@ internal static class ConfigToml
         }
 
         config.Validate();
+        config.NormalizeLegacySchema();
         return config;
     }
 
     public static string Serialize(StatusLabConfig config)
     {
+        config.NormalizeLegacySchema();
         config.Validate();
         var b = new StringBuilder();
         b.AppendLine("# VOROTEX K15 Status Lab");
-        b.AppendLine("# Цвет задаёт аппаратный профиль. NORMAL восстанавливает exact baseline.");
-        b.AppendLine("# В notifier разрешены только режимы, где цвет/палитра контролируются явно:");
-        b.AppendLine("# constant, flowing_water, single_color_breathing, off.");
-        b.AppendLine("# Native mode 0x83 = Horse race (старое имя mono_water), cycle breathing,");
-        b.AppendLine("# tetris, neon и ambilight исследуются только через K15 Lighting Lab.");
+        b.AppendLine("# Цвета принадлежат аппаратным профилям A/B. NORMAL восстанавливает exact baseline.");
+        b.AppendLine("# palette = profile      -> цвет физически активного профиля");
+        b.AppendLine("# palette = profile_pair -> два основных цвета: A затем B");
+        b.AppendLine("# Production notifier modes: constant, flowing_water, single_color_breathing,");
+        b.AppendLine("# cycle_breathing, off. Horse race, Tetris, Neon, Ambilight остаются в Lighting Lab.");
         b.AppendLine("# Status Lab НИКОГДА программно не переключает hardware Profile A/B.");
         b.AppendLine();
         b.AppendLine($"schema_version = {config.SchemaVersion}");
@@ -71,13 +73,20 @@ internal static class ConfigToml
         b.AppendLine();
         WriteProfile(b, "A", config.Profiles.A, "RED / TOOLS-AUTH");
         WriteProfile(b, "B", config.Profiles.B, "BLUE / MAIN-VIBECODING");
-        WriteEffect(b, "states.running", config.States.Running, "RUNNING");
-        WriteEffect(b, "states.waiting", config.States.Waiting, "WAITING");
-        WriteEffect(b, "states.done", config.States.Done, "DONE, затем exact baseline");
-        WriteEffect(b, "states.error", config.States.Error, "ERROR, только high-confidence source");
+        WriteEffect(b, "states.running", config.States.Running,
+            "RUNNING: Flowing Water в цвете активного профиля.");
+        WriteEffect(b, "states.waiting", config.States.Waiting,
+            "WAITING: быстрое Single-color breathing, speed 7.");
+        WriteEffect(b, "states.done", config.States.Done,
+            "DONE_PENDING_ATTENTION: спокойное Single-color breathing, speed 5, до acknowledge/notification resolve.");
+        WriteEffect(b, "states.error", config.States.Error,
+            "ERROR зарезервирован для high-confidence semantic source; default disabled.");
         WriteEffect(b, "profile_switch", config.ProfileSwitch,
-            "Короткий overlay на уже выбранном пользователем НОВОМ профиле. Никаких SelectActiveSlot.");
-        WriteEffect(b, "activation", config.ActivationSignal, "Сигнал включения notifier; default off");
+            "Короткий Flowing Water только в цвете уже физически выбранного НОВОГО профиля.");
+        WriteEffect(b, "stop_signal", config.StopSignal,
+            "Момент STOP: короткий Cycle breathing RED <-> BLUE, затем states.done.");
+        WriteEffect(b, "activation", config.ActivationSignal,
+            "Включение RGB tracking: короткий Flowing Water двумя основными цветами A/B.");
         b.AppendLine("[effect_lab]");
         b.AppendLine("# Встроенный tray Effect Test остаётся коротким smoke. Полные исследования делаются в Lighting Lab.");
         b.AppendLine($"test_duration_seconds = {Format(config.EffectLabDurationSeconds)}");
@@ -125,6 +134,7 @@ internal static class ConfigToml
             "states.done" => config.States.Done,
             "states.error" => config.States.Error,
             "profile_switch" => config.ProfileSwitch,
+            "stop_signal" => config.StopSignal,
             "activation" => config.ActivationSignal,
             _ => throw new InvalidDataException($"unknown section [{section}]")
         };
@@ -133,6 +143,7 @@ internal static class ConfigToml
         {
             case "enabled": effect.Enabled = ParseBool(value); break;
             case "effect": effect.Mode = StatusLabConfig.ParseModeName(ParseString(value)); break;
+            case "palette": effect.Palette = StatusLabConfig.ParsePaletteName(ParseString(value)); break;
             case "brightness": effect.Brightness = ParseInt(value); break;
             case "speed": effect.Speed = ParseInt(value); break;
             case "direction": effect.Direction = ParseInt(value); break;
@@ -155,6 +166,7 @@ internal static class ConfigToml
         b.AppendLine($"# {hint}");
         b.AppendLine($"enabled = {effect.Enabled.ToString().ToLowerInvariant()}");
         b.AppendLine($"effect = \"{StatusLabConfig.ModeName(effect.Mode)}\"");
+        b.AppendLine($"palette = \"{StatusLabConfig.PaletteName(effect.Palette)}\"");
         b.AppendLine($"brightness = {effect.Brightness}      # 1..6");
         b.AppendLine($"speed = {effect.Speed}               # 1..7");
         b.AppendLine($"direction = {effect.Direction}           # 0..1");

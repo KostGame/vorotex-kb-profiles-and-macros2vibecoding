@@ -5,7 +5,8 @@ static void Require(bool condition, string message)
     if (!condition) throw new InvalidOperationException(message);
 }
 
-static StatusInputEvent Hook(DateTimeOffset t, string name) => new(t, "codex_hook", name);
+static StatusInputEvent Hook(DateTimeOffset t, string name, string session = "session-main", string cwd = @"C:\work\main") =>
+    new(t, "codex_hook", name, SessionId: session, Cwd: cwd);
 static StatusInputEvent Notification(DateTimeOffset t, string name, uint id, bool error = false) =>
     new(t, "windows_notification", name, id, "OpenAI.Codex_test", error);
 
@@ -14,6 +15,7 @@ var reducer = new StateReducer();
 Require(reducer.State == K15NormalizedState.Normal, "Initial state must be NORMAL.");
 reducer.Apply(Hook(t, "UserPromptSubmit"));
 Require(reducer.State == K15NormalizedState.Running, "UserPromptSubmit must enter RUNNING.");
+Require(reducer.FocusedSessionId == "session-main", "Main task session must become focused.");
 reducer.Apply(Hook(t.AddSeconds(1), "PermissionRequest"));
 Require(reducer.State == K15NormalizedState.Waiting, "PermissionRequest must enter WAITING.");
 reducer.Apply(Hook(t.AddSeconds(2), "PostToolUse"));
@@ -25,22 +27,92 @@ Require(reducer.State == K15NormalizedState.DonePendingAttention, "Toast keyword
 reducer.Apply(Notification(t.AddSeconds(5), "windows_notification_removed", 101));
 Require(reducer.State == K15NormalizedState.Normal, "Removing tracked completion notification must restore NORMAL.");
 
+var parallel = new StateReducer();
+parallel.Apply(Hook(t, "UserPromptSubmit", "main-A", @"D:\AI_AGENT_PROJECTS\agentloop-exchange-manual-win-001"));
+Require(parallel.State == K15NormalizedState.Running, "Main A must be RUNNING.");
+parallel.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "memory-B", @"C:\Users\Desktop\.codex-agentloop\memories"));
+parallel.Apply(Hook(t.AddSeconds(2), "SessionEnd", "memory-B", @"C:\Users\Desktop\.codex-agentloop\memories"));
+Require(parallel.State == K15NormalizedState.Running,
+    "Background memories SessionEnd must not reset the foreground main session.");
+Require(parallel.FocusedSessionId == "main-A", "Internal memories session must never steal focus.");
+
+parallel.Apply(Hook(t.AddSeconds(3), "UserPromptSubmit", "main-C", @"D:\AI_AGENT_PROJECTS\other-task"));
+Require(parallel.FocusedSessionId == "main-C", "Newest real task activity must take focus.");
+parallel.Apply(Hook(t.AddSeconds(4), "SessionEnd", "main-C", @"D:\AI_AGENT_PROJECTS\other-task"));
+Require(parallel.State == K15NormalizedState.Running && parallel.FocusedSessionId == "main-A",
+    "Ending focused session C must fall back to still-active session A.");
+
+var rehydrated = new StateReducer();
+rehydrated.Rehydrate(new[]
+{
+    Hook(t, "UserPromptSubmit", "rehydrate-main", @"D:\AI_AGENT_PROJECTS\rehydrate"),
+    Hook(t.AddSeconds(2), "PostToolUse", "rehydrate-main", @"D:\AI_AGENT_PROJECTS\rehydrate"),
+    Hook(t.AddSeconds(3), "UserPromptSubmit", "rehydrate-memory", @"C:\Users\Desktop\.codex-agentloop\memories"),
+    Hook(t.AddSeconds(4), "SessionEnd", "rehydrate-memory", @"C:\Users\Desktop\.codex-agentloop\memories")
+});
+Require(rehydrated.State == K15NormalizedState.Running,
+    "Startup replay must recover a still-running main Codex session.");
+Require(rehydrated.FocusedSessionId == "rehydrate-main", "Rehydrate must recover foreground main session focus.");
+Require(StateReducer.IsInternalCwd(@"C:\Users\Desktop\.codex-agentloop\memories"),
+    "AgentLoop memories cwd must be classified internal.");
+Require(!StateReducer.IsInternalCwd(@"D:\AI_AGENT_PROJECTS\task"), "Normal project cwd must not be internal.");
+
 var config = StatusLabConfig.CreateDefault();
 config.Validate();
-Require(config.SchemaVersion == 2, "TOML schema must be v2.");
+Require(config.SchemaVersion == 3, "Canonical TOML schema must be v3.");
 Require(config.WireColorOrder == WireColorOrder.RGB, "Physical K15 default must use RGB.");
 Require(config.Profiles.A.Color == "#FF0000" && config.Profiles.B.Color == "#0000FF", "Profile identity colors changed.");
-Require(config.States.Running.Mode == K15LightingMode.SingleColorBreathing, "RUNNING safe default must use explicit single-color mode.");
-Require(config.ProfileSwitch.Mode == K15LightingMode.SingleColorBreathing, "Profile switch safe default must use explicit single-color mode.");
-Require(!config.ActivationSignal.Enabled, "Activation must remain off by default.");
-Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Constant), "Constant must remain notifier-safe.");
-Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.FlowingWater), "Flowing Water must remain notifier-safe when an explicit palette is supplied.");
-Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.SingleColorBreathing), "Single-color breathing must remain notifier-safe.");
-Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.MonoWater), "Native 0x83/Horse race must be research-only.");
-Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.CycleBreathing), "Cycle breathing must be research-only.");
-Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.TetrisBlocks), "Tetris must be research-only.");
-Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Neon), "Neon must be research-only.");
-Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Ambilight), "Ambilight must be research-only.");
+Require(config.States.Running.Mode == K15LightingMode.FlowingWater, "RUNNING default must use Flowing Water.");
+Require(config.States.Running.Palette == PaletteSource.Profile, "RUNNING must use active profile color.");
+Require(config.States.Waiting.Mode == K15LightingMode.SingleColorBreathing && config.States.Waiting.Speed == 7,
+    "WAITING must use fast single-color breathing speed 7.");
+Require(config.States.Done.Mode == K15LightingMode.SingleColorBreathing && config.States.Done.Speed == 5,
+    "DONE must use slower single-color breathing speed 5.");
+Require(config.StopSignal.Mode == K15LightingMode.CycleBreathing &&
+        config.StopSignal.Palette == PaletteSource.ProfilePair,
+    "STOP signal must use two-color Cycle breathing.");
+Require(config.ActivationSignal.Enabled && config.ActivationSignal.Mode == K15LightingMode.FlowingWater &&
+        config.ActivationSignal.Palette == PaletteSource.ProfilePair,
+    "RGB activation must use two-color Flowing Water.");
+Require(config.ProfileSwitch.Palette == PaletteSource.Profile,
+    "Profile switch must remain single active-profile color.");
+Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.CycleBreathing),
+    "Physically accepted Cycle breathing must be notifier-safe.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.MonoWater), "Native 0x83/Horse race must remain research-only.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.TetrisBlocks), "Tetris must remain research-only for now.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Neon), "Neon must remain research-only.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Ambilight), "Ambilight must remain research-only.");
+
+var runningA = config.RenderForProfile(0, config.States.Running);
+var runningB = config.RenderForProfile(1, config.States.Running);
+var stop = config.RenderForProfile(1, config.StopSignal);
+Require(runningA.Colors.SequenceEqual(new[] { "#FF0000" }), "Profile A state renderer must use red only.");
+Require(runningB.Colors.SequenceEqual(new[] { "#0000FF" }), "Profile B state renderer must use blue only.");
+Require(stop.Colors.SequenceEqual(new[] { "#FF0000", "#0000FF" }),
+    "profile_pair renderer must use canonical A then B colors.");
+
+var pairRecord = K15HidProtocol.CreateEffectRecord(stop, WireColorOrder.RGB);
+Require(pairRecord[3] == 0b00000011, "Two-color profile_pair must set palette mask 0x03.");
+Require(pairRecord[4] == 0xFF && pairRecord[5] == 0 && pairRecord[6] == 0,
+    "profile_pair slot 1 must encode profile A red.");
+Require(pairRecord[7] == 0 && pairRecord[8] == 0 && pairRecord[9] == 0xFF,
+    "profile_pair slot 2 must encode profile B blue.");
+
+var toml = ConfigToml.Serialize(config);
+Require(toml.Contains("schema_version = 3", StringComparison.Ordinal), "Canonical TOML must use schema v3.");
+Require(toml.Contains("[stop_signal]", StringComparison.Ordinal), "Canonical TOML must include STOP overlay section.");
+Require(toml.Contains("palette = \"profile_pair\"", StringComparison.Ordinal),
+    "Canonical TOML must expose profile_pair palette source.");
+Require(toml.Contains("effect = \"cycle_breathing\"", StringComparison.Ordinal),
+    "Canonical TOML must expose physically accepted Cycle breathing.");
+Require(toml.Contains("НИКОГДА программно не переключает", StringComparison.Ordinal),
+    "Canonical TOML must document observe-only profile policy.");
+Require(!toml.Contains("[states.running]\ncolor", StringComparison.Ordinal), "State TOML must not own colors.");
+var roundTrip = ConfigToml.Parse(toml);
+Require(roundTrip.StopSignal.Palette == PaletteSource.ProfilePair, "TOML round-trip lost STOP palette source.");
+
+var legacyV2 = ConfigToml.Parse("schema_version = 2\n[states.running]\neffect = \"flowing_water\"\n");
+Require(legacyV2.SchemaVersion == 3, "Legacy schema v2 must migrate in memory without rewriting the file.");
 
 var unsafeRejected = false;
 try
@@ -55,35 +127,10 @@ catch (InvalidDataException ex)
 }
 Require(unsafeRejected, "Research-only mode must fail notifier validation with a Lighting Lab hint.");
 
-var legacyUnsafeRejected = false;
-try
-{
-    ConfigToml.Parse("schema_version = 2\n[states.running]\neffect = \"mono_water\"\n");
-}
-catch (InvalidDataException ex)
-{
-    legacyUnsafeRejected = ex.Message.Contains("not allowed", StringComparison.OrdinalIgnoreCase);
-}
-Require(legacyUnsafeRejected, "Legacy mono_water config must be preserved/rejected, not silently treated as safe.");
-
-var runningA = config.RenderForProfile(0, config.States.Running);
-var runningB = config.RenderForProfile(1, config.States.Running);
-Require(runningA.Colors.SequenceEqual(new[] { "#FF0000" }), "Profile A renderer must use red only.");
-Require(runningB.Colors.SequenceEqual(new[] { "#0000FF" }), "Profile B renderer must use blue only.");
-Require(runningA.PaletteMask is null, "Notifier renderer must not inherit research palette masks.");
-
-var toml = ConfigToml.Serialize(config);
-Require(toml.Contains("effect = \"single_color_breathing\""), "Canonical TOML must use safe single-color defaults.");
-Require(toml.Contains("НИКОГДА программно не переключает", StringComparison.Ordinal), "Canonical TOML must document observe-only profile policy.");
-Require(toml.Contains("Lighting Lab", StringComparison.OrdinalIgnoreCase), "Canonical TOML must route research modes to Lighting Lab.");
-Require(!toml.Contains("[states.running]\ncolor", StringComparison.Ordinal), "State TOML must not own colors.");
-var roundTrip = ConfigToml.Parse(toml);
-Require(roundTrip.ProfileSwitch.Mode == K15LightingMode.SingleColorBreathing, "TOML round-trip lost profile-switch mode.");
-
 Require(K15HidProtocol.HorseRaceMode == 0x83 && K15HidProtocol.MonoWaterMode == 0x83,
     "Native 0x83 must preserve historical alias while using OEM Horse race naming.");
 Require(K15HidProtocol.ModeCode(K15LightingMode.FlowingWater) == 0x82, "Flowing Water mode code changed.");
-Require(K15HidProtocol.ModeRecordAddress(K15LightingMode.FlowingWater) == 50, "Flowing Water record address changed.");
+Require(K15HidProtocol.ModeCode(K15LightingMode.CycleBreathing) == 0x85, "Cycle breathing mode code changed.");
 
 var palette = new LightingEffectConfig
 {
@@ -104,4 +151,4 @@ Require(framed.Length == 41 && framed[0] == 0x06, "HID report framing changed.")
 Require(K15HidProtocol.IsSupportedDevice(0xB6A4, 0x4100), "Physical K15 VID/PID must be accepted.");
 Require(!K15HidProtocol.IsSupportedDevice(0x1234, 0x4100), "Unrelated VID must be rejected.");
 
-Console.WriteLine("State reducer + safe notifier config + Lighting Lab palette-mask protocol tests: PASS");
+Console.WriteLine("Session-aware reducer + profile-pair RGB policy + HID protocol tests: PASS");

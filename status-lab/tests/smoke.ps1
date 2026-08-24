@@ -6,12 +6,15 @@ $installer = Join-Path $projectRoot 'install-codex-hooks.ps1'
 $configExample = Join-Path $projectRoot 'status-lab-config.example.toml'
 $configurator = Join-Path $projectRoot 'configurator\index.html'
 $rgbCanary = Join-Path $projectRoot 'K15RgbCanary.cs'
+$trayIconFactory = Join-Path $projectRoot 'TrayIconFactory.cs'
+$stateReducer = Join-Path $projectRoot 'StateReducer.cs'
+$normalizer = Join-Path $projectRoot 'JournalStateNormalizer.cs'
 $lightingLabProject = Join-Path $projectRoot 'lighting-lab\Vorotex.K15.LightingLab.csproj'
 $lightingLabForm = Join-Path $projectRoot 'lighting-lab\LightingLabForm.cs'
 $lightingLabSession = Join-Path $projectRoot 'lighting-lab\LightingLabSession.cs'
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('vorotex-k15-status-lab-' + [Guid]::NewGuid().ToString('N'))
 
-foreach ($required in @($configExample, $configurator, $rgbCanary, $lightingLabProject, $lightingLabForm, $lightingLabSession)) {
+foreach ($required in @($configExample, $configurator, $rgbCanary, $trayIconFactory, $stateReducer, $normalizer, $lightingLabProject, $lightingLabForm, $lightingLabSession)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Required Status Lab file missing: $required" }
 }
 
@@ -23,8 +26,14 @@ if ($html -notmatch 'fileInput' -or $html -notmatch 'downloadBtn') {
 if ($html -match "\['mono_water'" -or $html -match "\['tetris_blocks'" -or $html -match "\['neon'") {
     throw 'Main notifier configurator must not offer research-only native modes.'
 }
+if ($html -notmatch 'cycle_breathing' -or $html -notmatch 'profile_pair' -or $html -notmatch 'stop_signal') {
+    throw 'Configurator must expose accepted Cycle breathing and profile-pair STOP/activation signals.'
+}
 
 $toml = Get-Content -LiteralPath $configExample -Raw -Encoding UTF8
+if ($toml -notmatch 'schema_version\s*=\s*3' -or $toml -notmatch '\[stop_signal\]' -or $toml -notmatch 'profile_pair') {
+    throw 'TOML example must use schema v3 and include profile-pair STOP signal.'
+}
 if ($toml -notmatch '\[profiles\.A\]' -or $toml -notmatch '\[states\.running\]' -or $toml -notmatch '#') {
     throw 'TOML example must be annotated and include profile/state sections.'
 }
@@ -39,8 +48,25 @@ $rgbSource = Get-Content -LiteralPath $rgbCanary -Raw -Encoding UTF8
 if ($rgbSource -match '\bSelectActiveSlot\s*\(') {
     throw 'K15RgbCanary must never programmatically select hardware profiles.'
 }
+if ($rgbSource -notmatch 'rgb_stop_signal_started' -or $rgbSource -notmatch 'StopSignal') {
+    throw 'K15RgbCanary must implement explicit STOP overlay before DONE state.'
+}
 if ($rgbSource -notmatch 'hardwareProfileSelectionPolicy = "observe_only"') {
     throw 'K15RgbCanary must log observe-only hardware-profile policy.'
+}
+
+$traySource = Get-Content -LiteralPath $trayIconFactory -Raw -Encoding UTF8
+if ($traySource -notmatch 'trackingEnabled' -or $traySource -notmatch 'DestroyIcon') {
+    throw 'Tray icon factory must expose distinct ON/OFF icons without leaking native handles.'
+}
+
+$stateSource = Get-Content -LiteralPath $stateReducer -Raw -Encoding UTF8
+$normalizerSource = Get-Content -LiteralPath $normalizer -Raw -Encoding UTF8
+if ($stateSource -notmatch 'FocusedSessionId' -or $stateSource -notmatch 'IsInternalCwd' -or $stateSource -notmatch 'Rehydrate') {
+    throw 'State reducer must be session-aware and support restart rehydration.'
+}
+if ($normalizerSource -notmatch 'StartupReplayWindow' -or $normalizerSource -notmatch 'state_rehydrated') {
+    throw 'Journal normalizer must replay recent Codex hooks and log rehydrated state.'
 }
 
 $labSource = (Get-Content -LiteralPath $lightingLabForm -Raw -Encoding UTF8) + (Get-Content -LiteralPath $lightingLabSession -Raw -Encoding UTF8)
@@ -78,6 +104,7 @@ try {
     if (-not (Test-Path -LiteralPath $journal)) { throw 'Hook logger did not create journal.' }
     $record = Get-Content -LiteralPath $journal -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($record.source -ne 'codex_hook' -or $record.event -ne 'UserPromptSubmit') { throw 'Hook logger emitted unexpected event.' }
+    if ($record.sessionId -ne 'session-1' -or $record.cwd -ne 'C:\work') { throw 'Hook logger must preserve sessionId/cwd metadata for focus tracking.' }
     if ($null -ne $record.PSObject.Properties['prompt']) { throw 'Hook logger persisted prompt content.' }
 
     $codexHome = Join-Path $userProfile '.codex'
@@ -144,7 +171,7 @@ try {
         if (@($agentLoopInstalled.hooks.$eventName).Count -lt 1) { throw "Missing $eventName in .codex-agentloop hooks.json." }
     }
 
-    Write-Output 'Status Lab + Lighting Lab smoke tests: PASS'
+    Write-Output 'Status Lab session-aware + RGB profile-pair + Lighting Lab smoke tests: PASS'
 }
 finally {
     $env:LOCALAPPDATA = $oldLocalAppData

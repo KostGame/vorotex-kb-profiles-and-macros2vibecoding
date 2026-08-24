@@ -208,15 +208,16 @@ internal sealed class K15HidLightingController : IDisposable
     private static IEnumerable<K15LightingMode> EnumerateModesTouchedByNotifier(StatusLabConfig config)
     {
         yield return config.ProfileSwitch.Mode;
+        yield return config.StopSignal.Mode;
         yield return config.ActivationSignal.Mode;
         yield return config.States.Running.Mode;
         yield return config.States.Waiting.Mode;
         yield return config.States.Done.Mode;
         yield return config.States.Error.Mode;
-        yield return K15LightingMode.Constant; // Effect Lab control.
-        yield return K15LightingMode.MonoWater;
+        yield return K15LightingMode.Constant; // Quick Effect Test control.
         yield return K15LightingMode.SingleColorBreathing;
         yield return K15LightingMode.FlowingWater;
+        yield return K15LightingMode.CycleBreathing;
     }
 
     private static bool TryModeFromCode(byte code, out K15LightingMode mode)

@@ -6,6 +6,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan ReorderDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan StartupReplayWindow = TimeSpan.FromMinutes(30);
+    private const int StartupReplayMaxLines = 5000;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly StateReducer _reducer;
@@ -13,7 +15,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private Task? _loopTask;
     private int _processedLineCount;
 
-    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 15)
+    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 0)
     {
         _reducer = new StateReducer(doneAttentionTimeoutSeconds);
     }
@@ -21,6 +23,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     public event Action<K15NormalizedState, StateTransition?>? StateChanged;
 
     public K15NormalizedState State => _reducer.State;
+    public string? FocusedSessionId => _reducer.FocusedSessionId;
+    public string FocusedCwd => _reducer.FocusedCwd;
 
     public void Start()
     {
@@ -28,7 +32,22 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             return;
 
         EventJournal.EnsureExists();
-        _processedLineCount = SafeReadAllLines().Length;
+        var lines = SafeReadAllLines();
+        RehydrateFromRecentJournal(lines);
+        _processedLineCount = lines.Length;
+
+        EventJournal.Append(new
+        {
+            timestampUtc = DateTimeOffset.UtcNow,
+            source = "state_normalizer",
+            @event = "state_rehydrated",
+            current = ToWireName(_reducer.State),
+            focusedSessionId = _reducer.FocusedSessionId,
+            focusedCwd = _reducer.FocusedCwd,
+            activeTaskSessions = _reducer.ActiveTaskSessionCount,
+            replayWindowMinutes = StartupReplayWindow.TotalMinutes
+        });
+
         StateChanged?.Invoke(_reducer.State, null);
         _loopTask = Task.Run(ProcessLoopAsync);
     }
@@ -38,6 +57,28 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         var transition = _reducer.Acknowledge(DateTimeOffset.UtcNow);
         if (transition is not null)
             PublishTransition(transition);
+    }
+
+    private void RehydrateFromRecentJournal(string[] lines)
+    {
+        var cutoff = DateTimeOffset.UtcNow - StartupReplayWindow;
+        var start = Math.Max(0, lines.Length - StartupReplayMaxLines);
+        var events = new List<StatusInputEvent>();
+
+        for (var index = start; index < lines.Length; index++)
+        {
+            var input = ParseInput(lines[index]);
+            if (input is null ||
+                !input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
+                input.TimestampUtc < cutoff)
+            {
+                continue;
+            }
+
+            events.Add(input);
+        }
+
+        _reducer.Rehydrate(events);
     }
 
     private async Task ProcessLoopAsync()
@@ -129,13 +170,16 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             previous = ToWireName(transition.Previous),
             current = ToWireName(transition.Current),
             reason = transition.Reason,
-            sourceTimestampUtc = transition.TimestampUtc
+            sourceTimestampUtc = transition.TimestampUtc,
+            focusedSessionId = _reducer.FocusedSessionId,
+            focusedCwd = _reducer.FocusedCwd,
+            activeTaskSessions = _reducer.ActiveTaskSessionCount
         });
 
         StateChanged?.Invoke(transition.Current, transition);
     }
 
-    private static StatusInputEvent? ParseInput(string line)
+    internal static StatusInputEvent? ParseInput(string line)
     {
         if (string.IsNullOrWhiteSpace(line))
             return null;
@@ -173,7 +217,10 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 eventName,
                 notificationId,
                 packageFamilyName,
-                errorHint);
+                errorHint,
+                GetString(root, "sessionId"),
+                GetString(root, "turnId"),
+                GetString(root, "cwd"));
         }
         catch (JsonException)
         {
