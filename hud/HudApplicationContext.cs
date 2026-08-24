@@ -29,7 +29,7 @@ internal sealed class HudApplicationContext : ApplicationContext
         };
 
         var hint = $"{_hotkeys[HotkeyToggle].Display} показать · {_hotkeys[HotkeyNextProfile].Display} профиль · {_hotkeys[HotkeyBothProfiles].Display} оба";
-        _overlay = new OverlayForm(_config.AutoHideMs, hint);
+        _overlay = new OverlayForm(_config.AutoHideMs, hint, _config.Overlay);
         _hotkeyWindow = new HotkeyWindow();
         _hotkeyWindow.HotkeyPressed += HandleHotkey;
 
