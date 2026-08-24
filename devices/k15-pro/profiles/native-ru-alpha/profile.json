@@ -1,15 +1,17 @@
 {
   "schemaVersion": 1,
   "profileId": "native-ru-alpha",
-  "release": "v1-rc",
+  "status": "historical-evidence-only",
+  "release": "historical-ru-alpha",
+  "canonicalV1Layout": "../../schema/v1-layout-baseline.json",
   "device": {"vendor": "VOROTEX", "model": "K15 Pro"},
   "requiredWindowsLayout": "RU",
   "importValidationRequired": true,
   "memMacIdScope": "13/14 are proven for minus/plus in one observed native profile state; universal invariance is not claimed",
   "inputProfileSelection": {
     "mode": "forced-self-select",
-    "supported": ["RU", "EN"],
-    "default": "RU",
+    "provenSelectors": ["RU", "EN"],
+    "defaultSemanticLayout": "RU",
     "selectors": {"RU": "Ctrl+Shift+2", "EN": "Ctrl+Shift+1"},
     "modifierOrder": "Ctrl down, Shift down, layout key down/up, Shift up, Ctrl up"
   },
@@ -35,5 +37,5 @@
     {"physicalControl": "Space", "semanticAction": "ACCEPT_OR_APPROVE", "macro": "VIBE_15_ACCEPT_RU", "storageField": "btn_KBKey_Space", "memMacId": 12, "bindingProof": "native-fixture-observed-state"}
   ],
   "joystickClick": {"storageField": "btn_KBKey_Enter", "mode": "NATIVE_ENTER", "keyValue": 40},
-  "safety": {"autoSubmit": false, "joystick": "native-click-enter-only", "encoder": "profile-a-vertical-scroll-only"}
+  "note": "This file preserves the historical RU Alpha evidence state. It is not the current V1 Profile B semantic source of truth; use schema/v1-layout-baseline.json for current A/B layout work."
 }
