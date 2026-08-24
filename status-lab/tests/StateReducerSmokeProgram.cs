@@ -61,11 +61,39 @@ Require(reducer.State == K15NormalizedState.Running, "Unrelated notifications mu
 reducer.Apply(Hook(t.AddSeconds(22), "SessionEnd"));
 Require(reducer.State == K15NormalizedState.Normal, "SessionEnd must return to NORMAL.");
 
+var earlyToastReducer = new StateReducer();
+earlyToastReducer.Apply(Hook(t.AddSeconds(30), "UserPromptSubmit"));
+earlyToastReducer.Apply(Notification(t.AddSeconds(31.000), "windows_notification_added", 200));
+earlyToastReducer.Apply(Hook(t.AddSeconds(31.100), "PermissionRequest"));
+Require(earlyToastReducer.State == K15NormalizedState.Waiting,
+    "PermissionRequest must enter WAITING when a toast arrived just before the hook.");
+earlyToastReducer.Apply(Notification(t.AddSeconds(33), "windows_notification_removed", 200));
+Require(earlyToastReducer.State == K15NormalizedState.Running,
+    "A pre-hook correlated permission toast must resolve WAITING when removed.");
+
+var timeoutReducer = new StateReducer();
+timeoutReducer.Apply(Hook(t.AddSeconds(40), "UserPromptSubmit"));
+timeoutReducer.Apply(Hook(t.AddSeconds(41), "Stop"));
+timeoutReducer.Apply(Notification(t.AddSeconds(42), "windows_notification_added", 201));
+Require(timeoutReducer.State == K15NormalizedState.DonePendingAttention,
+    "Post-Stop notification must keep DONE pending.");
+Require(timeoutReducer.Tick(t.AddSeconds(55)) is null,
+    "DONE must remain visible before the 15-second timeout.");
+var timeoutTransition = timeoutReducer.Tick(t.AddSeconds(56.1));
+Require(timeoutTransition is not null &&
+        timeoutReducer.State == K15NormalizedState.Normal &&
+        timeoutTransition.Reason == "done_attention_timeout",
+    "DONE must auto-restore to NORMAL after the attention timeout.");
+
 
 var report = K15HidProtocol.FrameReport(0x09, 0x12, 0, 0x0064, new byte[] { 1, 2, 3 });
 Require(report.Length == 41, "HID report must be 41 bytes.");
 Require(report[0] == 0x06 && report[3] == 0x09 && report[4] == 0x12, "HID report header mismatch.");
 Require(report[6] == 0x64 && report[7] == 0x00 && report[8] == 3, "HID report address/length mismatch.");
+
+var runningRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Running);
+Require(runningRecord[4] == 0x20 && runningRecord[5] == 0xA0 && runningRecord[6] == 0xF0,
+    "Running color must encode violet in G,R,B wire order.");
 
 var waitingRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Waiting);
 Require(waitingRecord.Length == 25, "Lighting detail must be 25 bytes.");
