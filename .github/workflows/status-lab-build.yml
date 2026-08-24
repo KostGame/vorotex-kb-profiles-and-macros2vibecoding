@@ -31,6 +31,9 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/smoke.ps1
 
+      - name: State reducer smoke tests
+        run: dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
+
       - name: Restore
         run: dotnet restore status-lab/Vorotex.K15.StatusLab.csproj
 
