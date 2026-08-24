@@ -164,6 +164,10 @@ Smoke test проверяет:
 - идемпотентность installer;
 - создание one-time backup.
 
+## Canary evidence
+
+- [`docs/owner-canary-2026-08-24.md`](docs/owner-canary-2026-08-24.md) — sanitized findings from the first Windows owner canary, including the `.codex` vs `.codex-agentloop` hook-target correction and notification baseline rules.
+
 ## Следующий gate
 
 После физического канареечного прогона на Windows:
