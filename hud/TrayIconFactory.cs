@@ -12,21 +12,32 @@ internal static class TrayIconFactory
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         graphics.Clear(Color.Transparent);
 
-        using var background = new SolidBrush(Color.FromArgb(255, 13, 24, 27));
-        using var rim = new Pen(Color.FromArgb(255, 44, 210, 202), 2f);
+        using var background = new SolidBrush(Color.FromArgb(255, 13, 18, 23));
         graphics.FillEllipse(background, 1, 1, 30, 30);
-        graphics.DrawEllipse(rim, 1.5f, 1.5f, 29, 29);
 
-        using var vPen = new Pen(Color.FromArgb(255, 75, 235, 226), 4.2f)
+        using var clipPath = new GraphicsPath();
+        clipPath.AddEllipse(2, 2, 28, 28);
+
+        var state = graphics.Save();
+        graphics.SetClip(clipPath);
+        using (var red = new SolidBrush(Color.FromArgb(95, 214, 76, 78)))
+            graphics.FillRectangle(red, 2, 2, 14, 28);
+        using (var blue = new SolidBrush(Color.FromArgb(95, 74, 132, 214)))
+            graphics.FillRectangle(blue, 16, 2, 14, 28);
+        graphics.Restore(state);
+
+        using var redRim = new Pen(Color.FromArgb(255, 214, 76, 78), 2f);
+        using var blueRim = new Pen(Color.FromArgb(255, 74, 132, 214), 2f);
+        graphics.DrawArc(redRim, 1.5f, 1.5f, 29, 29, 90, 180);
+        graphics.DrawArc(blueRim, 1.5f, 1.5f, 29, 29, 270, 180);
+
+        using var vPen = new Pen(Color.FromArgb(255, 242, 246, 250), 4.2f)
         {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
             LineJoin = LineJoin.Round
         };
         graphics.DrawLines(vPen, [new PointF(8, 9), new PointF(16, 23), new PointF(24, 9)]);
-
-        using var dot = new SolidBrush(Color.FromArgb(255, 246, 180, 37));
-        graphics.FillEllipse(dot, 22, 22, 5, 5);
 
         var hIcon = bitmap.GetHicon();
         try

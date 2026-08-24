@@ -29,7 +29,7 @@ internal sealed class HudConfig
             }
             catch
             {
-                // Fall back to the accepted built-in V1 map.
+                // Fall back to the accepted built-in V1.1 map.
             }
         }
 
@@ -43,25 +43,29 @@ internal sealed class HudConfig
         Hotkeys = HotkeyOptions.CreateDefault(),
         Profiles =
         [
-            ProfileDefinition.Create("A", "TOOLS / AUTH", new Dictionary<string, HudKeyDefinition>
+            ProfileDefinition.Create("A", "TOOLS / AUTH", "red", new Dictionary<string, HudKeyDefinition>
             {
-                ["1"] = new("COPY"), ["2"] = new("PASTE + NEW LINE"), ["3"] = new("CUT"),
+                ["1"] = new("COPY"), ["2"] = new("PASTE + НОВАЯ СТРОКА", label: "PASTE + NEW LINE"), ["3"] = new("CUT"),
                 ["4"] = new("UNDO"), ["5"] = new("REDO"), ["6"] = new("SELECT ALL"),
                 ["7"] = new("ОТЧЕТ"), ["8"] = new("ВОТ ОТЧЕТ"), ["9"] = new("```"),
                 ["0"] = new("ОТЧЕТ ИЗ БУФЕРА"), ["."] = new("ДАЙ СТАТУС"),
-                ["Enter"] = new("НОВАЯ СТРОКА", "flow"), ["-"] = new("СТОП", "flow"),
-                ["+"] = new("ОТЧЕТ ДЛЯ СЛЕД. ЧАТА"), ["Space"] = new("ПОДТВЕРЖДАЮ", "primary"),
-                ["Joystick"] = new("ОТПРАВИТЬ", "send")
+                ["Enter"] = new("НОВАЯ СТРОКА (SHIFT+ENTER)", "flow", "НОВАЯ СТРОКА"), ["-"] = new("СТОП", "flow"),
+                ["+"] = new("ПОДГОТОВЬ ОТЧЕТ ДЛЯ СЛЕДУЮЩЕГО ЧАТА", label: "ОТЧЕТ ДЛЯ СЛЕД. ЧАТА"),
+                ["Space"] = new("ПОДТВЕРЖДАЮ", "primary"),
+                ["Joystick"] = new("ОТПРАВИТЬ (ENTER)", "send", "ОТПРАВИТЬ"),
+                ["Encoder"] = new("ВЕРТИКАЛЬНЫЙ СКРОЛЛ", label: "СКРОЛЛ")
             }),
-            ProfileDefinition.Create("B", "MAIN / VIBECODING", new Dictionary<string, HudKeyDefinition>
+            ProfileDefinition.Create("B", "MAIN / VIBECODING", "blue", new Dictionary<string, HudKeyDefinition>
             {
-                ["1"] = new("ПРОВЕРЬ"), ["2"] = new("СЛЕДУЮЩИЙ ШАГ"), ["3"] = new("СЛЕД. ПРОМПТ"),
+                ["1"] = new("ПРОВЕРЬ"), ["2"] = new("СЛЕДУЮЩИЙ ШАГ"),
+                ["3"] = new("ПИШИ СЛЕДУЮЩИЙ ПРОМПТ ДЛЯ АГЕНТА", label: "ПРОМПТ АГЕНТУ"),
                 ["4"] = new("ИСПРАВЛЯЙ"), ["5"] = new("ПУБЛИКУЙ"), ["6"] = new("МЕРЖИ"),
-                ["7"] = new("СОЗДАВАЙ"), ["8"] = new("ПРОДОЛЖАЙ"), ["9"] = new("РЕВЬЮ"),
+                ["7"] = new("СОЗДАВАЙ"), ["8"] = new("ПРОДОЛЖАЙ"), ["9"] = new("ПРОВЕДИ РЕВЬЮ"),
                 ["0"] = new("ГОТОВО"), ["."] = new("ДАЙ СТАТУС"),
-                ["Enter"] = new("НОВАЯ СТРОКА", "flow"), ["-"] = new("СТОП", "flow"),
-                ["+"] = new("ОТЧЕТ ДЛЯ СЛЕД. ЧАТА"), ["Space"] = new("ДАВАЙ ДАЛЬШЕ БЕЗ PUSH/MERGE", "primary"),
-                ["Joystick"] = new("ОТПРАВИТЬ", "send")
+                ["Enter"] = new("НОВАЯ СТРОКА (SHIFT+ENTER)", "flow", "НОВАЯ СТРОКА"), ["-"] = new("СТОП", "flow"),
+                ["+"] = new("ПРИНИМАЕТСЯ", "primary"),
+                ["Space"] = new("ДАВАЙ ДАЛЬШЕ, БЕЗ PUSH/MERGE", "primary", "ДАЛЬШЕ БЕЗ PUSH/MERGE"),
+                ["Joystick"] = new("ОТПРАВИТЬ (ENTER)", "send", "ОТПРАВИТЬ")
             })
         ]
     };
@@ -80,16 +84,25 @@ internal sealed class ProfileDefinition
 {
     public string Id { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
+    public string Color { get; set; } = "teal";
     public Dictionary<string, HudKeyDefinition> Keys { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public HudKeyDefinition GetKey(string key) => Keys.TryGetValue(key, out var definition)
         ? definition
         : new HudKeyDefinition("—");
 
-    public static ProfileDefinition Create(string id, string title, Dictionary<string, HudKeyDefinition> keys) => new()
+    public bool TryGetKey(string key, out HudKeyDefinition definition) =>
+        Keys.TryGetValue(key, out definition!);
+
+    public static ProfileDefinition Create(
+        string id,
+        string title,
+        string color,
+        Dictionary<string, HudKeyDefinition> keys) => new()
     {
         Id = id,
         Title = title,
+        Color = color,
         Keys = new Dictionary<string, HudKeyDefinition>(keys, StringComparer.OrdinalIgnoreCase)
     };
 }
@@ -98,13 +111,17 @@ internal sealed class HudKeyDefinition
 {
     public string Action { get; set; } = string.Empty;
     public string? Accent { get; set; }
+    public string? Label { get; set; }
+
+    public string DisplayText => string.IsNullOrWhiteSpace(Label) ? Action : Label;
 
     public HudKeyDefinition() { }
 
-    public HudKeyDefinition(string action, string? accent = null)
+    public HudKeyDefinition(string action, string? accent = null, string? label = null)
     {
         Action = action;
         Accent = accent;
+        Label = label;
     }
 }
 
