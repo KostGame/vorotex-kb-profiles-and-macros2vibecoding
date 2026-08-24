@@ -38,10 +38,10 @@ sequence opt out of this suffix.
 Profile A key `0` is intentionally a ChatGPT-composer-specific composite: it
 types `Вот отчет`, performs Shift+Enter, opens a three-backtick English code
 block, performs Shift+Enter, pastes with Ctrl+V, and returns the input layout
-to Russian. It emits neither a closing fence nor a newline after the paste, so
-the caret remains in the composer code-block node until the joystick's native
-Enter is deliberately used to submit. This end-of-message behavior is not a
-general Markdown macro pattern.
+to Russian. Every Profile A clipboard paste, including key `0`, immediately
+uses Shift+Enter after Ctrl+V. It emits no closing fence and never uses native
+Enter, so it cannot submit the composer. This is a deliberate clipboard UX
+invariant, not a general Markdown macro pattern.
 
 The generator emits independently importable `.KB.Config` packages and
 optional standalone `.Macro.Config` packages. A combined Export-All package is

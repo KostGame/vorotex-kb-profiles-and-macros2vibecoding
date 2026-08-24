@@ -148,12 +148,20 @@ class SerializerTests(unittest.TestCase):
         self.assertNotEqual(gen.TEXT_COMMAND_SUFFIX, ". ")
 
     def test_shortcut_macros(self):
-        expected = {"COPY": [224, 6, 6, 224], "PASTE": [224, 25, 25, 224],
+        expected = {"COPY": [224, 6, 6, 224],
                     "CUT": [224, 27, 27, 224], "UNDO": [224, 29, 29, 224],
                     "REDO": [224, 225, 29, 29, 225, 224], "SELECT_ALL": [224, 4, 4, 224]}
         for action, values in expected.items():
             data = self.macro("A", action)["macData"]
             self.assertEqual(data["macVal"][:len(values)], values)
+
+    def test_profile_a_paste_uses_ctrl_v_then_safe_new_line(self):
+        data = self.macro("A", "PASTE")["macData"]
+        values = data["macVal"][:data["num"]]
+        states = data["macSta"][:data["num"]]
+        expected_values, expected_states = gen.concat_events(gen.key_chord(25, (224,)), gen.shift_enter_events())
+        self.assertEqual(values, expected_values)
+        self.assertEqual(states, expected_states)
 
     def test_code_fence_is_exactly_three_ascii_backticks_and_returns_ru(self):
         data = self.macro("A", "CODE_FENCE")["macData"]
@@ -174,6 +182,7 @@ class SerializerTests(unittest.TestCase):
             gen.hid_events("```", "EN"),
             gen.shift_enter_events(),
             gen.key_chord(25, (224,)),
+            gen.shift_enter_events(),
             gen.selector_events("RU"),
         )
         self.assertEqual(values, expected_values)
@@ -182,10 +191,10 @@ class SerializerTests(unittest.TestCase):
         ctrl_v = [224, 25, 25, 224]
         ctrl_v_index = next(index for index in range(len(values) - 3) if values[index:index + 4] == ctrl_v)
         post_paste = values[ctrl_v_index + len(ctrl_v):]
-        self.assertEqual(post_paste, gen.selector_events("RU")[0])
+        expected_tail, _ = gen.concat_events(gen.shift_enter_events(), gen.selector_events("RU"))
+        self.assertEqual(post_paste, expected_tail, "only Shift+Enter and the final RU selector may follow Ctrl+V")
         self.assertNotIn(53, post_paste, "closing fence must not follow Ctrl+V")
-        self.assertNotIn(40, post_paste, "newline/native Enter must not follow Ctrl+V")
-        self.assertEqual(values.count(40), 4, "only the two structural Shift+Enter sequences are allowed")
+        self.assertEqual(values.count(40), 6, "the final post-paste Shift+Enter is required")
         self.assertEqual(values.count(53), 6, "only the opening three-backtick fence is allowed")
         self.assertEqual(values[-6:], [224, 225, 31, 31, 225, 224])
         report_start = len(gen.selector_events("RU")[0])
