@@ -212,4 +212,8 @@ dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release
 dotnet build status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj -c Release
 ```
 
+Latest fully green implementation head before this documentation-only metadata update: `d3bb249e39226ddfeb0e5d55e30ff40e5ead21de`.
+
+GitHub Actions run `32790878529`: all smoke, reducer/HID regression, both builds/publishes, portable assembly and artifact upload PASS. Artifact `9543099849`, SHA-256 `6326c6c7aae859eec2b8821b46b51a5861f6f54eb656abf5e37c21257d0c153e`.
+
 PR #22 остаётся unmerged до финального owner canary на реальной K15.
