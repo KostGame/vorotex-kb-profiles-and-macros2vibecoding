@@ -167,6 +167,7 @@ Smoke test проверяет:
 ## Canary evidence
 
 - [`docs/owner-canary-2026-08-24.md`](docs/owner-canary-2026-08-24.md) — sanitized findings from the first Windows owner canary, including the `.codex` vs `.codex-agentloop` hook-target correction and notification baseline rules.
+- [`docs/owner-canary-2-2026-08-24.md`](docs/owner-canary-2-2026-08-24.md) — second canary: `UserPromptSubmit`, `PermissionRequest`, `Stop` and Windows notification correlation physically observed; dry-run state normalizer is the next gate.
 
 ## Следующий gate
 
@@ -179,4 +180,4 @@ CODEX_NOTIFICATION_IDENTITY = <AppUserModelId / PFN>
 CHATGPT_NOTIFICATION_IDENTITY = <AppUserModelId / PFN>
 ```
 
-Только после этого Status Lab превращается в K15 notifier и начинает выдавать нормализованные состояния `RUNNING / WAITING / DONE / ERROR` в уже доказанный WebHID lighting path.
+Second owner canary passed the source-layer gate for `UserPromptSubmit`, `PermissionRequest`, `Stop` and Windows notification correlation. `SessionEnd` remains unexercised. The next stage is a dry-run normalizer (`NORMAL / RUNNING / WAITING / DONE_PENDING_ATTENTION / ERROR`) before enabling K15 RGB writes.
