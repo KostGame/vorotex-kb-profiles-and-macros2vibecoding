@@ -12,7 +12,7 @@
       "title": "TOOLS / AUTH",
       "keys": {
         "1": { "action": "COPY" },
-        "2": { "action": "PASTE +\nNEW LINE" },
+        "2": { "action": "PASTE + NEW LINE" },
         "3": { "action": "CUT" },
         "4": { "action": "UNDO" },
         "5": { "action": "REDO" },
@@ -20,11 +20,11 @@
         "7": { "action": "ОТЧЕТ" },
         "8": { "action": "ВОТ ОТЧЕТ" },
         "9": { "action": "```" },
-        "0": { "action": "ОТЧЕТ ИЗ\nБУФЕРА" },
+        "0": { "action": "ОТЧЕТ ИЗ БУФЕРА" },
         ".": { "action": "ДАЙ СТАТУС" },
         "Enter": { "action": "НОВАЯ СТРОКА", "accent": "flow" },
         "-": { "action": "СТОП", "accent": "flow" },
-        "+": { "action": "ОТЧЕТ ДЛЯ\nСЛЕД. ЧАТА" },
+        "+": { "action": "ОТЧЕТ ДЛЯ СЛЕД. ЧАТА" },
         "Space": { "action": "ПОДТВЕРЖДАЮ", "accent": "primary" },
         "Joystick": { "action": "ОТПРАВИТЬ", "accent": "send" }
       }
@@ -34,7 +34,7 @@
       "title": "MAIN / VIBECODING",
       "keys": {
         "1": { "action": "ПРОВЕРЬ" },
-        "2": { "action": "СЛЕДУЮЩИЙ\nШАГ" },
+        "2": { "action": "СЛЕДУЮЩИЙ ШАГ" },
         "3": { "action": "СЛЕД. ПРОМПТ" },
         "4": { "action": "ИСПРАВЛЯЙ" },
         "5": { "action": "ПУБЛИКУЙ" },
@@ -46,8 +46,8 @@
         ".": { "action": "ДАЙ СТАТУС" },
         "Enter": { "action": "НОВАЯ СТРОКА", "accent": "flow" },
         "-": { "action": "СТОП", "accent": "flow" },
-        "+": { "action": "ОТЧЕТ ДЛЯ\nСЛЕД. ЧАТА" },
-        "Space": { "action": "ДАВАЙ ДАЛЬШЕ\nБЕЗ PUSH/MERGE", "accent": "primary" },
+        "+": { "action": "ОТЧЕТ ДЛЯ СЛЕД. ЧАТА" },
+        "Space": { "action": "ДАВАЙ ДАЛЬШЕ БЕЗ PUSH/MERGE", "accent": "primary" },
         "Joystick": { "action": "ОТПРАВИТЬ", "accent": "send" }
       }
     }
