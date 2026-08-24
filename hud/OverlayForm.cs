@@ -30,7 +30,7 @@ internal sealed class OverlayForm : Form
         BackColor = BackgroundColor;
         Opacity = 0.97;
         DoubleBuffered = true;
-        MinimumSize = new Size(640, 430);
+        MinimumSize = new Size(640, 450);
 
         _autoHideTimer = new System.Windows.Forms.Timer { Interval = Math.Max(0, autoHideMs) };
         _autoHideTimer.Tick += (_, _) => HideOverlay();
@@ -54,7 +54,7 @@ internal sealed class OverlayForm : Form
         _profiles = profiles;
         var scale = Math.Max(1f, DeviceDpi / 96f);
         var logicalWidth = profiles.Count > 1 ? 1180 : 680;
-        var logicalHeight = 455;
+        var logicalHeight = 485;
         ClientSize = new Size((int)(logicalWidth * scale), (int)(logicalHeight * scale));
         ApplyRoundedRegion((int)(18 * scale));
         PositionNearCursor(cursor, (int)(16 * scale));
@@ -166,7 +166,7 @@ internal sealed class OverlayForm : Form
         var innerWidth = panel.Width - 24 * scale;
         var colGap = 6 * scale;
         var rowGap = 8 * scale;
-        var keyHeight = 82 * scale;
+        var keyHeight = 92 * scale;
         var colWidth = (innerWidth - (5 * colGap)) / 6f;
 
         var row1 = new[] { "1", "2", "3", "4", "5", "6" };
@@ -272,7 +272,7 @@ internal sealed class OverlayForm : Form
 
         var displayText = definition.DisplayText;
         using var format = CreateActionStringFormat();
-        using var actionFont = CreateActionFont(g, displayText, actionRect.Width, scale);
+        using var actionFont = CreateActionFont(g, displayText, actionRect, format, scale);
 
         var state = g.Save();
         g.SetClip(Rectangle.Round(actionRect));
@@ -284,21 +284,28 @@ internal sealed class OverlayForm : Form
     {
         Alignment = StringAlignment.Center,
         LineAlignment = StringAlignment.Center,
-        FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.LineLimit,
-        Trimming = StringTrimming.EllipsisCharacter
+        FormatFlags = StringFormatFlags.LineLimit,
+        Trimming = StringTrimming.EllipsisWord
     };
 
-    private static Font CreateActionFont(Graphics g, string action, float availableWidth, float scale)
+    private static Font CreateActionFont(
+        Graphics g,
+        string action,
+        RectangleF availableRect,
+        StringFormat format,
+        float scale)
     {
         var size = ActionFontSize(action);
-        const float minimumSize = 7.2f;
-        var targetWidth = Math.Max(1f, availableWidth - 2f * scale);
+        const float minimumSize = 7.4f;
+        var target = new SizeF(
+            Math.Max(1f, availableRect.Width - 2f * scale),
+            Math.Max(1f, availableRect.Height - 2f * scale));
 
         while (size > minimumSize)
         {
             using var probe = new Font("Segoe UI Semibold", size * scale, FontStyle.Bold, GraphicsUnit.Pixel);
-            var measuredWidth = g.MeasureString(action, probe, int.MaxValue, StringFormat.GenericTypographic).Width;
-            if (measuredWidth <= targetWidth)
+            var measured = g.MeasureString(action, probe, target, format);
+            if (measured.Width <= target.Width && measured.Height <= target.Height)
                 return new Font("Segoe UI Semibold", size * scale, FontStyle.Bold, GraphicsUnit.Pixel);
             size -= 0.35f;
         }
@@ -308,8 +315,13 @@ internal sealed class OverlayForm : Form
 
     private static float ActionFontSize(string action)
     {
-        var length = action.Length;
-        return length switch
+        var longestLine = action
+            .Split('\n')
+            .Select(line => line.Length)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        return longestLine switch
         {
             > 24 => 11.4f,
             > 17 => 12.2f,
