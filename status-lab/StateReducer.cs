@@ -160,17 +160,18 @@ internal sealed class StateReducer
 
     private void BindRecentNotificationToWaiting(DateTimeOffset permissionUtc)
     {
-        var candidate = _recentOpenAiAdds
+        var candidateId = _recentOpenAiAdds
             .Where(pair =>
                 !_waitingNotificationIds.Contains(pair.Key) &&
                 !_doneNotificationIds.Contains(pair.Key) &&
                 pair.Value <= permissionUtc &&
                 permissionUtc - pair.Value <= PreHookNotificationWindow)
             .OrderByDescending(pair => pair.Value)
+            .Select(pair => (uint?)pair.Key)
             .FirstOrDefault();
 
-        if (candidate.Key != 0 || _recentOpenAiAdds.ContainsKey(0))
-            _waitingNotificationIds.Add(candidate.Key);
+        if (candidateId is uint id)
+            _waitingNotificationIds.Add(id);
     }
 
     private void PruneRecentNotifications(DateTimeOffset nowUtc)
