@@ -168,6 +168,8 @@ Smoke test проверяет:
 
 - [`docs/owner-canary-2026-08-24.md`](docs/owner-canary-2026-08-24.md) — sanitized findings from the first Windows owner canary, including the `.codex` vs `.codex-agentloop` hook-target correction and notification baseline rules.
 - [`docs/owner-canary-2-2026-08-24.md`](docs/owner-canary-2-2026-08-24.md) — second canary: `UserPromptSubmit`, `PermissionRequest`, `Stop` and Windows notification correlation physically observed; dry-run state normalizer is the next gate.
+- [`docs/owner-canary-3-2026-08-24.md`](docs/owner-canary-3-2026-08-24.md) — dry-run state normalizer physically accepted.
+- [`docs/owner-canary-4-2026-08-24.md`](docs/owner-canary-4-2026-08-24.md) — first physical RGB automation canary; manual restore passed, automatic DONE restore and early-toast correlation were corrected.
 
 ## Dry-run normalized state
 
