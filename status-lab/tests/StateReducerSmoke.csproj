@@ -8,5 +8,6 @@
 
   <ItemGroup>
     <Compile Include="..\StateReducer.cs" Link="StateReducer.cs" />
+    <Compile Include="..\K15HidProtocol.cs" Link="K15HidProtocol.cs" />
   </ItemGroup>
 </Project>
