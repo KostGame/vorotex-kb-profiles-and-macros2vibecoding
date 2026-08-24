@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 
 namespace Vorotex.K15.StatusLab;
 
@@ -98,13 +100,16 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         _codexHookItem.Enabled = false;
         try
         {
+            var utf8 = new UTF8Encoding(false);
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                StandardOutputEncoding = utf8,
+                StandardErrorEncoding = utf8
             };
             psi.ArgumentList.Add("-NoProfile");
             psi.ArgumentList.Add("-NonInteractive");
@@ -123,27 +128,61 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             var stdout = (await stdoutTask).Trim();
             var stderr = (await stderrTask).Trim();
 
-            if (process.ExitCode == 0)
+            if (process.ExitCode != 0)
             {
+                ShowBalloon(string.IsNullOrWhiteSpace(stderr)
+                    ? $"Установщик hooks завершился с кодом {process.ExitCode}."
+                    : $"Не удалось установить hooks. Код {process.ExitCode}. Подробности записаны в журнал.");
+
                 EventJournal.Append(new
                 {
                     timestampUtc = DateTimeOffset.UtcNow,
                     source = "status_lab",
-                    @event = "codex_hooks_installed"
+                    @event = "codex_hooks_install_failed",
+                    exitCode = process.ExitCode,
+                    stderr
                 });
-                ShowBalloon(string.IsNullOrWhiteSpace(stdout)
-                    ? "Codex hooks установлены. Перезапусти Codex."
-                    : stdout);
+                return;
             }
-            else
+
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            var count = root.TryGetProperty("count", out var countNode) ? countNode.GetInt32() : 0;
+            var paths = new List<string>();
+            if (root.TryGetProperty("installed", out var installedNode) && installedNode.ValueKind == JsonValueKind.Array)
             {
-                ShowBalloon(string.IsNullOrWhiteSpace(stderr)
-                    ? $"Установщик hooks завершился с кодом {process.ExitCode}."
-                    : stderr);
+                foreach (var item in installedNode.EnumerateArray())
+                {
+                    if (item.TryGetProperty("hooksPath", out var pathNode))
+                    {
+                        var value = pathNode.GetString();
+                        if (!string.IsNullOrWhiteSpace(value))
+                            paths.Add(value);
+                    }
+                }
             }
+
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "status_lab",
+                @event = "codex_hooks_installed",
+                count,
+                hooksPaths = paths
+            });
+
+            ShowBalloon($"Codex hooks установлены в {count} окружение(я). Полностью перезапусти Codex перед тестом.");
         }
         catch (Exception ex)
         {
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "status_lab",
+                @event = "codex_hooks_install_exception",
+                exception = ex.GetType().FullName,
+                message = ex.Message
+            });
             ShowBalloon($"Не удалось установить Codex hooks: {ex.Message}");
         }
         finally
