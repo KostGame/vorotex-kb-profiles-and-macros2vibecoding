@@ -54,7 +54,9 @@ EN_HID = {chr(ord("a") + i): code for i, code in enumerate(
     [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
      21, 22, 23, 24, 25, 26, 27, 28, 29]
 )}
-EN_HID.update({" ": 44, ".": 55, ",": 54, "-": 45, "_": 45, "/": 56, "`": 53})
+# The 1/5 usages are part of the already observed K15TEST probe. Keep the
+# mapping narrow until additional digit exports establish more semantics.
+EN_HID.update({"1": 30, "5": 34, " ": 44, ".": 55, ",": 54, "-": 45, "_": 45, "/": 56, "`": 53})
 
 RU_OUTPUTS = {
     "CHECK": "Проверь", "NEXT": "Следующий шаг",
@@ -337,13 +339,19 @@ def data_array(values: Iterable[int]) -> list[int]:
     return result
 
 
-def macro_object(profile: str, name: str, action: str, guid: str, layout: str, event_delay_ms: int) -> dict[str, Any]:
-    values, states, delays = macro_event_stream(profile, action, layout)
+def _macro_object_from_stream(name: str, guid: str, values: list[int], states: list[int], delays: list[int]) -> dict[str, Any]:
+    if not (len(values) == len(states) == len(delays)):
+        raise ValueError("macro event streams must have equal lengths")
     return {"BindKeys": 0, "ForbidView": False, "MacroGuid": guid, "MacroName": encoded_name(name),
             "macData": {"YStep": 0, "YStepEn": 0, "extVal": [[0, 0] for _ in range(EVENT_CAPACITY)],
                         "macDly": data_array(delays), "macRpt": 1,
                         "macSta": data_array(states), "macVal": data_array(values), "num": len(values),
                         "numCpi": 0, "numLed": 0, "numMedia": 2, "numWhl": 0, "numXY": 245, "rptType": 0}}
+
+
+def macro_object(profile: str, name: str, action: str, guid: str, layout: str, event_delay_ms: int) -> dict[str, Any]:
+    values, states, delays = macro_event_stream(profile, action, layout)
+    return _macro_object_from_stream(name, guid, values, states, delays)
 
 
 def macro_group(profile: str, layout: str, event_delay_ms: int) -> dict[str, Any]:
@@ -366,6 +374,25 @@ def serialize_macro(profile: str = "B", layout: str = "RU", event_delay_ms: int 
     group = macro_group(profile, layout, event_delay_ms)
     return {"ForbidView": False, "GrpGuid": group["GrpGuid"], "GrpName": group["GrpName"],
             "MacroInfo": group["MacroInfo"]}
+
+
+def serialize_standalone_text_macro(group_name: str, group_guid: str,
+                                    macro_name: str, macro_guid: str,
+                                    text: str, layout: str = "EN",
+                                    event_delay_ms: int = TEXT_KEY_EVENT_DELAY_MS) -> dict[str, Any]:
+    """Serialize one disposable standalone macro from a proven text stream.
+
+    This intentionally emits the direct text HID sequence: standalone canary
+    callers must not gain a selector or command suffix unless their semantic
+    input explicitly includes one.
+    """
+    if layout not in {"RU", "EN"}:
+        raise ValueError("layout must be RU or EN")
+    validate_delay(event_delay_ms)
+    values, states, delays = hid_event_stream(text, layout, event_delay_ms)
+    macro = _macro_object_from_stream(macro_name, macro_guid, values, states, delays)
+    return {"ForbidView": False, "GrpGuid": group_guid, "GrpName": encoded_name(group_name),
+            "MacroInfo": [macro]}
 
 
 def empty_macro_binding(prefix: str = "MemMacId") -> dict[str, Any]:
