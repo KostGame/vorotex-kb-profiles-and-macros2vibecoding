@@ -9,5 +9,7 @@
   <ItemGroup>
     <Compile Include="..\StateReducer.cs" Link="StateReducer.cs" />
     <Compile Include="..\K15HidProtocol.cs" Link="K15HidProtocol.cs" />
+    <Compile Include="..\StatusLabConfig.cs" Link="StatusLabConfig.cs" />
+    <Compile Include="..\EventJournal.cs" Link="EventJournal.cs" />
   </ItemGroup>
 </Project>
