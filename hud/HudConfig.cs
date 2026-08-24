@@ -45,22 +45,22 @@ internal sealed class HudConfig
         [
             ProfileDefinition.Create("A", "TOOLS / AUTH", new Dictionary<string, HudKeyDefinition>
             {
-                ["1"] = new("COPY"), ["2"] = new("PASTE +\nNEW LINE"), ["3"] = new("CUT"),
+                ["1"] = new("COPY"), ["2"] = new("PASTE + NEW LINE"), ["3"] = new("CUT"),
                 ["4"] = new("UNDO"), ["5"] = new("REDO"), ["6"] = new("SELECT ALL"),
                 ["7"] = new("ОТЧЕТ"), ["8"] = new("ВОТ ОТЧЕТ"), ["9"] = new("```"),
-                ["0"] = new("ОТЧЕТ ИЗ\nБУФЕРА"), ["."] = new("ДАЙ СТАТУС"),
+                ["0"] = new("ОТЧЕТ ИЗ БУФЕРА"), ["."] = new("ДАЙ СТАТУС"),
                 ["Enter"] = new("НОВАЯ СТРОКА", "flow"), ["-"] = new("СТОП", "flow"),
-                ["+"] = new("ОТЧЕТ ДЛЯ\nСЛЕД. ЧАТА"), ["Space"] = new("ПОДТВЕРЖДАЮ", "primary"),
+                ["+"] = new("ОТЧЕТ ДЛЯ СЛЕД. ЧАТА"), ["Space"] = new("ПОДТВЕРЖДАЮ", "primary"),
                 ["Joystick"] = new("ОТПРАВИТЬ", "send")
             }),
             ProfileDefinition.Create("B", "MAIN / VIBECODING", new Dictionary<string, HudKeyDefinition>
             {
-                ["1"] = new("ПРОВЕРЬ"), ["2"] = new("СЛЕДУЮЩИЙ\nШАГ"), ["3"] = new("СЛЕД. ПРОМПТ"),
+                ["1"] = new("ПРОВЕРЬ"), ["2"] = new("СЛЕДУЮЩИЙ ШАГ"), ["3"] = new("СЛЕД. ПРОМПТ"),
                 ["4"] = new("ИСПРАВЛЯЙ"), ["5"] = new("ПУБЛИКУЙ"), ["6"] = new("МЕРЖИ"),
                 ["7"] = new("СОЗДАВАЙ"), ["8"] = new("ПРОДОЛЖАЙ"), ["9"] = new("РЕВЬЮ"),
                 ["0"] = new("ГОТОВО"), ["."] = new("ДАЙ СТАТУС"),
                 ["Enter"] = new("НОВАЯ СТРОКА", "flow"), ["-"] = new("СТОП", "flow"),
-                ["+"] = new("ОТЧЕТ ДЛЯ\nСЛЕД. ЧАТА"), ["Space"] = new("ДАВАЙ ДАЛЬШЕ\nБЕЗ PUSH/MERGE", "primary"),
+                ["+"] = new("ОТЧЕТ ДЛЯ СЛЕД. ЧАТА"), ["Space"] = new("ДАВАЙ ДАЛЬШЕ БЕЗ PUSH/MERGE", "primary"),
                 ["Joystick"] = new("ОТПРАВИТЬ", "send")
             })
         ]
