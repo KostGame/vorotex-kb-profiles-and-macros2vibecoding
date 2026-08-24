@@ -3,10 +3,16 @@
 # Цвет задаёт аппаратный профиль. Состояния меняют только эффект.
 # NORMAL всегда восстанавливает точный baseline, считанный с клавиатуры.
 #
-# Effects: constant, flowing_water, mono_water, single_color_breathing,
-#          cycle_breathing, tetris_blocks, neon, ambilight, off
-# tetris_blocks и cycle_breathing не рекомендуются до физической классификации:
-# они могут давать лишнюю многоцветную активность.
+# Allowed notifier effects:
+#   constant
+#   flowing_water
+#   mono_water
+#   single_color_breathing
+#   off
+#
+# Только эффекты с контролируемой палитрой 1-2 цвета разрешены.
+# cycle_breathing, tetris_blocks, neon и ambilight не допускаются notifier-валидатором.
+# Low-level HID mapping для них остаётся только для research/forensics.
 
 schema_version = 2
 
@@ -26,9 +32,9 @@ color = "#0000FF"
 # RUNNING: спокойное движение в цвете активного профиля.
 enabled = true
 effect = "mono_water"
-brightness = 4      # 1..6
-speed = 3           # 1..7
-direction = 0       # 0..1
+brightness = 4
+speed = 3
+direction = 0
 duration_seconds = 0
 
 [states.waiting]
@@ -59,9 +65,9 @@ direction = 0
 duration_seconds = 15
 
 [profile_switch]
-# Overlay всегда использует цвет НОВОГО профиля и затем возвращает semantic state.
+# Короткий ОДНОЦВЕТНЫЙ overlay в цвете НОВОГО профиля, затем resume state.
 enabled = true
-effect = "mono_water"
+effect = "flowing_water"
 brightness = 6
 speed = 5
 direction = 0

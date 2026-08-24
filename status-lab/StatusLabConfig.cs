@@ -68,6 +68,17 @@ internal sealed class StatusLabConfig
 {
     public static string FilePath { get; } = Path.Combine(EventJournal.DirectoryPath, "config.toml");
 
+    private static readonly HashSet<K15LightingMode> ControlledPaletteModes =
+    [
+        K15LightingMode.Constant,
+        K15LightingMode.FlowingWater,
+        K15LightingMode.MonoWater,
+        K15LightingMode.SingleColorBreathing,
+        K15LightingMode.Off
+    ];
+
+    public const int MaxNotifierColors = 2;
+
     public string? LoadWarning { get; private set; }
 
     public int SchemaVersion { get; set; } = 2;
@@ -124,7 +135,7 @@ internal sealed class StatusLabConfig
         },
         ProfileSwitch = new LightingEffectConfig
         {
-            Mode = K15LightingMode.MonoWater,
+            Mode = K15LightingMode.FlowingWater,
             Brightness = 6,
             Speed = 5,
             Direction = 0,
@@ -188,6 +199,8 @@ internal sealed class StatusLabConfig
     {
         var rendered = source.Clone();
         rendered.Colors = [GetProfile(onboardSlot).Color];
+        if (rendered.Colors.Length > MaxNotifierColors)
+            throw new InvalidDataException($"Notifier palettes are limited to {MaxNotifierColors} colors.");
         return rendered;
     }
 
@@ -209,8 +222,13 @@ internal sealed class StatusLabConfig
             throw new InvalidDataException("effect_lab.test_duration_seconds must be 0.5..30.");
     }
 
+    public static bool IsControlledPaletteMode(K15LightingMode mode) => ControlledPaletteModes.Contains(mode);
+
     private static void ValidateEffect(LightingEffectConfig effect, string path)
     {
+        if (!IsControlledPaletteMode(effect.Mode))
+            throw new InvalidDataException(
+                $"{path}.effect '{ModeName(effect.Mode)}' is not allowed for notifier use: only controlled 1-2 color effects are permitted.");
         if (effect.Brightness is < 1 or > 6)
             throw new InvalidDataException($"{path}.brightness must be 1..6.");
         if (effect.Speed is < 1 or > 7)

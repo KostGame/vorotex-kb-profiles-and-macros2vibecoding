@@ -54,10 +54,11 @@ internal static class ConfigToml
         b.AppendLine("# Цвет задаёт аппаратный профиль. Состояния меняют только эффект.");
         b.AppendLine("# NORMAL всегда восстанавливает точный baseline, считанный с клавиатуры.");
         b.AppendLine("#");
-        b.AppendLine("# Effects: constant, flowing_water, mono_water, single_color_breathing,");
-        b.AppendLine("#          cycle_breathing, tetris_blocks, neon, ambilight, off");
-        b.AppendLine("# tetris_blocks и cycle_breathing не рекомендуются до физической классификации:");
-        b.AppendLine("# они могут давать лишнюю многоцветную активность.");
+        b.AppendLine("# Allowed notifier effects: constant, flowing_water, mono_water,");
+        b.AppendLine("#                           single_color_breathing, off");
+        b.AppendLine("# Только эффекты с контролируемой палитрой 1-2 цвета разрешены.");
+        b.AppendLine("# cycle_breathing, tetris_blocks, neon и ambilight оставлены только в HID research layer");
+        b.AppendLine("# и отклоняются валидатором пользовательского config.toml.");
         b.AppendLine();
         b.AppendLine($"schema_version = {config.SchemaVersion}");
         b.AppendLine();
@@ -71,7 +72,7 @@ internal static class ConfigToml
         WriteEffect(b, "states.waiting", config.States.Waiting, "WAITING: заметное ожидание в том же цвете.");
         WriteEffect(b, "states.done", config.States.Done, "DONE: ограниченный attention-effect; затем exact baseline.");
         WriteEffect(b, "states.error", config.States.Error, "ERROR: зарезервирован для high-confidence semantic error.");
-        WriteEffect(b, "profile_switch", config.ProfileSwitch, "Короткий overlay в цвете НОВОГО профиля, затем resume state.");
+        WriteEffect(b, "profile_switch", config.ProfileSwitch, "Короткий одноцветный overlay в цвете НОВОГО профиля, затем resume state.");
         WriteEffect(b, "activation", config.ActivationSignal, "Сигнал включения RGB notifier. По умолчанию выключен.");
         b.AppendLine("[effect_lab]");
         b.AppendLine("# Время одного временного теста эффекта перед автоматическим восстановлением.");
