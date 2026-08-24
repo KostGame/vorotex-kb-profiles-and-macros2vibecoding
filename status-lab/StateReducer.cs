@@ -26,16 +26,23 @@ internal sealed record StateTransition(
 internal sealed class StateReducer
 {
     private static readonly TimeSpan NotificationCorrelationWindow = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan PreHookNotificationWindow = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan DoneAttentionTimeout = TimeSpan.FromSeconds(15);
 
     private readonly HashSet<uint> _waitingNotificationIds = new();
     private readonly HashSet<uint> _doneNotificationIds = new();
+    private readonly Dictionary<uint, DateTimeOffset> _recentOpenAiAdds = new();
+
     private DateTimeOffset? _lastPermissionUtc;
     private DateTimeOffset? _lastStopUtc;
+    private DateTimeOffset? _doneEnteredUtc;
 
     public K15NormalizedState State { get; private set; } = K15NormalizedState.Normal;
 
     public StateTransition? Apply(StatusInputEvent input)
     {
+        PruneRecentNotifications(input.TimestampUtc);
+
         if (input.Source.Equals("codex_hook", StringComparison.Ordinal))
             return ApplyCodex(input);
 
@@ -45,12 +52,26 @@ internal sealed class StateReducer
         return null;
     }
 
+    public StateTransition? Tick(DateTimeOffset nowUtc)
+    {
+        PruneRecentNotifications(nowUtc);
+
+        if ((State == K15NormalizedState.DonePendingAttention || State == K15NormalizedState.Error) &&
+            _doneEnteredUtc is DateTimeOffset entered &&
+            nowUtc - entered >= DoneAttentionTimeout)
+        {
+            _doneNotificationIds.Clear();
+            _lastStopUtc = null;
+            _doneEnteredUtc = null;
+            return SetState(K15NormalizedState.Normal, "done_attention_timeout", nowUtc);
+        }
+
+        return null;
+    }
+
     public StateTransition? Acknowledge(DateTimeOffset timestampUtc, string reason = "manual_acknowledge")
     {
-        _waitingNotificationIds.Clear();
-        _doneNotificationIds.Clear();
-        _lastPermissionUtc = null;
-        _lastStopUtc = null;
+        ResetTracking();
         return SetState(K15NormalizedState.Normal, reason, timestampUtc);
     }
 
@@ -59,27 +80,23 @@ internal sealed class StateReducer
         switch (input.EventName)
         {
             case "UserPromptSubmit":
-                _waitingNotificationIds.Clear();
-                _doneNotificationIds.Clear();
-                _lastPermissionUtc = null;
-                _lastStopUtc = null;
+                ResetTracking();
                 return SetState(K15NormalizedState.Running, "codex_user_prompt_submit", input.TimestampUtc);
 
             case "PermissionRequest":
                 _lastPermissionUtc = input.TimestampUtc;
+                BindRecentNotificationToWaiting(input.TimestampUtc);
                 return SetState(K15NormalizedState.Waiting, "codex_permission_request", input.TimestampUtc);
 
             case "Stop":
                 _waitingNotificationIds.Clear();
                 _lastPermissionUtc = null;
                 _lastStopUtc = input.TimestampUtc;
+                _doneEnteredUtc = input.TimestampUtc;
                 return SetState(K15NormalizedState.DonePendingAttention, "codex_stop", input.TimestampUtc);
 
             case "SessionEnd":
-                _waitingNotificationIds.Clear();
-                _doneNotificationIds.Clear();
-                _lastPermissionUtc = null;
-                _lastStopUtc = null;
+                ResetTracking();
                 return SetState(K15NormalizedState.Normal, "codex_session_end", input.TimestampUtc);
 
             default:
@@ -94,6 +111,8 @@ internal sealed class StateReducer
 
         if (input.EventName == "windows_notification_added")
         {
+            _recentOpenAiAdds[notificationId] = input.TimestampUtc;
+
             if (State == K15NormalizedState.Waiting &&
                 _lastPermissionUtc is DateTimeOffset permissionUtc &&
                 WithinWindow(permissionUtc, input.TimestampUtc))
@@ -117,6 +136,8 @@ internal sealed class StateReducer
 
         if (input.EventName == "windows_notification_removed")
         {
+            _recentOpenAiAdds.Remove(notificationId);
+
             if (_waitingNotificationIds.Remove(notificationId) &&
                 State == K15NormalizedState.Waiting &&
                 _waitingNotificationIds.Count == 0)
@@ -129,11 +150,48 @@ internal sealed class StateReducer
                 _doneNotificationIds.Count == 0)
             {
                 _lastStopUtc = null;
+                _doneEnteredUtc = null;
                 return SetState(K15NormalizedState.Normal, "done_notification_resolved", input.TimestampUtc);
             }
         }
 
         return null;
+    }
+
+    private void BindRecentNotificationToWaiting(DateTimeOffset permissionUtc)
+    {
+        var candidate = _recentOpenAiAdds
+            .Where(pair =>
+                !_waitingNotificationIds.Contains(pair.Key) &&
+                !_doneNotificationIds.Contains(pair.Key) &&
+                pair.Value <= permissionUtc &&
+                permissionUtc - pair.Value <= PreHookNotificationWindow)
+            .OrderByDescending(pair => pair.Value)
+            .FirstOrDefault();
+
+        if (candidate.Key != 0 || _recentOpenAiAdds.ContainsKey(0))
+            _waitingNotificationIds.Add(candidate.Key);
+    }
+
+    private void PruneRecentNotifications(DateTimeOffset nowUtc)
+    {
+        foreach (var id in _recentOpenAiAdds
+                     .Where(pair => nowUtc - pair.Value > NotificationCorrelationWindow)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            _recentOpenAiAdds.Remove(id);
+        }
+    }
+
+    private void ResetTracking()
+    {
+        _waitingNotificationIds.Clear();
+        _doneNotificationIds.Clear();
+        _recentOpenAiAdds.Clear();
+        _lastPermissionUtc = null;
+        _lastStopUtc = null;
+        _doneEnteredUtc = null;
     }
 
     private StateTransition? SetState(K15NormalizedState next, string reason, DateTimeOffset timestampUtc)
