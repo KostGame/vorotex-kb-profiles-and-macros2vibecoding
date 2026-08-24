@@ -27,7 +27,7 @@ try {
         prompt = 'THIS MUST NOT BE LOGGED'
     } | ConvertTo-Json -Compress
 
-    $synthetic | & $logger
+    $synthetic | powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $logger
 
     $journal = Join-Path $localAppData 'VOROTEX\K15 Status Lab\events.jsonl'
     if (-not (Test-Path -LiteralPath $journal)) {
