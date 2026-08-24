@@ -4,11 +4,11 @@ Small Windows tray utility for showing the current VOROTEX K15 key map as a dark
 
 The HUD is intentionally separate from the VOROTEX driver/configurator. It does not write device configuration, inspect the keyboard, or require administrator rights.
 
-## Current V1.1 behavior
+## Current V1.2 RC1 behavior
 
 - starts as a tray application with a dedicated VOROTEX tray icon;
-- Profile A is rendered in a dark red palette to match the current physical backlight;
-- Profile B is rendered in a dark blue palette to match the current physical backlight;
+- Profile A is rendered in the established dark red HUD palette;
+- Profile B is rendered in the established dark blue HUD palette;
 - `Ctrl+Alt+K` shows/hides the current profile near the cursor;
 - `Ctrl+Alt+P` cycles A -> B -> A and shows the selected profile;
 - `Ctrl+Alt+Shift+K` shows both profiles side by side;
@@ -17,14 +17,16 @@ The HUD is intentionally separate from the VOROTEX driver/configurator. It does 
 - overlay is clamped to the working area of the monitor containing the cursor;
 - overlay auto-hides after 9 seconds by default;
 - clicking the overlay also hides it;
-- action labels never wrap onto a second line;
-- long source actions may have a shorter HUD-only `label` for quick readability;
-- rendered action text is clipped inside the key bounds and shrunk only when needed;
+- multiline action labels are supported again;
+- explicit line breaks in HUD labels are preserved;
+- long labels are wrapped and dynamically fitted inside the key bounds;
 - Profile A shows an encoder badge for vertical scroll;
 - tray menu can show Profile A, Profile B, both profiles, enable per-user Windows autostart, or exit;
-- if `profiles.json` is absent or invalid, the application falls back to the accepted K15 V1.1 A/B map compiled into the executable.
+- if `profiles.json` is absent or invalid, the application falls back to the accepted K15 V1.2 RC1 A/B map compiled into the executable.
 
-## V1.1 profile map
+The physical V1.2 RC1 layout was accepted functionally by the owner. One hardware-only anomaly remains: after import, Profile B lighting was observed as white. The HUD intentionally keeps the established blue Profile B convention until the device-lighting issue is corrected; this does not change the accepted macro map.
+
+## V1.2 RC1 profile map
 
 ### Profile A · TOOLS / AUTH · red
 
@@ -38,15 +40,15 @@ The HUD is intentionally separate from the VOROTEX driver/configurator. It does 
 - `8` Вот отчет
 - `9` code fence ```
 - `0` Отчет из буфера
-- `.` Дай статус
+- `.` Дай статус: что сделано, что осталось, блокеры и следующий шаг
 - `Enter` Новая строка (Shift+Enter)
 - `-` Стоп
 - `+` Подготовь отчет для следующего чата
 - `Space` Подтверждаю
-- joystick click: ОТПРАВИТЬ (Enter)
+- joystick click: ОТПРАВИТЬ
 - encoder: вертикальный скролл
 
-### Profile B · MAIN / VIBECODING · blue
+### Profile B · MAIN / VIBECODING · blue HUD convention
 
 - `1` Проверь
 - `2` Следующий шаг
@@ -63,7 +65,9 @@ The HUD is intentionally separate from the VOROTEX driver/configurator. It does 
 - `-` Стоп
 - `+` Принимается
 - `Space` Давай дальше, без push/merge
-- joystick click: ОТПРАВИТЬ (Enter)
+- joystick click: ОТПРАВИТЬ
+
+The compact HUD labels may use deliberate line breaks or slight wording compression where needed, while `action` retains the canonical semantic text.
 
 ## Current default hotkeys
 
@@ -104,8 +108,8 @@ Autostart is opt-in from the tray menu and uses the current user's `HKCU\\Softwa
 - `hotkeys.showBoth`: show both profile cards;
 - `profiles[].title`: visible profile title;
 - `profiles[].color`: HUD palette, currently `red` for A and `blue` for B;
-- `profiles[].keys[].action`: canonical visible meaning of the macro;
-- optional `profiles[].keys[].label`: shorter HUD-only text for glanceability;
+- `profiles[].keys[].action`: canonical semantic meaning of the macro;
+- optional `profiles[].keys[].label`: HUD-only text, including explicit `\n` line breaks where useful;
 - optional `profiles[].keys[].accent`: `primary`, `flow`, or `send`, rendered as a brighter/darker variant of the profile color.
 
 Hotkey strings accept `Ctrl`, `Alt`, `Shift`, and `Win` modifiers plus a Windows key name, for example `Ctrl+Alt+K` or `Ctrl+Shift+F12`. Restart the HUD after editing the file.
@@ -117,4 +121,5 @@ This file is not a VOROTEX import/export package and must never be treated as th
 - the utility cannot detect which hardware profile is active because no stable K15 profile-state API has been proven;
 - current profile selection is therefore local HUD state;
 - hold-to-peek on key release is not in the MVP because `RegisterHotKey` reports a hotkey press, not the corresponding release;
+- Profile B hardware lighting currently has a post-import white-light anomaly while its HUD convention remains blue;
 - there is no signed installer or release package yet.
