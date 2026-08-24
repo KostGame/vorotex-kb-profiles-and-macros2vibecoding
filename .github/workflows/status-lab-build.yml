@@ -1,0 +1,48 @@
+name: Status Lab build
+
+on:
+  pull_request:
+    paths:
+      - 'status-lab/**'
+      - '.github/workflows/status-lab-build.yml'
+  push:
+    branches:
+      - 'agent/**'
+    paths:
+      - 'status-lab/**'
+      - '.github/workflows/status-lab-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Smoke tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/smoke.ps1
+
+      - name: Restore
+        run: dotnet restore status-lab/Vorotex.K15.StatusLab.csproj
+
+      - name: Build
+        run: dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release --no-restore
+
+      - name: Publish win-x64
+        run: dotnet publish status-lab/Vorotex.K15.StatusLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
+
+      - name: Upload portable Status Lab
+        uses: actions/upload-artifact@v4
+        with:
+          name: vorotex-k15-status-lab-win-x64
+          path: status-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/*
+          if-no-files-found: error
