@@ -1,0 +1,43 @@
+{
+  "release": "K15 V1 physically validated",
+  "generatorVersion": "0.2.0",
+  "generatorCommit": "857f0206f877637cdc78657e726bef94983e57cb",
+  "eventDelayMs": 5,
+  "textCommandSuffix": " ",
+  "autoPunctuation": false,
+  "structuralTemplateSha256": "fb2fa09936c726ac4b8d02f9550bfd3f7c2f1b7a468def00e7cfa814e84deb0c",
+  "profileLightingFixtureSha256": "b2df93221d95566416420dff0ad9fb23d61fffe5ff93a98ecefb244f700e1f30",
+  "profiles": {
+    "A": {
+      "kb": "K15_VIBECODING_PROFILE_A_TOOLS_AUTH_V1.KB.Config",
+      "kbSha256": "724b2f261d3e92a3cdc65931037a19223fea8ac20ec48dc384b26fb16b484007",
+      "macro": "K15_VIBECODING_PROFILE_A_TOOLS_AUTH_V1.Macro.Config",
+      "macroSha256": "db0bbcb989898646077b265e41c6f3f68a20a77084be5a1a5ce4aec273208650"
+    },
+    "B": {
+      "kb": "K15_VIBECODING_PROFILE_B_MAIN_V1.KB.Config",
+      "kbSha256": "994f4d08baf29620fec49489be0a855e7a9538606d7ed217eeae9eda26c90ca8",
+      "macro": "K15_VIBECODING_PROFILE_B_MAIN_V1.Macro.Config",
+      "macroSha256": "beb566bd3f809601675aefffe30ed880ed0f8c944849b416ed34cec284506cf9"
+    }
+  },
+  "profileAEncoder": {
+    "upField": "btn_KB_Scr_Up0",
+    "upValue": 304,
+    "downField": "btn_KB_Scr_Dn0",
+    "downValue": 305,
+    "behavior": "VERTICAL_SCROLL"
+  },
+  "lighting": "exact native profile bank preservation",
+  "joystickClick": "btn_KBKey_Enter=40 native Enter/Send",
+  "physicalEnter": "Shift+Enter",
+  "importWorkflow": "official VOROTEX .KB.Config Import",
+  "importState": "non-pruning; determinism not fully understood",
+  "ownerExportsIncluded": false,
+  "machinePathsIncluded": false,
+  "liveDeviceChanged": false,
+  "liveVorotexConfigChanged": false,
+  "push": "NOT RUN",
+  "pr": "NOT CREATED",
+  "merge": "NOT RUN"
+}

@@ -14,13 +14,13 @@
 | `MID_8` | `btn_KBKey_KeyPad8` | keypad 8 slot | yes |
 | `MID_9` | `btn_KBKey_KeyPad9` | keypad 9 slot | yes |
 | `MID_0` | `btn_KBKey_KeyPad0` | keypad 0 slot | yes |
-| `MID_DOT` | `btn_KBKey_KeyPadPoint` | keypad decimal point slot | not yet |
-| `MID_ENTER` | `btn_KBKey_KeyPadEnter` | keypad Enter slot | not yet |
-| `BOTTOM_MINUS` | `btn_KBKey_KeyPadSub` | keypad minus slot | not yet |
-| `BOTTOM_PLUS` | `btn_KBKey_KeyPadAdd` | keypad plus slot | not yet |
-| `BOTTOM_SPACE` | `btn_KBKey_Space` | Space slot | not yet |
+| `MID_DOT` | `btn_KBKey_KeyPadPoint` | keypad decimal point slot | yes |
+| `MID_ENTER` | `btn_KBKey_KeyPadEnter` | keypad Enter slot | yes |
+| `BOTTOM_MINUS` | `btn_KBKey_KeyPadSub` | keypad minus slot | yes |
+| `BOTTOM_PLUS` | `btn_KBKey_KeyPadAdd` | keypad plus slot | yes |
+| `BOTTOM_SPACE` | `btn_KBKey_Space` | Space slot | yes |
 
-`Generator support = not yet` means the physical storage slot is confirmed, but the complete native macro-binding label/schema needed by the generator has not yet been proven.
+The 15 standard slots and their macro bindings are proven in the V1 packages.
 
 ## Important slot semantics
 
@@ -32,10 +32,12 @@ Generic full-keyboard fields such as `btn_KBKey_1` are separate from the K15 phy
 
 Known user-visible behavior:
 
-- rotary encoder left/right: system volume down/up;
+- Profile A rotary encoder left/right: vertical scroll up/down;
+- Profile B retains its previously accepted native encoder behavior;
 - rotary encoder click: hardware profile switch;
+- joystick click: native Enter/Send;
 - joystick up/down/left/right: cursor navigation.
 
-The exact physical storage fields for the encoder and joystick remain unresolved. They must not be generated from guessed mappings.
-
-Joystick click availability/storage is also unresolved.
+Profile A encoder storage is proven as `btn_KB_Scr_Up0=304` and
+`btn_KB_Scr_Dn0=305`. Unknown RGB channel ordering and controls outside this
+profile scope remain unresolved.

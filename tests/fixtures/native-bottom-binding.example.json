@@ -1,0 +1,7 @@
+{
+  "fixtureRole": "sanitized-observed-bottom-binding-state",
+  "minus": {"storageField": "btn_KBKey_KeyPadSub", "KBKey": 700, "MemMacId": 13},
+  "plus": {"storageField": "btn_KBKey_KeyPadAdd", "KBKey": 700, "MemMacId": 14},
+  "scope": "observed native profile state only; universal invariant not claimed",
+  "space": {"storageField": "btn_KBKey_Space", "MemMacId": null}
+}

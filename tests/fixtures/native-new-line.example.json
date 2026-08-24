@@ -1,0 +1,12 @@
+{
+  "macro": "VIBE_12_NEW_LINE_RU",
+  "macroGuid": "C7D4A090-E957-4AD1-B34C-A2FBC473CA33",
+  "num": 4,
+  "macVal": [225, 40, 40, 225],
+  "macSta": [1, 1, 2, 2],
+  "macDly": [10, 10, 10, 10],
+  "macRpt": 1,
+  "rptType": 0,
+  "fixtureSha256": "f356f32c6acdf062115d1fc2b7023aa0cb6ec00752dbae2c6502808b7f12017a",
+  "fixtureRole": "sanitized-corrected-native-golden"
+}

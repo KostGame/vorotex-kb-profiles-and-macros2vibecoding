@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "profileId": "native-ru-alpha",
+  "status": "historical-evidence-only",
+  "release": "historical-ru-alpha",
+  "canonicalV1Layout": "../../schema/v1-layout-baseline.json",
+  "device": {"vendor": "VOROTEX", "model": "K15 Pro"},
+  "requiredWindowsLayout": "RU",
+  "importValidationRequired": true,
+  "memMacIdScope": "13/14 are proven for minus/plus in one observed native profile state; universal invariance is not claimed",
+  "inputProfileSelection": {
+    "mode": "forced-self-select",
+    "provenSelectors": ["RU", "EN"],
+    "defaultSemanticLayout": "RU",
+    "selectors": {"RU": "Ctrl+Shift+2", "EN": "Ctrl+Shift+1"},
+    "modifierOrder": "Ctrl down, Shift down, layout key down/up, Shift up, Ctrl up"
+  },
+  "macroGroup": {
+    "name": "K15_VIBECODING_RU_ALPHA",
+    "guid": "55492475-3604-4D74-996C-50B165062B5E"
+  },
+  "bindings": [
+    {"physicalControl": "1", "semanticAction": "CHECK", "macro": "VIBE_01_CHECK_RU", "storageField": "btn_KBKey_KeyPad1", "memMacId": 2, "bindingProof": "native-fixture"},
+    {"physicalControl": "2", "semanticAction": "NEXT", "macro": "VIBE_02_NEXT_RU", "storageField": "btn_KBKey_KeyPad2", "memMacId": 1, "bindingProof": "native-fixture"},
+    {"physicalControl": "3", "semanticAction": "AGENT_PROMPT", "macro": "VIBE_03_AGENT_PROMPT_RU", "storageField": "btn_KBKey_KeyPad3", "memMacId": 3, "bindingProof": "native-fixture"},
+    {"physicalControl": "4", "semanticAction": "FIX", "macro": "VIBE_04_FIX_RU", "storageField": "btn_KBKey_KeyPad4", "memMacId": 4, "bindingProof": "native-fixture"},
+    {"physicalControl": "5", "semanticAction": "PUBLISH", "macro": "VIBE_05_PUBLISH_RU", "storageField": "btn_KBKey_KeyPad5", "memMacId": 5, "bindingProof": "native-fixture"},
+    {"physicalControl": "6", "semanticAction": "MERGE", "macro": "VIBE_06_MERGE_RU", "storageField": "btn_KBKey_KeyPad6", "memMacId": 6, "bindingProof": "native-fixture"},
+    {"physicalControl": "7", "semanticAction": "CREATE", "macro": "VIBE_07_CREATE_RU", "storageField": "btn_KBKey_KeyPad7", "memMacId": 7, "bindingProof": "native-fixture"},
+    {"physicalControl": "8", "semanticAction": "CONTINUE", "macro": "VIBE_08_CONTINUE_RU", "storageField": "btn_KBKey_KeyPad8", "memMacId": 8, "bindingProof": "native-fixture"},
+    {"physicalControl": "9", "semanticAction": "REVIEW", "macro": "VIBE_09_REVIEW_RU", "storageField": "btn_KBKey_KeyPad9", "memMacId": 9, "bindingProof": "native-fixture"},
+    {"physicalControl": "0", "semanticAction": "DONE", "macro": "VIBE_10_DONE_RU", "storageField": "btn_KBKey_KeyPad0", "memMacId": 0, "bindingProof": "native-fixture"},
+    {"physicalControl": ".", "semanticAction": "STATUS", "macro": "VIBE_11_STATUS_RU", "storageField": "btn_KBKey_KeyPadPoint", "memMacId": 10, "bindingProof": "native-fixture"},
+    {"physicalControl": "Enter", "semanticAction": "NEW_LINE", "macro": "VIBE_12_NEW_LINE_RU", "storageField": "btn_KBKey_KeyPadEnter", "memMacId": 11, "bindingProof": "native-fixture"},
+    {"physicalControl": "-", "semanticAction": "STOP", "macro": "VIBE_13_STOP_RU", "storageField": "btn_KBKey_KeyPadSub", "memMacId": 13, "bindingProof": "native-fixture-observed-state"},
+    {"physicalControl": "+", "semanticAction": "REPORT", "macro": "VIBE_14_REPORT_RU", "storageField": "btn_KBKey_KeyPadAdd", "memMacId": 14, "bindingProof": "native-fixture-observed-state"},
+    {"physicalControl": "Space", "semanticAction": "ACCEPT_OR_APPROVE", "macro": "VIBE_15_ACCEPT_RU", "storageField": "btn_KBKey_Space", "memMacId": 12, "bindingProof": "native-fixture-observed-state"}
+  ],
+  "joystickClick": {"storageField": "btn_KBKey_Enter", "mode": "NATIVE_ENTER", "keyValue": 40},
+  "note": "This file preserves the historical RU Alpha evidence state. It is not the current V1 Profile B semantic source of truth; use schema/v1-layout-baseline.json for current A/B layout work."
+}

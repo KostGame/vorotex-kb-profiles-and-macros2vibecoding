@@ -6,11 +6,14 @@ Public, sanitized research for using the VOROTEX K15 Pro as a compact vibecoding
 
 Confirmed in controlled testing:
 
-- all 15 standard physical keys have known VOROTEX storage slots;
-- generated macro/profile JSON is parsed by the official VOROTEX application;
-- generated multi-event macros execute correctly after a native GUI assignment;
-- the resulting assignment survives closing VOROTEX and a keyboard power cycle;
-- restoring the baseline assignment through the native GUI restores onboard behavior.
+- Profile A and Profile B `.KB.Config` packages import successfully;
+- all 15 bindings and embedded macros work in both profiles;
+- RU/EN layout forcing works from the configured direct selectors;
+- Profile A lighting is preserved by the embedded native LED bank;
+- Profile A encoder rotation uses vertical scroll (`304`/`305`);
+- physical Enter emits Shift+Enter and joystick click remains native Enter/Send;
+- A0 report-from-clipboard and A2 paste-plus-safe-newline work physically;
+- 5 ms event timing and one trailing ASCII space on ordinary text commands work.
 
 Practical apply path currently proven:
 
@@ -21,12 +24,12 @@ generated config
     -> K15 onboard memory
 ```
 
-Not yet proven:
+Still intentionally bounded or unresolved:
 
-- automatic device apply from generated files alone;
-- the exact low-level device-sync trigger used by VOROTEX;
-- physical storage schema for the rotary encoder and joystick;
-- maximum number of onboard profiles beyond the two currently observed device slots.
+- automatic device apply from generated files alone and the low-level sync trigger;
+- universal RGB channel ordering (the native serialized value is preserved exactly);
+- maximum number of onboard profiles beyond the two observed device slots;
+- joystick directions and other controls outside the proven profile scope.
 
 ## Manual install, K15 Pro
 
@@ -39,15 +42,21 @@ res/KeyboardDock/KeyboardA/Config/DeviceFeature.ini
 res/MacroDock/MacroData/macroConfig.json
 ```
 
-Always back up the live files first. With VOROTEX closed, copy only the files included by a profile package. After starting VOROTEX, verify the imported macro/binding and use a **native GUI assignment/reassignment** for the affected physical key so the setting is written to K15 onboard memory. Replacing JSON files alone is not a proven device-apply mechanism.
+Always back up the live files first. Use the official VOROTEX `.KB.Config`
+Import workflow, then verify the imported macros, bindings, lighting, and
+encoder behavior in the native GUI. VOROTEX Import is non-pruning and repeated
+imports can leave duplicate macro groups.
 
 Rollback likewise has two parts: restore the backed-up files, then reassign the original action through VOROTEX so the keyboard's onboard state matches the restored files.
 
 ## Contents
 
 - [`docs/architecture.md`](docs/architecture.md) — working architecture and safety boundaries.
+- [`docs/native-format-notes.md`](docs/native-format-notes.md) — sanitized native export schema evidence.
+- [`docs/native-import-ru-alpha.md`](docs/native-import-ru-alpha.md) — RU Alpha serializer and owner import boundary.
 - [`docs/physical-layout.md`](docs/physical-layout.md) — human-readable control map.
 - [`docs/vibecoding-v1.md`](docs/vibecoding-v1.md) — first vibecoding UX draft.
+- [`docs/two-profile-v1-rc1.md`](docs/two-profile-v1-rc1.md) — Profile A/Profile B V1 RC semantics and package boundary.
 - [`schema/physical-layout.json`](schema/physical-layout.json) — machine-readable confirmed mappings.
 
 ## Safety

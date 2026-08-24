@@ -1,6 +1,9 @@
 # VIBECODING v1 draft
 
-Status: **design candidate**, not a released profile.
+Status: **historical design draft**. The released two-profile V1 package is
+documented in [`two-profile-v1-rc1.md`](two-profile-v1-rc1.md) and the device
+README; the accepted Profile A encoder and joystick mappings supersede the
+unresolved candidate language below.
 
 The goal is a one-hand control surface for ChatGPT, Codex, AgentLoop-style workflows, and general development work while keeping destructive actions deliberate.
 
@@ -50,7 +53,7 @@ joystick click -> SUBMIT
 
 The dispatcher can translate `NEW_LINE` per application, for example `Shift+Enter`, `Ctrl+Enter`, or plain `Enter` depending on the focused application.
 
-Joystick-click storage on K15 has not yet been proven, so `SUBMIT` remains a desired mapping pending hardware verification.
+The accepted V1 mapping uses joystick click as native Enter/Submit.
 
 ## Joystick candidate workflows
 
@@ -64,7 +67,8 @@ If joystick programming is confirmed, preferred semantics are workflow-level rat
 | Right | `VERIFY_OR_TEST` |
 | Click | `SUBMIT` |
 
-Fallback while storage is unresolved: retain native cursor behavior.
+Joystick directions remain native cursor behavior in V1; only click is used as
+the proven submit control.
 
 ## Encoder candidate behavior
 
@@ -74,7 +78,8 @@ Preferred AI-profile behavior, if remapping is proven:
 - rotate right: reasoning level up;
 - click: switch hardware profile.
 
-Fallback: retain native volume control and profile switching.
+Profile A V1 uses proven vertical scrolling; Profile B retains its accepted
+native encoder behavior and click remains profile switching.
 
 ## Hardware profile 2: SYSTEM
 

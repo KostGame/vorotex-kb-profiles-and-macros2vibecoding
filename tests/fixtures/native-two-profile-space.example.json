@@ -1,0 +1,19 @@
+{
+  "fixtureRole": "sanitized-two-profile-semantic-delta",
+  "profileA": {
+    "role": "TOOLS_AUTH",
+    "space": "Подтверждаю",
+    "spaceAction": "ACCEPT_OR_APPROVE"
+  },
+  "profileB": {
+    "role": "MAIN_VIBECODING",
+    "space": "Давай дальше, без push/merge",
+    "spaceAction": "SAFE_CONTINUE"
+  },
+  "sharedPhysicalModel": {
+    "spaceStorage": "btn_KBKey_Space",
+    "spaceMemMacId": 12,
+    "joystickClickStorage": "btn_KBKey_Enter",
+    "joystickClickKBKey": 40
+  }
+}
