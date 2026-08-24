@@ -42,7 +42,11 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             try
             {
                 CollectNewEvents();
-                FlushReadyEvents(DateTimeOffset.UtcNow - ReorderDelay);
+                var nowUtc = DateTimeOffset.UtcNow;
+                FlushReadyEvents(nowUtc - ReorderDelay);
+                var timedTransition = _reducer.Tick(nowUtc);
+                if (timedTransition is not null)
+                    PublishTransition(timedTransition);
             }
             catch (Exception ex)
             {
