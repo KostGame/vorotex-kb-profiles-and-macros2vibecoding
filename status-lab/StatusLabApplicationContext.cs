@@ -7,7 +7,9 @@ namespace Vorotex.K15.StatusLab;
 internal sealed class StatusLabApplicationContext : ApplicationContext
 {
     private readonly WindowsNotificationPoller _notificationPoller = new();
+    private readonly JournalStateNormalizer _stateNormalizer = new();
     private readonly NotifyIcon _trayIcon;
+    private readonly ToolStripMenuItem _stateStatusItem;
     private readonly ToolStripMenuItem _notificationStatusItem;
     private readonly ToolStripMenuItem _codexHookItem;
     private bool _exiting;
@@ -23,6 +25,10 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             version = typeof(StatusLabApplicationContext).Assembly.GetName().Version?.ToString()
         });
 
+        _stateStatusItem = new ToolStripMenuItem("Состояние: NORMAL · dry-run")
+        {
+            Enabled = false
+        };
         _notificationStatusItem = new ToolStripMenuItem("Уведомления: запуск...")
         {
             Enabled = false
@@ -56,13 +62,17 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             }
         };
 
+        _stateNormalizer.StateChanged += (state, transition) => UpdateNormalizedState(state, transition);
+        _stateNormalizer.Start();
         _ = StartNotificationPollingAsync();
     }
 
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
+        menu.Items.Add(_stateStatusItem);
         menu.Items.Add(_notificationStatusItem);
+        menu.Items.Add("Сбросить состояние в NORMAL", null, (_, _) => _stateNormalizer.Acknowledge());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_codexHookItem);
         menu.Items.Add("Открыть журнал событий", null, (_, _) => OpenPath(EventJournal.FilePath));
@@ -71,6 +81,28 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Выход", null, async (_, _) => await ExitAsync());
         return menu;
+    }
+
+    private void UpdateNormalizedState(K15NormalizedState state, StateTransition? transition)
+    {
+        var wire = JournalStateNormalizer.ToWireName(state);
+
+        void Apply()
+        {
+            _stateStatusItem.Text = $"Состояние: {wire} · dry-run";
+            _trayIcon.Text = $"K15 Status Lab · {wire}";
+        }
+
+        try
+        {
+            if (_trayIcon.ContextMenuStrip?.InvokeRequired == true)
+                _trayIcon.ContextMenuStrip.BeginInvoke(Apply);
+            else
+                Apply();
+        }
+        catch
+        {
+        }
     }
 
     private async Task StartNotificationPollingAsync()
@@ -213,6 +245,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             return;
 
         EventJournal.Clear();
+        _stateNormalizer.Acknowledge();
         EventJournal.Append(new
         {
             timestampUtc = DateTimeOffset.UtcNow,
@@ -243,6 +276,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         });
 
         await _notificationPoller.DisposeAsync();
+        await _stateNormalizer.DisposeAsync();
         ExitThread();
     }
 
