@@ -61,4 +61,23 @@ Require(reducer.State == K15NormalizedState.Running, "Unrelated notifications mu
 reducer.Apply(Hook(t.AddSeconds(22), "SessionEnd"));
 Require(reducer.State == K15NormalizedState.Normal, "SessionEnd must return to NORMAL.");
 
-Console.WriteLine("State reducer smoke tests: PASS");
+
+var report = K15HidProtocol.FrameReport(0x09, 0x12, 0, 0x0064, new byte[] { 1, 2, 3 });
+Require(report.Length == 41, "HID report must be 41 bytes.");
+Require(report[0] == 0x06 && report[3] == 0x09 && report[4] == 0x12, "HID report header mismatch.");
+Require(report[6] == 0x64 && report[7] == 0x00 && report[8] == 3, "HID report address/length mismatch.");
+
+var waitingRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Waiting);
+Require(waitingRecord.Length == 25, "Lighting detail must be 25 bytes.");
+Require(waitingRecord[3] == 0x01, "Single-color breathing should enable one palette slot.");
+Require(waitingRecord[4] == 0xA5 && waitingRecord[5] == 0xFF && waitingRecord[6] == 0x00,
+    "Waiting color must encode amber in G,R,B wire order.");
+
+var originalHeader = Enumerable.Range(0, 25).Select(value => (byte)value).ToArray();
+var alertHeader = K15HidProtocol.CreateAlertHeader(originalHeader);
+Require(alertHeader[0] == 0x84, "Alert header must select single-color breathing.");
+Require(alertHeader.Skip(1).SequenceEqual(originalHeader.Skip(1)), "Alert header must preserve non-mode bytes.");
+Require(K15HidProtocol.IsSupportedDevice(0xB6A4, 0x4100), "Physical K15 VID/PID must be accepted.");
+Require(!K15HidProtocol.IsSupportedDevice(0x1234, 0x4100), "Unrelated VID must be rejected.");
+
+Console.WriteLine("State reducer + HID protocol smoke tests: PASS");
