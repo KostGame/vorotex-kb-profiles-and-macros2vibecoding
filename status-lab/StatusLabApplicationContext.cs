@@ -28,7 +28,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             version = typeof(StatusLabApplicationContext).Assembly.GetName().Version?.ToString()
         });
 
-        _stateStatusItem = new ToolStripMenuItem("Состояние: NORMAL · dry-run")
+        _stateStatusItem = new ToolStripMenuItem("Состояние: NORMAL")
         {
             Enabled = false
         };
@@ -105,7 +105,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 
         void Apply()
         {
-            _stateStatusItem.Text = $"Состояние: {wire} · dry-run";
+            _stateStatusItem.Text = $"Состояние: {wire}";
             _trayIcon.Text = $"K15 Status Lab · {wire}";
         }
 
@@ -142,7 +142,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             "Включить физическую RGB-индикацию K15?\n\n" +
             "Canary меняет только lighting state через доказанный HID-протокол и сохраняет исходные байты для восстановления. " +
             "Закрой VOROTEX и W910 WebDriver перед тестом. " +
-            "Во время canary не переключай аппаратный профиль K15.\n\nПродолжить?",
+            "Переключать Profile A/B во время canary можно: новый профиль показывается своим цветом 5 секунд, затем возвращается текущее notification-состояние.\n\nПродолжить?",
             "VOROTEX K15 RGB canary",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning);
