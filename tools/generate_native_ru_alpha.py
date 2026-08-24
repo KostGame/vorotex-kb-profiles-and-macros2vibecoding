@@ -29,6 +29,7 @@ SELECTOR_SETTLE_DELAY_MS = 0
 CORRECTED_NEW_LINE_FIXTURE_SHA256 = "f356f32c6acdf062115d1fc2b7023aa0cb6ec00752dbae2c6502808b7f12017a"
 BOTTOM_BINDING_FIXTURE_SHA256 = "6bb6e1e2a7b2fb896cd046c3323612e25b34c1aa006150784d6556bdc4e39279"
 SPACE_BINDING_FIXTURE_SHA256 = "be038530f798511301e49f9a1d13ea4babf556db64714a8e8fb77bbe7f4fab34"
+PROFILE_LIGHTING_FIXTURE_SHA256 = "b2df93221d95566416420dff0ad9fb23d61fffe5ff93a98ecefb244f700e1f30"
 JOYSTICK_CLICK_STORAGE = "btn_KBKey_Enter"
 GROUP_GUID_B = "67FAE5A1-B383-4CC8-A99C-AD70C6DAA277"
 GROUP_NAME_B = "K15_VIBECODING_RU_ALPHA"
@@ -306,13 +307,27 @@ def minimal_kb_config() -> dict[str, Any]:
             "KBmain": {"curporfile": 1}}
 
 
+def _profile_led_bank(profile: str, profile_lighting_template: dict[str, Any]) -> list[dict[str, Any]]:
+    banks = profile_lighting_template.get("KBconfig", {}).get("KBled")
+    profile_index = 0 if profile == "A" else 1
+    if not isinstance(banks, list) or len(banks) <= profile_index:
+        raise ValueError("profile lighting fixture must contain LED banks for profiles A and B")
+    bank = banks[profile_index]
+    if not isinstance(bank, list) or len(bank) != 14:
+        raise ValueError("profile lighting fixture LED banks must each contain exactly 14 records")
+    return copy.deepcopy(bank)
+
+
 def serialize_kb(profile: str = "B", template: dict[str, Any] | None = None,
-                event_delay_ms: int = DEFAULT_EVENT_DELAY_MS) -> tuple[dict[str, Any], list[str]]:
+                event_delay_ms: int = DEFAULT_EVENT_DELAY_MS,
+                profile_lighting_template: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[str]]:
     if profile not in PROFILE_SPECS:
         raise ValueError("profile must be A or B")
     validate_delay(event_delay_ms)
     spec = PROFILE_SPECS[profile]
     config = copy.deepcopy(template["KBconfig"] if template else minimal_kb_config())
+    if profile_lighting_template is not None:
+        config["KBled"] = _profile_led_bank(profile, profile_lighting_template)
     action_to_guid = {action: guid for _, action, guid in spec["macros"]}
     for physical, action in spec["bindings"]:
         slot, mem_id = PROVEN_BINDINGS[physical]
@@ -357,15 +372,20 @@ def _profile_paths(output_dir: Path, profile: str) -> tuple[Path, Path]:
 
 def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None = None,
              event_delay_ms: int = DEFAULT_EVENT_DELAY_MS,
-             research_unsafe_allow_delay_below_min: bool = False) -> dict[str, Any]:
+             research_unsafe_allow_delay_below_min: bool = False,
+             profile_lighting_template_path: Path | None = None) -> dict[str, Any]:
     validate_official_import_delay(event_delay_ms, research_unsafe_allow_delay_below_min)
     template = json.loads(kb_template_path.read_text(encoding="utf-8")) if kb_template_path else None
+    if kb_template_path and profile_lighting_template_path is None:
+        raise ValueError("profile lighting fixture is required with an official KB structural template")
+    profile_lighting_template = (json.loads(profile_lighting_template_path.read_text(encoding="utf-8"))
+                                 if profile_lighting_template_path else None)
     output_dir.mkdir(parents=True, exist_ok=True)
     package_info: dict[str, Any] = {}
     for profile in ("A", "B"):
         macro_path, kb_path = _profile_paths(output_dir, profile)
         write_json(macro_path, serialize_macro(profile, layout, event_delay_ms))
-        kb, unresolved = serialize_kb(profile, template, event_delay_ms)
+        kb, unresolved = serialize_kb(profile, template, event_delay_ms, profile_lighting_template)
         write_json(kb_path, kb)
         package_info[profile] = {"macro": macro_path.name, "kb": kb_path.name,
                                  "macroSha256": sha256(macro_path), "kbSha256": sha256(kb_path),
@@ -389,11 +409,15 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "semanticMaps": maps_path.name, "physicalSlotModel": [{"control": c, "storage": s, "memMacId": m}
         for c, (s, m) in PROVEN_BINDINGS.items()], "unresolvedBindings": [],
         "joystickClick": {"storage": JOYSTICK_CLICK_STORAGE, "mode": "NATIVE_ENTER", "keyValue": 40},
-        "rgbScope": "UNCHANGED_PASSTHROUGH", "allProfiles": {"status": "PARTIAL", "package": None,
+        "kbConfigContainsProfileLighting": "PROVEN", "kbConfigImportAppliesProfileLighting": "PROVEN",
+        "profileLedBankMapping": {"A": "PROVEN", "B": "PROVEN"},
+        "profileLightingFixtureSha256": PROFILE_LIGHTING_FIXTURE_SHA256 if profile_lighting_template_path else None,
+        "rgbScope": "OBSERVED_PROFILE_LIGHTING_BANKS_ONLY", "allProfiles": {"status": "PARTIAL", "package": None,
         "reason": "Sanitized evidence proves the SingleProfile/profile-count delta, not the full Export-All object shape; unsupported fields are not guessed."},
         "fixtureProvenance": ["corrected native Shift+Enter fixture SHA-256: " + CORRECTED_NEW_LINE_FIXTURE_SHA256,
         "native bottom-binding fixture SHA-256: " + BOTTOM_BINDING_FIXTURE_SHA256,
         "native Space-binding fixture SHA-256: " + SPACE_BINDING_FIXTURE_SHA256,
+        "native profile lighting fixture SHA-256: " + PROFILE_LIGHTING_FIXTURE_SHA256,
         "sanitized native Profile mode delta: export current SingleProfile=1, export all SingleProfile=0"]}
     write_json(output_dir / "manifest.json", manifest)
     report_lines = ["# K15 Two-Profile V1 RC generation report", "",
@@ -415,7 +439,12 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "ALL_PROFILE_A_RU_TEXT_ROUNDTRIP=PASS", "ALL_PROFILE_B_RU_TEXT_ROUNDTRIP=PASS",
         "SHIFT_ENTER_5MS=PASS", "JOYSTICK_NATIVE_ENTER=PASS", "ALL_15_PHYSICAL_BINDINGS_PROFILE_A=PASS",
         "ALL_15_PHYSICAL_BINDINGS_PROFILE_B=PASS", "MEMMACID_MAPPING_PROVEN=PASS",
-        "RGB_SCOPE=UNCHANGED_PASSTHROUGH", "ALL_PROFILES_PACKAGE_READY=PARTIAL",
+        "KB_CONFIG_CONTAINS_PROFILE_LIGHTING=PROVEN", "KB_CONFIG_IMPORT_APPLIES_PROFILE_LIGHTING=PROVEN",
+        "KBLED_PROFILE_BANK_MAPPING_A=PROVEN", "KBLED_PROFILE_BANK_MAPPING_B=PROVEN",
+        "PROFILE_A_LED_BANK_SOURCE=profile lighting fixture KBled[0]",
+        "PROFILE_B_LED_BANK_SOURCE=profile lighting fixture KBled[1]",
+        "PROFILE_A_LED_EXACT_PRESERVATION=PASS", "PROFILE_B_LED_EXACT_PRESERVATION=PASS",
+        "ALL_PROFILES_PACKAGE_READY=PARTIAL",
         "ALL_PROFILES_KB_CONFIG=NOT CREATED", "VOROTEX_IMPORT_IS_NON_PRUNING=PROVEN",
         "LIVE_DEVICE_CHANGED=NO", "LIVE_VOROTEX_CONFIG_CHANGED=NO", "PUSH=NOT RUN", "PR=NOT CREATED", "MERGE=NOT RUN", "",
         f"- Generated event delay: `{event_delay_ms} ms` (selector settle timing is separate: `{SELECTOR_SETTLE_DELAY_MS} ms`)",
@@ -431,11 +460,12 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--layout", choices=("RU", "EN"), default="RU")
     parser.add_argument("--kb-template", type=Path)
+    parser.add_argument("--profile-lighting-template", type=Path)
     parser.add_argument("--event-delay-ms", type=int, default=DEFAULT_EVENT_DELAY_MS)
     parser.add_argument("--research-unsafe-allow-delay-below-5", action="store_true")
     args = parser.parse_args()
     generate(args.output_dir, args.layout, args.kb_template, args.event_delay_ms,
-             args.research_unsafe_allow_delay_below_5)
+             args.research_unsafe_allow_delay_below_5, args.profile_lighting_template)
     return 0
 
 

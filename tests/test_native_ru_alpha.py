@@ -93,6 +93,18 @@ class SerializerTests(unittest.TestCase):
         config["KBled"] = [{"nativeLedSentinel": 0}]
         return {"KBconfig": config}
 
+    def native_lighting_fixture(self):
+        def record(index, color, brightness=4):
+            return {"brightnessvalue": brightness, "ctrl_KBLed_Col0": color,
+                    "ctrl_KBLed_Col1": [0, 4278190337], "ctrl_KBLed_Col2": [0, 4278190335],
+                    "ctrl_KBLed_Col3": [0, 4294967040], "ctrl_KBLed_Col4": [0, 4286578816],
+                    "ctrl_KBLed_Col5": [0, 4278255615], "ctrl_KBLed_Col6": [0, 4294967295],
+                    "curselmode": index, "directionsel": 0, "frequencyvalue": 4}
+        bank_a = [record(i, [1, 4278255360] if i == 0 else [0, 122914128]) for i in range(14)]
+        bank_b = [record(i, [0, 122914128]) for i in range(14)]
+        bank_b[0]["ctrl_KBLed_Col6"] = [1, 4294967295]
+        return {"KBconfig": {"KBled": [bank_a, bank_b, []]}}
+
     def macro(self, profile, action):
         spec = gen.PROFILE_SPECS[profile]
         name, _, _ = next(item for item in spec["macros"] if item[1] == action)
@@ -236,6 +248,20 @@ class SerializerTests(unittest.TestCase):
         self.assertEqual(package["KBconfig"]["FnKeyMacro"], template["KBconfig"]["FnKeyMacro"])
         self.assertEqual(package["KBconfig"]["KBled"], template["KBconfig"]["KBled"])
         self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_native_sentinel"], 91)
+
+    def test_profile_lighting_banks_are_copied_exactly(self):
+        lighting = self.native_lighting_fixture()
+        for profile, index in (("A", 0), ("B", 1)):
+            package, _ = gen.serialize_kb(profile, self.native_template(), profile_lighting_template=lighting)
+            self.assertEqual(package["KBconfig"]["KBled"], lighting["KBconfig"]["KBled"][index])
+            self.assertEqual(len(package["KBconfig"]["KBled"]), 14)
+        package, _ = gen.serialize_kb("A", self.native_template(), profile_lighting_template=lighting)
+        self.assertEqual(package["KBconfig"]["KBled"][0]["brightnessvalue"], 4)
+        self.assertEqual(package["KBconfig"]["KBled"][0]["ctrl_KBLed_Col0"], [1, 4278255360])
+
+    def test_profile_lighting_fixture_fails_closed_on_missing_bank(self):
+        with self.assertRaises(ValueError):
+            gen.serialize_kb("A", self.native_template(), profile_lighting_template={"KBconfig": {"KBled": [[]]}})
 
     def test_configurable_timing_uses_5ms_release_minimum(self):
         self.assertEqual(gen.DEFAULT_EVENT_DELAY_MS, 5)

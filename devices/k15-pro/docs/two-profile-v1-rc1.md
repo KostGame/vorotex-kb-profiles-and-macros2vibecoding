@@ -49,6 +49,14 @@ not emitted in this RC because the sanitized evidence proves only the
 `SingleProfile`/profile-count delta, not the complete native object shape.
 Unsupported fields are intentionally not guessed.
 
+Profile lighting is now an explicit part of the proven KB package model. The
+native full-profile lighting fixture supplies the complete 14-record bank for
+Profile A from `KBled[0]` and Profile B from `KBled[1]`; the selected bank is
+copied byte-for-byte into each single-profile package. The observed Profile A
+record `0` is opaque green (`0xFF00FF00`) at brightness `4`. The generator
+does not synthesize or normalize LED records and requires an explicit lighting
+fixture when a structural template is used.
+
 The known-good minimal single-profile KB shape is import-compatible. A native
 `--kb-template` remains optional when preserving additional device defaults is
 useful, but it is not required for import compatibility. The physically
