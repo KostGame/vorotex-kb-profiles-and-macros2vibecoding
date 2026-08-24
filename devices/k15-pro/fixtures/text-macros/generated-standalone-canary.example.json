@@ -1,0 +1,53 @@
+{
+  "fixtureId": "tmac-generated-standalone-canary",
+  "source": "repository-serializer-generated",
+  "transport": ".Macro.Config",
+  "verification": "official-vorotex-imported",
+  "groupName": "TMAC_CANARY_GENERATED",
+  "groupGuid": "00000000-0000-5000-8000-000000000001",
+  "macroCount": 1,
+  "macros": [
+    {
+      "name": "TMAC_GEN_TEXT",
+      "guid": "00000000-0000-5000-8000-000000000002",
+      "visibleText": "K15TEST",
+      "layout": "EN",
+      "activeEventCount": 14,
+      "activeHidValues": [14, 14, 30, 30, 34, 34, 23, 23, 8, 8, 22, 22, 23, 23],
+      "activeStates": [1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+      "activeDelaysMs": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "arrayCapacity": 500,
+      "macRpt": 1,
+      "rptType": 0
+    }
+  ],
+  "fieldProvenance": {
+    "fixtureId": "SANITIZED",
+    "source": "SERIALIZER_GENERATED",
+    "transport": "OBSERVED_NATIVE",
+    "verification": "OWNER_GUI_VERIFIED",
+    "groupName": "OWNER_GUI_VERIFIED",
+    "groupGuid": "SANITIZED",
+    "macroCount": "DERIVED",
+    "macroName": "OWNER_GUI_VERIFIED",
+    "macroGuid": "SANITIZED",
+    "visibleText": "SERIALIZER_GENERATED",
+    "activeEventCount": "DERIVED",
+    "activeHidValues": "OBSERVED_NATIVE",
+    "activeStates": "OBSERVED_NATIVE",
+    "activeDelaysMs": "SERIALIZER_GENERATED",
+    "arrayCapacity": "OBSERVED_NATIVE",
+    "macRpt": "OBSERVED_NATIVE",
+    "rptType": "OBSERVED_NATIVE"
+  },
+  "sanitization": {
+    "realGuidsReplaced": true,
+    "machinePathsOmitted": true,
+    "rawPackageExcluded": true
+  },
+  "notes": [
+    "The public GUIDs are deterministic examples and are not native research identifiers.",
+    "The canary proves the direct K15TEST text stream in an imported generated standalone package; it does not claim general uppercase, Shift, punctuation, Space, or RU mapping behavior.",
+    "The private generated .Macro.Config package is retained only in the owner-controlled evidence handoff and is not part of this repository fixture."
+  ]
+}

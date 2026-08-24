@@ -15,6 +15,9 @@ class NativeFixtureTests(unittest.TestCase):
     def read_fixture(self, name):
         return json.loads((ROOT / "tests" / "fixtures" / name).read_text(encoding="utf-8"))
 
+    def read_text_macro_fixture(self, name):
+        return json.loads((ROOT / "devices" / "k15-pro" / "fixtures" / "text-macros" / name).read_text(encoding="utf-8"))
+
     def test_cycle_fixture_targets_only_rpt_type(self):
         fixture = self.read_fixture("native-cycle.example.json")
         self.assertEqual(fixture["before"]["macRpt"], fixture["after"]["macRpt"])
@@ -80,6 +83,33 @@ class NativeFixtureTests(unittest.TestCase):
         for item in tracked:
             content = (ROOT / item).read_text(encoding="utf-8", errors="ignore")
             self.assertIsNone(re.search(r"[A-Za-z]:\\\\Users\\\\|[A-Za-z]:\\\\AI_AGENT_PROJECTS", content))
+
+    def test_generated_standalone_public_fixture_is_sanitized_and_exact(self):
+        fixture = self.read_text_macro_fixture("generated-standalone-canary.example.json")
+        manifest = self.read_text_macro_fixture("manifest.example.json")
+        self.assertEqual(fixture["fixtureId"], "tmac-generated-standalone-canary")
+        self.assertEqual(fixture["source"], "repository-serializer-generated")
+        self.assertEqual(fixture["transport"], ".Macro.Config")
+        self.assertEqual(fixture["verification"], "official-vorotex-imported")
+        self.assertEqual(fixture["groupName"], "TMAC_CANARY_GENERATED")
+        self.assertEqual(fixture["macroCount"], 1)
+        macro = fixture["macros"][0]
+        self.assertEqual(macro["name"], "TMAC_GEN_TEXT")
+        self.assertEqual(macro["visibleText"], "K15TEST")
+        self.assertEqual(macro["activeEventCount"], 14)
+        self.assertEqual(macro["activeHidValues"], [14, 14, 30, 30, 34, 34, 23, 23, 8, 8, 22, 22, 23, 23])
+        self.assertEqual(macro["activeStates"], [1, 2] * 7)
+        self.assertEqual(macro["activeDelaysMs"], [1] * 14)
+        self.assertEqual(macro["arrayCapacity"], 500)
+        self.assertEqual((macro["macRpt"], macro["rptType"]), (1, 0))
+        self.assertEqual(manifest["officialStatus"]["GENERATED_MACRO_CONFIG_IMPORT"], "PASS")
+        self.assertEqual(manifest["parentAcceptanceMatrix"]["TMAC001_PARENT_READY_TO_CLOSE"], "NO")
+        public_text = "\n".join((ROOT / "devices" / "k15-pro" / "fixtures" / "text-macros" / name).read_text(encoding="utf-8")
+                                  for name in ("README.md", "generated-standalone-canary.example.json", "manifest.example.json"))
+        self.assertNotRegex(public_text, r"[A-Za-z]:[\\/]")
+        self.assertTrue(fixture["sanitization"]["realGuidsReplaced"])
+        self.assertTrue(fixture["sanitization"]["machinePathsOmitted"])
+        self.assertTrue(fixture["sanitization"]["rawPackageExcluded"])
 
 
 class SerializerTests(unittest.TestCase):
@@ -326,6 +356,32 @@ class SerializerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gen.validate_official_import_delay(0)
         self.assertEqual(gen.validate_official_import_delay(1, True), 1)
+
+    def test_standalone_k15test_macro_uses_disposable_identity_and_native_shape(self):
+        package = gen.serialize_standalone_text_macro(
+            "TMAC_CANARY_GENERATED", "11111111-1111-5111-8111-111111111111",
+            "TMAC_GEN_TEXT", "22222222-2222-5222-8222-222222222222",
+            "K15TEST", layout="EN", event_delay_ms=1)
+        self.assertEqual(package["GrpName"], list(b"TMAC_CANARY_GENERATED"))
+        self.assertEqual(package["GrpGuid"], "11111111-1111-5111-8111-111111111111")
+        self.assertEqual(len(package["MacroInfo"]), 1)
+        macro = package["MacroInfo"][0]
+        self.assertEqual(bytes(macro["MacroName"]).decode("ascii"), "TMAC_GEN_TEXT")
+        self.assertEqual(macro["MacroGuid"], "22222222-2222-5222-8222-222222222222")
+        data = macro["macData"]
+        self.assertEqual(data["num"], 14)
+        self.assertEqual(data["macVal"][:14], [14, 14, 30, 30, 34, 34, 23, 23, 8, 8, 22, 22, 23, 23])
+        self.assertEqual(data["macSta"][:14], [1, 2] * 7)
+        self.assertEqual(data["macDly"][:14], [1] * 14)
+        self.assertEqual(data["macRpt"], 1)
+        self.assertEqual(data["rptType"], 0)
+        self.assertEqual(len(data["macVal"]), gen.EVENT_CAPACITY)
+        self.assertEqual(len(data["macSta"]), gen.EVENT_CAPACITY)
+        self.assertEqual(len(data["macDly"]), gen.EVENT_CAPACITY)
+        self.assertEqual(len(data["extVal"]), gen.EVENT_CAPACITY)
+        self.assertTrue(all(value == 0 for value in data["macVal"][14:]))
+        self.assertTrue(all(value == 0 for value in data["macSta"][14:]))
+        self.assertTrue(all(value == 0 for value in data["macDly"][14:]))
 
     def test_shifted_ru_punctuation_is_encoded_as_chord(self):
         self.assertEqual(gen.hid_events(",", "RU"), ([225, 56, 56, 225], [1, 1, 2, 2]))

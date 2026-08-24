@@ -8,6 +8,27 @@ This document collects format/runtime facts that should not have to be rediscove
 
 Used for standalone macro groups. Native exports preserve macro names, GUIDs, event arrays, delays and repeat/cycle settings.
 
+TMAC-001A adds a sanitized generated-package canary under
+[`../fixtures/text-macros/`](../fixtures/text-macros/). The owner imported the
+serializer-generated standalone package through the official VOROTEX UI and
+observed the expected generated group and macro. This proves the generated
+standalone transport for the recorded `K15TEST` shape; it does not turn the
+canary into a general proof of uppercase, Shift, punctuation, Space, or RU
+character behavior.
+
+The status boundary is explicit:
+
+```text
+UNMODIFIED_EXPORT_ROUNDTRIP_IMPORT=PASS
+GENERATED_MACRO_CONFIG_IMPORT=PASS
+STANDALONE_GENERATED_MACRO_TRANSPORT=PROVEN
+MINIMALLY_MODIFIED_EXPORT_IMPORT=NOT_REQUIRED
+```
+
+The minimally modified native-export case remains an optional forensic
+diagnostic only. The generated package is the stronger serializer-path proof;
+run the minimal native comparison only if a future generated import fails.
+
 ### `.KB.Config`
 
 A single-profile package can contain:
