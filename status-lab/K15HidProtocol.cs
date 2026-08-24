@@ -10,7 +10,11 @@ internal static class K15HidProtocol
     public const byte DeviceWriteCommand = 0x02;
     public const byte DeviceReadCommand = 0x82;
     public const byte ActiveSlotSelector = 2;
+
+    public const byte ConstantMode = 0x81;
     public const byte SingleColorBreathingMode = 0x84;
+    public const byte TetrisMode = 0x86;
+
     public const int LightingRecordSize = 25;
     public const int SingleColorBreathingRecordIndex = 4;
     public const ushort SingleColorBreathingAddress = SingleColorBreathingRecordIndex * LightingRecordSize;
@@ -62,9 +66,8 @@ internal static class K15HidProtocol
     {
         var rgb = state switch
         {
-            // User baseline already uses red for Profile A and blue for Profile B.
-            // Notification states therefore use only unmistakable primary colors + white,
-            // with animation speed carrying the RUNNING vs WAITING distinction.
+            // RUNNING uses the hardware Tetris/Enraptured effect and therefore does not consume
+            // this record. Keep white here only as a defensive fallback for callers/tests.
             K15NormalizedState.Running => (R: (byte)0xFF, G: (byte)0xFF, B: (byte)0xFF),
             K15NormalizedState.Waiting => (R: (byte)0xFF, G: (byte)0xFF, B: (byte)0xFF),
             K15NormalizedState.DonePendingAttention => (R: (byte)0x00, G: (byte)0xFF, B: (byte)0x00),
@@ -108,6 +111,8 @@ internal static class K15HidProtocol
         record[2] = (byte)(6 - brightness);
         record[3] = 0x01;
 
+        // The W909/W910 lighting record is G,R,B on the wire. This is intentionally swapped;
+        // native VOROTEX physical tests previously proved the R/G inversion.
         for (var index = 0; index < 7; index++)
         {
             var offset = 4 + index * 3;
@@ -119,15 +124,24 @@ internal static class K15HidProtocol
         return record;
     }
 
-    public static byte[] CreateAlertHeader(ReadOnlySpan<byte> originalHeader)
+    public static byte[] CreateModeHeader(ReadOnlySpan<byte> originalHeader, byte mode)
     {
         if (originalHeader.Length != LightingRecordSize)
             throw new ArgumentException("Lighting header must be 25 bytes.", nameof(originalHeader));
 
         var header = originalHeader.ToArray();
-        header[0] = SingleColorBreathingMode;
+        header[0] = mode;
         return header;
     }
+
+    public static byte[] CreateAlertHeader(ReadOnlySpan<byte> originalHeader) =>
+        CreateModeHeader(originalHeader, SingleColorBreathingMode);
+
+    public static byte[] CreateRunningHeader(ReadOnlySpan<byte> originalHeader) =>
+        CreateModeHeader(originalHeader, TetrisMode);
+
+    public static byte[] CreateConstantHeader(ReadOnlySpan<byte> originalHeader) =>
+        CreateModeHeader(originalHeader, ConstantMode);
 
     public static bool IsSupportedDevice(ushort vendorId, ushort productId) =>
         (vendorId is 0x36A4 or 0xB6A4) &&
