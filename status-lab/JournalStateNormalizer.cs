@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace Vorotex.K15.StatusLab;
@@ -13,9 +14,10 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private readonly StateReducer _reducer;
     private readonly List<StatusInputEvent> _pending = new();
     private Task? _loopTask;
-    private int _processedLineCount;
+    private long _readOffset;
+    private string _tailRemainder = string.Empty;
 
-    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 0)
+    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 15)
     {
         _reducer = new StateReducer(doneAttentionTimeoutSeconds);
     }
@@ -32,9 +34,9 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             return;
 
         EventJournal.EnsureExists();
-        var lines = SafeReadAllLines();
-        RehydrateFromRecentJournal(lines);
-        _processedLineCount = lines.Length;
+        var replayLines = SafeReadReplayLines();
+        RehydrateFromRecentJournal(replayLines);
+        _readOffset = SafeCurrentLength();
 
         EventJournal.Append(new
         {
@@ -121,21 +123,71 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 
     private void CollectNewEvents()
     {
-        var lines = SafeReadAllLines();
-        if (lines.Length < _processedLineCount)
+        EventJournal.EnsureExists();
+        var length = SafeCurrentLength();
+        if (length < _readOffset)
         {
-            _processedLineCount = 0;
+            _readOffset = 0;
+            _tailRemainder = string.Empty;
             _pending.Clear();
         }
 
-        for (var index = _processedLineCount; index < lines.Length; index++)
+        if (length <= _readOffset)
+            return;
+
+        byte[] delta;
+        try
         {
-            var input = ParseInput(lines[index]);
+            using var stream = new FileStream(
+                EventJournal.FilePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length < _readOffset)
+            {
+                _readOffset = 0;
+                _tailRemainder = string.Empty;
+            }
+
+            stream.Seek(_readOffset, SeekOrigin.Begin);
+            var remaining = checked((int)(stream.Length - _readOffset));
+            delta = new byte[remaining];
+            var total = 0;
+            while (total < delta.Length)
+            {
+                var read = stream.Read(delta, total, delta.Length - total);
+                if (read == 0)
+                    break;
+                total += read;
+            }
+
+            if (total != delta.Length)
+                Array.Resize(ref delta, total);
+            _readOffset = stream.Position;
+        }
+        catch (IOException)
+        {
+            return;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        if (delta.Length == 0)
+            return;
+
+        var text = _tailRemainder + Encoding.UTF8.GetString(delta);
+        var lines = text.Split('\n');
+        var completeCount = lines.Length - 1;
+        for (var index = 0; index < completeCount; index++)
+        {
+            var input = ParseInput(lines[index].TrimEnd('\r'));
             if (input is not null)
                 _pending.Add(input);
         }
 
-        _processedLineCount = lines.Length;
+        _tailRemainder = text.EndsWith('\n') ? string.Empty : lines[^1];
     }
 
     private void FlushReadyEvents(DateTimeOffset watermark)
@@ -228,19 +280,42 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         }
     }
 
-    private static string[] SafeReadAllLines()
+    private static string[] SafeReadReplayLines()
+    {
+        var lines = new List<string>();
+        foreach (var path in new[] { EventJournal.ArchivePath(1), EventJournal.FilePath })
+        {
+            try
+            {
+                if (File.Exists(path))
+                    lines.AddRange(File.ReadLines(path));
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return lines.Count <= StartupReplayMaxLines
+            ? lines.ToArray()
+            : lines.Skip(lines.Count - StartupReplayMaxLines).ToArray();
+    }
+
+    private static long SafeCurrentLength()
     {
         try
         {
-            return File.ReadAllLines(EventJournal.FilePath);
+            return File.Exists(EventJournal.FilePath) ? new FileInfo(EventJournal.FilePath).Length : 0;
         }
         catch (IOException)
         {
-            return Array.Empty<string>();
+            return 0;
         }
         catch (UnauthorizedAccessException)
         {
-            return Array.Empty<string>();
+            return 0;
         }
     }
 
