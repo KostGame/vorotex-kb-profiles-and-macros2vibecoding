@@ -14,6 +14,31 @@ function Get-OptionalProperty {
     return [string]$property.Value
 }
 
+function Rotate-JournalIfNeeded {
+    param(
+        [Parameter(Mandatory)][string]$Journal,
+        [long]$MaxBytes = 5MB,
+        [int]$MaxArchives = 2
+    )
+
+    if (-not (Test-Path -LiteralPath $Journal)) { return }
+    if ((Get-Item -LiteralPath $Journal).Length -lt $MaxBytes) { return }
+
+    for ($i = $MaxArchives; $i -ge 1; $i--) {
+        $destination = $Journal + '.' + $i
+        if (Test-Path -LiteralPath $destination) {
+            Remove-Item -LiteralPath $destination -Force
+        }
+
+        $source = if ($i -eq 1) { $Journal } else { $Journal + '.' + ($i - 1) }
+        if (Test-Path -LiteralPath $source) {
+            Move-Item -LiteralPath $source -Destination $destination -Force
+        }
+    }
+
+    [IO.File]::WriteAllText($Journal, '', (New-Object Text.UTF8Encoding($false)))
+}
+
 $raw = [Console]::In.ReadToEnd()
 if ([string]::IsNullOrWhiteSpace($raw)) {
     exit 0
@@ -57,6 +82,7 @@ try {
         exit 0
     }
 
+    Rotate-JournalIfNeeded -Journal $journal
     [IO.File]::AppendAllText(
         $journal,
         $json + [Environment]::NewLine,
