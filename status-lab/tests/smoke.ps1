@@ -11,7 +11,7 @@ if (-not (Test-Path -LiteralPath $configExample)) { throw 'Annotated TOML exampl
 if (-not (Test-Path -LiteralPath $configurator)) { throw 'Local HTML configurator is missing.' }
 $html = Get-Content -LiteralPath $configurator -Raw -Encoding UTF8
 if ($html -match 'https?://') { throw 'HTML configurator must not depend on network URLs.' }
-if ($html -notmatch 'fileInput' -or $html -notmatch 'Download config.toml') {
+if ($html -notmatch 'fileInput' -or $html -notmatch 'downloadBtn') {
     throw 'HTML configurator must support local File API load and TOML download.'
 }
 $toml = Get-Content -LiteralPath $configExample -Raw -Encoding UTF8
