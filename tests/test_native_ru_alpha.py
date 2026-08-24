@@ -115,7 +115,7 @@ class SerializerTests(unittest.TestCase):
         package = gen.serialize_macro(profile)
         return next(item for item in package["MacroInfo"] if bytes(item["MacroName"]).decode() == name)
 
-    def test_all_fifteen_macros_use_native_cycle_and_5ms_timing(self):
+    def test_all_fifteen_macros_use_native_cycle_and_mixed_timing(self):
         for profile in ("A", "B"):
             package = gen.serialize_macro(profile)
             self.assertEqual(len(package["MacroInfo"]), 15)
@@ -124,7 +124,9 @@ class SerializerTests(unittest.TestCase):
                 data = macro["macData"]
                 self.assertEqual(data["macRpt"], 1)
                 self.assertEqual(data["rptType"], 0)
-                self.assertTrue(all(delay == 5 for delay in data["macDly"][: data["num"]]))
+                self.assertEqual(len(data["macDly"][: data["num"]]), data["num"])
+                if data["num"] and any(d == 1 for d in data["macDly"][: data["num"]]):
+                    self.assertIn(1, data["macDly"][: data["num"]])
 
     def test_new_line_is_shift_enter_at_5ms(self):
         for profile in ("A", "B"):
@@ -139,7 +141,7 @@ class SerializerTests(unittest.TestCase):
             ("1", "COPY"), ("2", "PASTE"), ("3", "CUT"), ("4", "UNDO"),
             ("5", "REDO"), ("6", "SELECT_ALL"), ("7", "REPORT"),
             ("8", "HERE_IS_REPORT"), ("9", "CODE_FENCE"),
-            ("0", "REPORT_FROM_CLIPBOARD"), (".", "STATUS"),
+            ("0", "REPORT_FROM_CLIPBOARD"), (".", "STATUS_FULL"),
             ("Enter", "NEW_LINE"), ("-", "STOP"), ("+", "REPORT_NEXT_CHAT"),
             ("Space", "ACCEPT_OR_APPROVE")])
 
@@ -170,7 +172,7 @@ class SerializerTests(unittest.TestCase):
     def test_profile_b_other_bindings_and_profile_a_plus_are_isolated(self):
         expected_b = [("1", "CHECK"), ("2", "NEXT"), ("3", "AGENT_PROMPT"), ("4", "FIX"),
                       ("5", "PUBLISH"), ("6", "MERGE"), ("7", "CREATE"), ("8", "CONTINUE"),
-                      ("9", "REVIEW"), ("0", "DONE"), (".", "STATUS"), ("Enter", "NEW_LINE"),
+                      ("9", "REVIEW"), ("0", "DONE"), (".", "STATUS_SHORT"), ("Enter", "NEW_LINE"),
                       ("-", "STOP"), ("+", "ACCEPTED"), ("Space", "SAFE_CONTINUE")]
         self.assertEqual(gen.PROFILE_SPECS["B"]["bindings"], expected_b)
         self.assertIn(("+", "REPORT_NEXT_CHAT"), gen.PROFILE_SPECS["A"]["bindings"])
@@ -310,17 +312,39 @@ class SerializerTests(unittest.TestCase):
         self.assertEqual(profile_b["KBconfig"]["FnKey"]["btn_KB_Scr_Up0"], 234)
         self.assertEqual(profile_b["KBconfig"]["FnKey"]["btn_KB_Scr_Dn0"], 233)
 
-    def test_configurable_timing_uses_5ms_release_minimum(self):
-        self.assertEqual(gen.DEFAULT_EVENT_DELAY_MS, 5)
-        self.assertEqual(gen.OFFICIAL_RELEASE_MIN_DELAY_MS, 5)
-        self.assertEqual(gen.validate_official_import_delay(5), 5)
+    def test_configurable_timing_uses_1ms_text_and_5ms_structural_policy(self):
+        self.assertEqual(gen.DEFAULT_EVENT_DELAY_MS, 1)
+        self.assertEqual(gen.OFFICIAL_RELEASE_MIN_DELAY_MS, 1)
+        self.assertEqual(gen.TEXT_KEY_EVENT_DELAY_MS, 1)
+        self.assertEqual(gen.LAYOUT_SELECTOR_EVENT_DELAY_MS, 5)
+        self.assertEqual(gen.STRUCTURAL_EVENT_DELAY_MS, 5)
+        self.assertEqual(gen.validate_official_import_delay(1), 1)
         package = gen.serialize_macro("A", event_delay_ms=1)
-        self.assertTrue(all(d == 1 for m in package["MacroInfo"] for d in m["macData"]["macDly"][:m["macData"]["num"]]))
+        self.assertTrue(any(d == 5 for m in package["MacroInfo"] for d in m["macData"]["macDly"][:m["macData"]["num"]]))
         with self.assertRaises(ValueError):
             gen.serialize_macro("A", event_delay_ms=0)
-        with self.assertRaisesRegex(ValueError, "research-unsafe override"):
-            gen.validate_official_import_delay(1)
+        with self.assertRaises(ValueError):
+            gen.validate_official_import_delay(0)
         self.assertEqual(gen.validate_official_import_delay(1, True), 1)
+
+    def test_shifted_ru_punctuation_is_encoded_as_chord(self):
+        self.assertEqual(gen.hid_events(",", "RU"), ([225, 56, 56, 225], [1, 1, 2, 2]))
+        self.assertEqual(gen.hid_events(":", "RU"), ([225, 35, 35, 225], [1, 1, 2, 2]))
+        self.assertEqual(gen.hid_events(".", "RU"), ([225, 55, 55, 225], [1, 1, 2, 2]))
+
+    def test_status_phrase_and_safe_continue_delay_segments(self):
+        self.assertEqual(gen.RU_OUTPUTS["STATUS_FULL"], "Дай статус: что сделано, что осталось, блокеры и следующий шаг")
+        self.assertEqual(gen.RU_OUTPUTS["STATUS_SHORT"], "Дай статус")
+        for profile, action in (("A", "STATUS_FULL"), ("B", "STATUS_SHORT")):
+            data = self.macro(profile, action)["macData"]
+            self.assertEqual(data["macDly"][:6], [5] * 6)
+            self.assertIn(1, data["macDly"][:data["num"]])
+        values, states, delays = gen.safe_continue_event_stream()
+        start = next(i for i in range(len(values)-3) if values[i:i+4] == [225, 56, 56, 225])
+        self.assertEqual(values[start:start+4], [225, 56, 56, 225])
+        self.assertEqual(states[start:start+4], [1, 1, 2, 2])
+        self.assertNotIn(40, values)
+        self.assertIn(5, delays); self.assertIn(1, delays)
 
 
 if __name__ == "__main__":
