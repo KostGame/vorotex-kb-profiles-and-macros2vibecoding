@@ -45,13 +45,13 @@ internal sealed class HudConfig
         [
             ProfileDefinition.Create("A", "TOOLS / AUTH", "red", new Dictionary<string, HudKeyDefinition>
             {
-                ["1"] = new("COPY"), ["2"] = new("PASTE + НОВАЯ СТРОКА", label: "PASTE +\nНОВАЯ СТРОКА"), ["3"] = new("CUT"),
+                ["1"] = new("COPY"), ["2"] = new("PASTE + НОВАЯ СТРОКА", label: "PASTE +\nНОВАЯ\nСТРОКА"), ["3"] = new("CUT"),
                 ["4"] = new("UNDO"), ["5"] = new("REDO"), ["6"] = new("SELECT ALL", label: "SELECT\nALL"),
                 ["7"] = new("ОТЧЕТ"), ["8"] = new("ВОТ ОТЧЕТ", label: "ВОТ\nОТЧЕТ"), ["9"] = new("```"),
                 ["0"] = new("ОТЧЕТ ИЗ БУФЕРА", label: "ОТЧЕТ ИЗ\nБУФЕРА"),
                 ["."] = new("ДАЙ СТАТУС: ЧТО СДЕЛАНО, ЧТО ОСТАЛОСЬ, БЛОКЕРЫ И СЛЕДУЮЩИЙ ШАГ", label: "ДАЙ СТАТУС:\nСДЕЛАНО · ОСТАЛОСЬ\nБЛОКЕРЫ · СЛЕД. ШАГ"),
                 ["Enter"] = new("НОВАЯ СТРОКА (SHIFT+ENTER)", "flow", "НОВАЯ\nСТРОКА"), ["-"] = new("СТОП", "flow"),
-                ["+"] = new("ПОДГОТОВЬ ОТЧЕТ ДЛЯ СЛЕДУЮЩЕГО ЧАТА", label: "ОТЧЕТ ДЛЯ\nСЛЕД. ЧАТА"),
+                ["+"] = new("ПОДГОТОВЬ ОТЧЕТ ДЛЯ СЛЕДУЮЩЕГО ЧАТА", label: "ПОДГОТОВЬ\nОТЧЕТ ДЛЯ\nСЛЕД. ЧАТА"),
                 ["Space"] = new("ПОДТВЕРЖДАЮ", "primary"),
                 ["Joystick"] = new("ОТПРАВИТЬ", "send", "ОТПРАВИТЬ"),
                 ["Encoder"] = new("ВЕРТИКАЛЬНЫЙ СКРОЛЛ", label: "СКРОЛЛ")
@@ -59,10 +59,10 @@ internal sealed class HudConfig
             ProfileDefinition.Create("B", "MAIN / VIBECODING", "blue", new Dictionary<string, HudKeyDefinition>
             {
                 ["1"] = new("ПРОВЕРЬ"), ["2"] = new("СЛЕДУЮЩИЙ ШАГ", label: "СЛЕДУЮЩИЙ\nШАГ"),
-                ["3"] = new("ПИШИ СЛЕДУЮЩИЙ ПРОМПТ ДЛЯ АГЕНТА", label: "ПИШИ СЛЕД.\nПРОМПТ ДЛЯ АГЕНТА"),
+                ["3"] = new("ПИШИ СЛЕДУЮЩИЙ ПРОМПТ ДЛЯ АГЕНТА", label: "СЛЕДУЮЩИЙ\nПРОМПТ\nАГЕНТУ"),
                 ["4"] = new("ИСПРАВЛЯЙ"), ["5"] = new("ПУБЛИКУЙ"), ["6"] = new("МЕРЖИ"),
                 ["7"] = new("СОЗДАВАЙ"), ["8"] = new("ПРОДОЛЖАЙ"), ["9"] = new("ПРОВЕДИ РЕВЬЮ", label: "ПРОВЕДИ\nРЕВЬЮ"),
-                ["0"] = new("ГОТОВО"), ["."] = new("ДАЙ СТАТУС"),
+                ["0"] = new("ГОТОВО"), ["."] = new("ДАЙ СТАТУС", label: "ДАЙ\nСТАТУС"),
                 ["Enter"] = new("НОВАЯ СТРОКА (SHIFT+ENTER)", "flow", "НОВАЯ\nСТРОКА"), ["-"] = new("СТОП", "flow"),
                 ["+"] = new("ПРИНИМАЕТСЯ", "primary"),
                 ["Space"] = new("ДАВАЙ ДАЛЬШЕ, БЕЗ PUSH/MERGE", "primary", "ДАЛЬШЕ БЕЗ\nPUSH/MERGE"),
