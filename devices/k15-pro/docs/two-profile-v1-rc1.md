@@ -18,9 +18,13 @@ Both profiles use the observed K15 storage model, including the 15
 `btn_KBKey_Enter`/`KBKey=40` submit path. The corrected Shift+Enter sequence is
 preserved as `[225, 40, 40, 225]` with states `[1, 1, 2, 2]`.
 
-The production candidate event delay is configurable and defaults to 5 ms.
-Generation at 1 ms is supported by `--event-delay-ms 1`; selector handling is
-reported separately and is not silently treated as key-event timing.
+The production/import-safe event delay is configurable and defaults to 10 ms.
+Physical Import evidence proves 10 ms and proves that 5 ms crashes VOROTEX
+Import. Therefore `MIN_PROVEN_IMPORT_SAFE_DELAY_MS=10`,
+`5MS_IMPORT_COMPATIBILITY=FAIL`, and 1 ms is untested and disabled for
+official packages. Lower values require an explicit research-unsafe override;
+they are never silently rounded. Selector handling is reported separately and
+is not silently treated as key-event timing.
 
 Ordinary text commands are compiled with the semantic `TEXT_COMMAND_SUFFIX =
 " "` value. Source phrases remain clean (for example, `Проверь`), while the
@@ -34,12 +38,9 @@ not emitted in this RC because the sanitized evidence proves only the
 `SingleProfile`/profile-count delta, not the complete native object shape.
 Unsupported fields are intentionally not guessed.
 
-An import-compatible `.KB.Config` must be generated with a read-only,
-known-good native `--kb-template`. The serializer preserves the template's
-full `FnKey`, `FnKeyMacro`, `KBKey`, `KBKeyMacro`, `KBled`, and `KBmain`
-sections while replacing only the proven macro bindings and embedded group.
-It fails closed instead of emitting the JSON-parseable but incomplete minimal
-KB shape that VOROTEX Import rejected.
+The known-good minimal single-profile KB shape is import-compatible. A native
+`--kb-template` remains optional when preserving additional device defaults is
+useful, but it is not required for import compatibility.
 
 Runtime packages, semantic maps, manifest, and generation report are written
 under the ignored `artifacts/` directory. Physical import remains an owner
