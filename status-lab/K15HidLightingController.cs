@@ -155,6 +155,26 @@ internal sealed class K15HidLightingController : IDisposable
         throw new TimeoutException($"K15 active onboard slot did not stabilize after retries ({detail}).");
     }
 
+    public void SelectActiveSlot(byte slot)
+    {
+        if (slot > 1)
+            throw new ArgumentOutOfRangeException(nameof(slot));
+
+        // This is the same bounded slot-select command used by the open W910 driver before
+        // reading/writing a profile. Status Lab uses it only to clean a notifier overlay from the
+        // profile the owner just switched away from, then immediately returns to the owner's slot.
+        Write(
+            K15HidProtocol.DeviceWriteCommand,
+            K15HidProtocol.ActiveSlotSelector,
+            0,
+            new byte[] { slot });
+        Thread.Sleep(70);
+
+        var selected = ReadActiveSlot();
+        if (selected != slot)
+            throw new TimeoutException($"K15 did not settle on requested onboard slot {slot}; observed {selected}.");
+    }
+
     public LightingSnapshot CaptureLightingSnapshot()
     {
         var slot = ReadActiveSlot();
