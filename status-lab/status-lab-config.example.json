@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "wireColorOrder": "rgb",
+  "activationSignal": {
+    "enabled": true,
+    "mode": "flowingWater",
+    "brightness": 4,
+    "speed": 7,
+    "direction": 0,
+    "durationSeconds": 3,
+    "colors": [
+      "red",
+      "blue"
+    ]
+  },
+  "profiles": {
+    "a": {
+      "normal": {
+        "enabled": true,
+        "mode": "constant",
+        "brightness": 6,
+        "speed": 7,
+        "direction": 0,
+        "durationSeconds": 0,
+        "colors": [
+          "red"
+        ]
+      },
+      "switchSignal": {
+        "enabled": true,
+        "mode": "singleColorBreathing",
+        "brightness": 6,
+        "speed": 7,
+        "direction": 0,
+        "durationSeconds": 5,
+        "colors": [
+          "red"
+        ]
+      }
+    },
+    "b": {
+      "normal": {
+        "enabled": true,
+        "mode": "constant",
+        "brightness": 6,
+        "speed": 7,
+        "direction": 0,
+        "durationSeconds": 0,
+        "colors": [
+          "blue"
+        ]
+      },
+      "switchSignal": {
+        "enabled": true,
+        "mode": "singleColorBreathing",
+        "brightness": 6,
+        "speed": 7,
+        "direction": 0,
+        "durationSeconds": 5,
+        "colors": [
+          "blue"
+        ]
+      }
+    }
+  },
+  "states": {
+    "running": {
+      "enabled": true,
+      "mode": "tetrisBlocks",
+      "brightness": 5,
+      "speed": 7,
+      "direction": 0,
+      "durationSeconds": 0,
+      "colors": [
+        "white"
+      ]
+    },
+    "waiting": {
+      "enabled": true,
+      "mode": "singleColorBreathing",
+      "brightness": 6,
+      "speed": 7,
+      "direction": 0,
+      "durationSeconds": 0,
+      "colors": [
+        "white"
+      ]
+    },
+    "done": {
+      "enabled": true,
+      "mode": "singleColorBreathing",
+      "brightness": 6,
+      "speed": 4,
+      "direction": 0,
+      "durationSeconds": 15,
+      "colors": [
+        "green"
+      ]
+    },
+    "error": {
+      "enabled": true,
+      "mode": "singleColorBreathing",
+      "brightness": 6,
+      "speed": 7,
+      "direction": 0,
+      "durationSeconds": 15,
+      "colors": [
+        "red"
+      ]
+    }
+  }
+}
