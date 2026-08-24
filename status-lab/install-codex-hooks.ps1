@@ -154,7 +154,7 @@ function Install-StatusLabHooks {
             type = 'command'
             command = $commandLine
             commandWindows = $commandLine
-            timeout = 5
+            timeout = if ($name -eq 'SessionEnd') { 3 } else { 5 }
             async = [bool]$event.Async
             statusMessage = 'K15 Status Lab'
         }
