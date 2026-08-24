@@ -44,6 +44,21 @@ VOROTEX Export
 
 See [`app/README.md`](app/README.md) for current scope and limitations.
 
+## Status Lab: Codex + Windows notification probe
+
+A Windows-only diagnostic companion lives in [`status-lab/`](status-lab/).
+
+It validates the two event inputs planned for the future K15 RGB notifier before any lighting automation is enabled:
+
+- Codex lifecycle hooks (`UserPromptSubmit`, `PermissionRequest`, `Stop`, `SessionEnd`);
+- Windows notification-store polling via `UserNotificationListener`.
+
+The lab writes a sanitized local JSONL timeline under `%LOCALAPPDATA%\VOROTEX\K15 Status Lab\events.jsonl`. Prompt text, assistant text, tool input, transcript content and notification bodies are deliberately excluded.
+
+The notification path intentionally polls current toasts instead of subscribing to `NotificationChanged`, which avoids current unpackaged-desktop event-subscription limitations while keeping deployment portable. The current lab does **not** write K15 lighting yet; live WebHID lighting remains a separately proven hardware capability.
+
+See [`status-lab/README.md`](status-lab/README.md) for the canary procedure.
+
 ## Legacy/research direct-file installation
 
 Direct mutation of live VOROTEX installation files is **not** the normal installation path anymore. It remains documented only as a research/recovery technique for old experiments.
