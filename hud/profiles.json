@@ -12,23 +12,70 @@
       "title": "TOOLS / AUTH",
       "color": "red",
       "keys": {
-        "1": { "action": "COPY" },
-        "2": { "action": "PASTE + НОВАЯ СТРОКА", "label": "PASTE +\nНОВАЯ\nСТРОКА" },
-        "3": { "action": "CUT" },
-        "4": { "action": "UNDO" },
-        "5": { "action": "REDO" },
-        "6": { "action": "SELECT ALL", "label": "SELECT\nALL" },
-        "7": { "action": "ОТЧЕТ" },
-        "8": { "action": "ВОТ ОТЧЕТ", "label": "ВОТ\nОТЧЕТ" },
-        "9": { "action": "```" },
-        "0": { "action": "ОТЧЕТ ИЗ БУФЕРА", "label": "ОТЧЕТ ИЗ\nБУФЕРА" },
-        ".": { "action": "ДАЙ СТАТУС: ЧТО СДЕЛАНО, ЧТО ОСТАЛОСЬ, БЛОКЕРЫ И СЛЕДУЮЩИЙ ШАГ", "label": "ДАЙ СТАТУС:\nСДЕЛАНО · ОСТАЛОСЬ\nБЛОКЕРЫ · СЛЕД. ШАГ" },
-        "Enter": { "action": "НОВАЯ СТРОКА (SHIFT+ENTER)", "label": "НОВАЯ\nСТРОКА", "accent": "flow" },
-        "-": { "action": "СТОП", "accent": "flow" },
-        "+": { "action": "ПОДГОТОВЬ ОТЧЕТ ДЛЯ СЛЕДУЮЩЕГО ЧАТА", "label": "ПОДГОТОВЬ\nОТЧЕТ ДЛЯ\nСЛЕД. ЧАТА" },
-        "Space": { "action": "ПОДТВЕРЖДАЮ", "accent": "primary" },
-        "Joystick": { "action": "ОТПРАВИТЬ", "label": "ОТПРАВИТЬ", "accent": "send" },
-        "Encoder": { "action": "ВЕРТИКАЛЬНЫЙ СКРОЛЛ", "label": "СКРОЛЛ" }
+        "0": {
+          "action": "ОТЧЕТ ИЗ БУФЕРА",
+          "label": "ОТЧЕТ ИЗ\nБУФЕРА"
+        },
+        "1": {
+          "action": "COPY"
+        },
+        "2": {
+          "action": "PASTE + НОВАЯ СТРОКА",
+          "label": "PASTE +\nНОВАЯ\nСТРОКА"
+        },
+        "3": {
+          "action": "CUT"
+        },
+        "4": {
+          "action": "UNDO"
+        },
+        "5": {
+          "action": "REDO"
+        },
+        "6": {
+          "action": "SELECT ALL",
+          "label": "SELECT\nALL"
+        },
+        "7": {
+          "action": "ОТЧЕТ"
+        },
+        "8": {
+          "action": "ВОТ ОТЧЕТ",
+          "label": "ВОТ\nОТЧЕТ"
+        },
+        "9": {
+          "action": "```"
+        },
+        ".": {
+          "action": "ДАЙ СТАТУС: ЧТО СДЕЛАНО, ЧТО ОСТАЛОСЬ, БЛОКЕРЫ И СЛЕДУЮЩИЙ ШАГ",
+          "label": "ПОЛНЫЙ\\nСТАТУС"
+        },
+        "Enter": {
+          "action": "НОВАЯ СТРОКА (SHIFT+ENTER)",
+          "label": "НОВАЯ\nСТРОКА",
+          "accent": "flow"
+        },
+        "-": {
+          "action": "СТОП",
+          "accent": "flow"
+        },
+        "+": {
+          "action": "ПОДГОТОВЬ ОТЧЕТ ДЛЯ СЛЕДУЮЩЕГО ЧАТА",
+          "label": "ОТЧЕТ\\nДЛЯ СЛЕД.\\nЧАТА"
+        },
+        "Space": {
+          "action": "ПОДТВЕРЖДАЮ",
+          "accent": "primary"
+        },
+        "Joystick": {
+          "action": "ОТПРАВИТЬ",
+          "label": "ОТПРАВИТЬ",
+          "accent": "send"
+        },
+        "Encoder": {
+          "action": "ВЕРТИКАЛЬНЫЙ СКРОЛЛ",
+          "label": "СКРОЛЛ"
+        }
       }
     },
     {
@@ -36,22 +83,66 @@
       "title": "MAIN / VIBECODING",
       "color": "blue",
       "keys": {
-        "1": { "action": "ПРОВЕРЬ" },
-        "2": { "action": "СЛЕДУЮЩИЙ ШАГ", "label": "СЛЕДУЮЩИЙ\nШАГ" },
-        "3": { "action": "ПИШИ СЛЕДУЮЩИЙ ПРОМПТ ДЛЯ АГЕНТА", "label": "СЛЕДУЮЩИЙ\nПРОМПТ\nАГЕНТУ" },
-        "4": { "action": "ИСПРАВЛЯЙ" },
-        "5": { "action": "ПУБЛИКУЙ" },
-        "6": { "action": "МЕРЖИ" },
-        "7": { "action": "СОЗДАВАЙ" },
-        "8": { "action": "ПРОДОЛЖАЙ" },
-        "9": { "action": "ПРОВЕДИ РЕВЬЮ", "label": "ПРОВЕДИ\nРЕВЬЮ" },
-        "0": { "action": "ГОТОВО" },
-        ".": { "action": "ДАЙ СТАТУС", "label": "ДАЙ\nСТАТУС" },
-        "Enter": { "action": "НОВАЯ СТРОКА (SHIFT+ENTER)", "label": "НОВАЯ\nСТРОКА", "accent": "flow" },
-        "-": { "action": "СТОП", "accent": "flow" },
-        "+": { "action": "ПРИНИМАЕТСЯ", "accent": "primary" },
-        "Space": { "action": "ДАВАЙ ДАЛЬШЕ, БЕЗ PUSH/MERGE", "label": "ДАЛЬШЕ БЕЗ\nPUSH/MERGE", "accent": "primary" },
-        "Joystick": { "action": "ОТПРАВИТЬ", "label": "ОТПРАВИТЬ", "accent": "send" }
+        "0": {
+          "action": "ГОТОВО"
+        },
+        "1": {
+          "action": "ПРОВЕРЬ"
+        },
+        "2": {
+          "action": "СЛЕДУЮЩИЙ ШАГ",
+          "label": "СЛЕДУЮЩИЙ\nШАГ"
+        },
+        "3": {
+          "action": "ПИШИ СЛЕДУЮЩИЙ ПРОМПТ ДЛЯ АГЕНТА",
+          "label": "СЛЕД. ПРОМПТ\\nАГЕНТУ"
+        },
+        "4": {
+          "action": "ИСПРАВЛЯЙ"
+        },
+        "5": {
+          "action": "ПУБЛИКУЙ"
+        },
+        "6": {
+          "action": "МЕРЖИ"
+        },
+        "7": {
+          "action": "СОЗДАВАЙ"
+        },
+        "8": {
+          "action": "ПРОДОЛЖАЙ"
+        },
+        "9": {
+          "action": "ПРОВЕДИ РЕВЬЮ",
+          "label": "ПРОВЕДИ\\nРЕВЬЮ"
+        },
+        ".": {
+          "action": "ДАЙ СТАТУС",
+          "label": "ДАЙ\nСТАТУС"
+        },
+        "Enter": {
+          "action": "НОВАЯ СТРОКА (SHIFT+ENTER)",
+          "label": "НОВАЯ\nСТРОКА",
+          "accent": "flow"
+        },
+        "-": {
+          "action": "СТОП",
+          "accent": "flow"
+        },
+        "+": {
+          "action": "ПРИНИМАЕТСЯ",
+          "accent": "primary"
+        },
+        "Space": {
+          "action": "ДАВАЙ ДАЛЬШЕ, БЕЗ PUSH/MERGE",
+          "label": "ДАЛЬШЕ\\nБЕЗ PUSH/MERGE",
+          "accent": "primary"
+        },
+        "Joystick": {
+          "action": "ОТПРАВИТЬ",
+          "label": "ОТПРАВИТЬ",
+          "accent": "send"
+        }
       }
     }
   ]
