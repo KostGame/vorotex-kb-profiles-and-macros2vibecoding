@@ -18,13 +18,16 @@ Both profiles use the observed K15 storage model, including the 15
 `btn_KBKey_Enter`/`KBKey=40` submit path. The corrected Shift+Enter sequence is
 preserved as `[225, 40, 40, 225]` with states `[1, 1, 2, 2]`.
 
-The production/import-safe event delay is configurable and defaults to 10 ms.
-Physical Import evidence proves 10 ms and proves that 5 ms crashes VOROTEX
-Import. Therefore `MIN_PROVEN_IMPORT_SAFE_DELAY_MS=10`,
-`5MS_IMPORT_COMPATIBILITY=FAIL`, and 1 ms is untested and disabled for
-official packages. Lower values require an explicit research-unsafe override;
-they are never silently rounded. Selector handling is reported separately and
-is not silently treated as key-event timing.
+The production event delay is configurable and defaults to 5 ms. Physical
+Import evidence proves that a full native-template Profile B package at 5 ms,
+including the trailing text suffix, imports successfully. Therefore
+`KEY_EVENT_DELAY_MS=5` and `5MS_IMPORT_COMPATIBILITY=PROVEN_POSSIBLE`. A
+matching minimal 5 ms package
+has also crashed, so Import determinism from file bytes alone is not proven.
+One millisecond remains untested and disabled for official packages; lower
+values require an explicit research-unsafe override and are never silently
+rounded. Selector handling is reported separately and is not silently treated
+as key-event timing.
 
 Ordinary text commands are compiled with the semantic `TEXT_COMMAND_SUFFIX =
 " "` value. Source phrases remain clean (for example, `Проверь`), while the
@@ -40,7 +43,25 @@ Unsupported fields are intentionally not guessed.
 
 The known-good minimal single-profile KB shape is import-compatible. A native
 `--kb-template` remains optional when preserving additional device defaults is
-useful, but it is not required for import compatibility.
+useful, but it is not required for import compatibility. The physically
+successful Profile B 5 ms package uses the full native-template shape and is
+the preferred V1 serialization baseline.
+
+## Import-state log for future owner tests
+
+VOROTEX Import is non-pruning and its result is not yet deterministic from file
+bytes alone. Before each owner Import test, record:
+
+- application freshly restarted: YES/NO;
+- target profile already exists: YES/NO;
+- macro group with the same GUID exists: YES/NO;
+- macro group with the same name exists: YES/NO;
+- import-file SHA-256;
+- result: PASS/CRASH.
+
+Do not automate cleanup of profiles or macro groups. Collision suffixes,
+accumulated groups, import order, and stale application state are candidates
+for later controlled research, not proven causes.
 
 Runtime packages, semantic maps, manifest, and generation report are written
 under the ignored `artifacts/` directory. Physical import remains an owner

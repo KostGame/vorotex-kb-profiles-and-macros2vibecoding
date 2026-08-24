@@ -99,7 +99,7 @@ class SerializerTests(unittest.TestCase):
         package = gen.serialize_macro(profile)
         return next(item for item in package["MacroInfo"] if bytes(item["MacroName"]).decode() == name)
 
-    def test_all_fifteen_macros_use_native_cycle_and_10ms_timing(self):
+    def test_all_fifteen_macros_use_native_cycle_and_5ms_timing(self):
         for profile in ("A", "B"):
             package = gen.serialize_macro(profile)
             self.assertEqual(len(package["MacroInfo"]), 15)
@@ -108,15 +108,15 @@ class SerializerTests(unittest.TestCase):
                 data = macro["macData"]
                 self.assertEqual(data["macRpt"], 1)
                 self.assertEqual(data["rptType"], 0)
-                self.assertTrue(all(delay == 10 for delay in data["macDly"][: data["num"]]))
+                self.assertTrue(all(delay == 5 for delay in data["macDly"][: data["num"]]))
 
-    def test_new_line_is_shift_enter_at_10ms(self):
+    def test_new_line_is_shift_enter_at_5ms(self):
         for profile in ("A", "B"):
             macro = self.macro(profile, "NEW_LINE")["macData"]
             self.assertEqual(macro["num"], 4)
             self.assertEqual(macro["macVal"][:4], [225, 40, 40, 225])
             self.assertEqual(macro["macSta"][:4], [1, 1, 2, 2])
-            self.assertEqual(macro["macDly"][:4], [10, 10, 10, 10])
+            self.assertEqual(macro["macDly"][:4], [5, 5, 5, 5])
 
     def test_profile_a_exact_map(self):
         self.assertEqual(gen.PROFILE_SPECS["A"]["bindings"], [
@@ -201,11 +201,6 @@ class SerializerTests(unittest.TestCase):
         self.assertEqual(minimal["KBconfig"]["FnKey"], {})
         self.assertEqual(minimal["KBconfig"]["FnKeyMacro"], {})
         self.assertEqual(minimal["KBconfig"]["KBled"], [])
-        output = ROOT / "must-not-exist-without-template"
-        self.assertFalse(output.exists())
-        with self.assertRaisesRegex(ValueError, "official import packages require event delay >= 10 ms"):
-            gen.generate(output, event_delay_ms=5)
-        self.assertFalse(output.exists())
         template = self.native_template()
         package, _ = gen.serialize_kb("B", template)
         self.assertEqual(package["KBconfig"]["FnKey"], template["KBconfig"]["FnKey"])
@@ -213,18 +208,17 @@ class SerializerTests(unittest.TestCase):
         self.assertEqual(package["KBconfig"]["KBled"], template["KBconfig"]["KBled"])
         self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_native_sentinel"], 91)
 
-    def test_configurable_timing_is_research_only_below_import_safe_minimum(self):
-        self.assertEqual(gen.DEFAULT_EVENT_DELAY_MS, 10)
-        self.assertEqual(gen.OFFICIAL_IMPORT_MIN_DELAY_MS, 10)
+    def test_configurable_timing_uses_5ms_release_minimum(self):
+        self.assertEqual(gen.DEFAULT_EVENT_DELAY_MS, 5)
+        self.assertEqual(gen.OFFICIAL_RELEASE_MIN_DELAY_MS, 5)
+        self.assertEqual(gen.validate_official_import_delay(5), 5)
         package = gen.serialize_macro("A", event_delay_ms=1)
         self.assertTrue(all(d == 1 for m in package["MacroInfo"] for d in m["macData"]["macDly"][:m["macData"]["num"]]))
         with self.assertRaises(ValueError):
             gen.serialize_macro("A", event_delay_ms=0)
-        output = ROOT / "must-not-exist-below-official-minimum"
-        self.assertFalse(output.exists())
         with self.assertRaisesRegex(ValueError, "research-unsafe override"):
-            gen.generate(output, event_delay_ms=1)
-        self.assertFalse(output.exists())
+            gen.validate_official_import_delay(1)
+        self.assertEqual(gen.validate_official_import_delay(1, True), 1)
 
 
 if __name__ == "__main__":

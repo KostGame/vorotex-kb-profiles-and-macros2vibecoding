@@ -1,8 +1,9 @@
 # Native RU Alpha import package (historical single-profile baseline)
 
 The owner-tested single-profile baseline documented here used 10 ms event
-timing. The current two-profile V1 RC retains this import-safe 10 ms default:
-see [`two-profile-v1-rc1.md`](two-profile-v1-rc1.md). Profile B Space is safe
+timing. The current two-profile V1 RC uses a physically imported 5 ms
+full-template Profile B baseline; see
+[`two-profile-v1-rc1.md`](two-profile-v1-rc1.md). Profile B Space is safe
 continuation rather than confirmation.
 
 The generator separates the semantic RU profile from the VOROTEX serializer:
@@ -31,7 +32,7 @@ macDly: 10, 10, 10, 10
 
 This historical package used `macRpt=1`, `rptType=0`, and a 10 ms event delay.
 There is no automatic submit event. The V1 RC generator makes the delay
-configurable, but official packages default to and require at least 10 ms.
+configurable, defaults to 5 ms, and keeps 1 ms research-only until tested.
 
 ## Generate
 

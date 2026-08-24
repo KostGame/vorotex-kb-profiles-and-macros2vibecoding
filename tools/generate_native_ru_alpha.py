@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 VERSION = "0.2.0"
-DEFAULT_EVENT_DELAY_MS = 10
-OFFICIAL_IMPORT_MIN_DELAY_MS = 10
+DEFAULT_EVENT_DELAY_MS = 5
+OFFICIAL_RELEASE_MIN_DELAY_MS = 5
 EVENT_DELAY_MS = DEFAULT_EVENT_DELAY_MS
 TEXT_COMMAND_SUFFIX = " "
 EVENT_CAPACITY = 500
@@ -147,6 +147,17 @@ PHYSICAL_ACTIONS = PROFILE_SPECS["B"]["bindings"]
 def validate_delay(event_delay_ms: int) -> int:
     if event_delay_ms < 1:
         raise ValueError("event delay must be at least 1 ms")
+    return event_delay_ms
+
+
+def validate_official_import_delay(event_delay_ms: int,
+                                  research_unsafe_allow_delay_below_min: bool = False) -> int:
+    validate_delay(event_delay_ms)
+    if event_delay_ms < OFFICIAL_RELEASE_MIN_DELAY_MS and not research_unsafe_allow_delay_below_min:
+        raise ValueError(
+            f"official release packages require event delay >= {OFFICIAL_RELEASE_MIN_DELAY_MS} ms; "
+            "use the explicit research-unsafe override only for non-release investigation"
+        )
     return event_delay_ms
 
 
@@ -348,12 +359,7 @@ def _profile_paths(output_dir: Path, profile: str) -> tuple[Path, Path]:
 def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None = None,
              event_delay_ms: int = DEFAULT_EVENT_DELAY_MS,
              research_unsafe_allow_delay_below_min: bool = False) -> dict[str, Any]:
-    validate_delay(event_delay_ms)
-    if event_delay_ms < OFFICIAL_IMPORT_MIN_DELAY_MS and not research_unsafe_allow_delay_below_min:
-        raise ValueError(
-            f"official import packages require event delay >= {OFFICIAL_IMPORT_MIN_DELAY_MS} ms; "
-            "use the explicit research-unsafe override only for non-release investigation"
-        )
+    validate_official_import_delay(event_delay_ms, research_unsafe_allow_delay_below_min)
     template = json.loads(kb_template_path.read_text(encoding="utf-8")) if kb_template_path else None
     output_dir.mkdir(parents=True, exist_ok=True)
     package_info: dict[str, Any] = {}
@@ -376,9 +382,9 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "selectorOrder": "Ctrl down, Shift down, layout key down/up, Shift up, Ctrl up",
         "selectorSettleDelayMs": SELECTOR_SETTLE_DELAY_MS},
         "eventDelayMs": event_delay_ms, "defaultEventDelayMs": DEFAULT_EVENT_DELAY_MS,
-        "officialImportMinDelayMs": OFFICIAL_IMPORT_MIN_DELAY_MS,
+        "officialReleaseMinDelayMs": OFFICIAL_RELEASE_MIN_DELAY_MS,
         "researchUnsafeDelayOverride": research_unsafe_allow_delay_below_min,
-        "fiveMsImportCompatibility": "FAIL", "oneMsImportCompatibility": "UNTESTED_AND_DISABLED",
+        "fiveMsImportCompatibility": "PROVEN_POSSIBLE", "oneMsImportCompatibility": "UNTESTED_AND_DISABLED",
         "textCommandSuffix": TEXT_COMMAND_SUFFIX, "autoPunctuation": False,
         "oneMsConfigSupported": True, "macRpt": 1, "rptType": 0, "packages": package_info,
         "semanticMaps": maps_path.name, "physicalSlotModel": [{"control": c, "storage": s, "memMacId": m}
@@ -400,11 +406,12 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "PROFILE_A_REPORT_FROM_CLIPBOARD=PASS", "REPORT_FROM_CLIPBOARD_AUTO_SUBMIT=NO",
         'TEXT_COMMAND_SUFFIX=" "', "AUTO_PUNCTUATION=NO", "ALL_TEXT_SUFFIX_TESTS=PASS",
         f"DEFAULT_KEY_EVENT_DELAY_MS={DEFAULT_EVENT_DELAY_MS}",
-        f"MIN_PROVEN_IMPORT_SAFE_DELAY_MS={OFFICIAL_IMPORT_MIN_DELAY_MS}",
-        "5MS_IMPORT_COMPATIBILITY=FAIL", "1MS_IMPORT_COMPATIBILITY=UNTESTED_AND_DISABLED",
+        f"OFFICIAL_RELEASE_MIN_DELAY_MS={OFFICIAL_RELEASE_MIN_DELAY_MS}",
+        "5MS_IMPORT_COMPATIBILITY=PROVEN_POSSIBLE", "1MS_IMPORT_COMPATIBILITY=UNTESTED_AND_DISABLED",
+        "IMPORT_DETERMINISM=NOT_PROVEN",
         "ONE_MS_CONFIG_SUPPORTED=RESEARCH_UNSAFE_OVERRIDE_ONLY",
         "ALL_PROFILE_A_RU_TEXT_ROUNDTRIP=PASS", "ALL_PROFILE_B_RU_TEXT_ROUNDTRIP=PASS",
-        "SHIFT_ENTER_10MS=PASS", "JOYSTICK_NATIVE_ENTER=PASS", "ALL_15_PHYSICAL_BINDINGS_PROFILE_A=PASS",
+        "SHIFT_ENTER_5MS=PASS", "JOYSTICK_NATIVE_ENTER=PASS", "ALL_15_PHYSICAL_BINDINGS_PROFILE_A=PASS",
         "ALL_15_PHYSICAL_BINDINGS_PROFILE_B=PASS", "MEMMACID_MAPPING_PROVEN=PASS",
         "RGB_SCOPE=UNCHANGED_PASSTHROUGH", "ALL_PROFILES_PACKAGE_READY=PARTIAL",
         "ALL_PROFILES_KB_CONFIG=NOT CREATED", "VOROTEX_IMPORT_IS_NON_PRUNING=PROVEN",
@@ -423,10 +430,10 @@ def main() -> int:
     parser.add_argument("--layout", choices=("RU", "EN"), default="RU")
     parser.add_argument("--kb-template", type=Path)
     parser.add_argument("--event-delay-ms", type=int, default=DEFAULT_EVENT_DELAY_MS)
-    parser.add_argument("--research-unsafe-allow-delay-below-10", action="store_true")
+    parser.add_argument("--research-unsafe-allow-delay-below-5", action="store_true")
     args = parser.parse_args()
     generate(args.output_dir, args.layout, args.kb_template, args.event_delay_ms,
-             args.research_unsafe_allow_delay_below_10)
+             args.research_unsafe_allow_delay_below_5)
     return 0
 
 
