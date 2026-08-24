@@ -11,6 +11,7 @@ These documents contain the latest physically validated layout facts and should 
 - [`profile-b-main-vibecoding.md`](profile-b-main-vibecoding.md) — accepted Profile B map and safety separation.
 - [`layout-design-decisions.md`](layout-design-decisions.md) — rationale behind the current two-profile UX and safety choices.
 - [`native-vorotex-findings.md`](native-vorotex-findings.md) — import/export, macro, timing, lighting, encoder and statefulness findings.
+- [`../fixtures/text-macros/README.md`](../fixtures/text-macros/README.md) — sanitized TMAC-001A generated standalone macro import canary and acceptance matrix.
 - [`layout-change-protocol.md`](layout-change-protocol.md) — safe procedure for changing a layout and validating it.
 - [`research-backlog.md`](research-backlog.md) — intentionally unresolved/deferred research.
 - [`../schema/v1-layout-baseline.json`](../schema/v1-layout-baseline.json) — machine-readable V1 layout snapshot for tools/agents.
