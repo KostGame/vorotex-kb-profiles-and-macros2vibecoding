@@ -197,6 +197,8 @@ Current reducer rules:
 
 A 400 ms reorder buffer is used because hook and Windows-notification writers are independent processes and their JSONL append order can differ slightly from event timestamps.
 
+The normalizer also binds an OpenAI toast that appears up to 2 seconds **before** a `PermissionRequest` hook. This was observed physically because the notification writer can win the race by ~100 ms. A `DONE_PENDING_ATTENTION` / `ERROR` state is bounded to 15 seconds; if the completion toast remains in Windows Notification Center, Status Lab restores `NORMAL` automatically instead of holding the K15 lighting indefinitely.
+
 The tray action **Сбросить состояние в NORMAL** provides manual acknowledgement during the canary.
 
 RGB writes are still disabled in this stage.
@@ -227,7 +229,7 @@ Close the official VOROTEX software and W910 WebDriver before enabling the RGB c
 Current canary colors use hardware single-color breathing:
 
 ```text
-RUNNING                blue
+RUNNING                violet
 WAITING                amber
 DONE_PENDING_ATTENTION green
 ERROR                  red
@@ -257,13 +259,13 @@ NORMAL
   -> original lighting restored
 
 UserPromptSubmit
-  -> blue breathing
+  -> violet breathing
 
 PermissionRequest
   -> amber breathing
 
 permission notification resolved
-  -> blue breathing
+  -> violet breathing
 
 Stop
   -> green breathing
