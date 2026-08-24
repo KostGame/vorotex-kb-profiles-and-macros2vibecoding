@@ -8,8 +8,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 {
     private readonly WindowsNotificationPoller _notificationPoller = new();
     private readonly JournalStateNormalizer _stateNormalizer = new();
+    private readonly K15RgbCanary _rgbCanary = new();
     private readonly NotifyIcon _trayIcon;
     private readonly ToolStripMenuItem _stateStatusItem;
+    private readonly ToolStripMenuItem _rgbStatusItem;
+    private readonly ToolStripMenuItem _rgbCanaryItem;
     private readonly ToolStripMenuItem _notificationStatusItem;
     private readonly ToolStripMenuItem _codexHookItem;
     private bool _exiting;
@@ -33,6 +36,12 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         {
             Enabled = false
         };
+        _rgbStatusItem = new ToolStripMenuItem("RGB: OFF")
+        {
+            Enabled = false
+        };
+        _rgbCanaryItem = new ToolStripMenuItem("Включить K15 RGB canary");
+        _rgbCanaryItem.Click += async (_, _) => await ToggleRgbCanaryAsync();
         _codexHookItem = new ToolStripMenuItem("Установить Codex hooks");
         _codexHookItem.Click += async (_, _) => await InstallCodexHooksAsync();
 
@@ -62,7 +71,12 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             }
         };
 
-        _stateNormalizer.StateChanged += (state, transition) => UpdateNormalizedState(state, transition);
+        _stateNormalizer.StateChanged += (state, transition) =>
+        {
+            UpdateNormalizedState(state, transition);
+            _ = _rgbCanary.ApplyStateAsync(state);
+        };
+        _rgbCanary.StatusChanged += UpdateRgbStatus;
         _stateNormalizer.Start();
         _ = StartNotificationPollingAsync();
     }
@@ -72,8 +86,10 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add(_stateStatusItem);
         menu.Items.Add(_notificationStatusItem);
+        menu.Items.Add(_rgbStatusItem);
         menu.Items.Add("Сбросить состояние в NORMAL", null, (_, _) => _stateNormalizer.Acknowledge());
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(_rgbCanaryItem);
         menu.Items.Add(_codexHookItem);
         menu.Items.Add("Открыть журнал событий", null, (_, _) => OpenPath(EventJournal.FilePath));
         menu.Items.Add("Открыть папку журнала", null, (_, _) => OpenPath(EventJournal.DirectoryPath));
@@ -91,6 +107,82 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         {
             _stateStatusItem.Text = $"Состояние: {wire} · dry-run";
             _trayIcon.Text = $"K15 Status Lab · {wire}";
+        }
+
+        try
+        {
+            if (_trayIcon.ContextMenuStrip?.InvokeRequired == true)
+                _trayIcon.ContextMenuStrip.BeginInvoke(Apply);
+            else
+                Apply();
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task ToggleRgbCanaryAsync()
+    {
+        if (_rgbCanary.Enabled)
+        {
+            _rgbCanaryItem.Enabled = false;
+            try
+            {
+                await _rgbCanary.DisableAsync();
+                _rgbCanaryItem.Text = "Включить K15 RGB canary";
+            }
+            finally
+            {
+                _rgbCanaryItem.Enabled = true;
+            }
+            return;
+        }
+
+        var result = MessageBox.Show(
+            "Включить физическую RGB-индикацию K15?\n\n" +
+            "Canary меняет только lighting state через доказанный HID-протокол и сохраняет исходные байты для восстановления. " +
+            "Закрой VOROTEX и W910 WebDriver перед тестом. " +
+            "Во время canary не переключай аппаратный профиль K15.\n\nПродолжить?",
+            "VOROTEX K15 RGB canary",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+
+        if (result != DialogResult.Yes)
+            return;
+
+        _rgbCanaryItem.Enabled = false;
+        try
+        {
+            await _rgbCanary.EnableAsync(_stateNormalizer.State);
+            _rgbCanaryItem.Text = "Выключить K15 RGB canary";
+        }
+        catch (Exception ex)
+        {
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "k15_rgb",
+                @event = "rgb_enable_failed",
+                exception = ex.GetType().FullName,
+                hresult = ex.HResult,
+                message = ex.Message
+            });
+            ShowBalloon($"RGB canary не запущен: {ex.Message}");
+        }
+        finally
+        {
+            _rgbCanaryItem.Enabled = true;
+        }
+    }
+
+    private void UpdateRgbStatus(string status)
+    {
+        void Apply()
+        {
+            _rgbStatusItem.Text = status;
+            _rgbCanaryItem.Text = _rgbCanary.Enabled
+                ? "Выключить K15 RGB canary"
+                : "Включить K15 RGB canary";
         }
 
         try
@@ -277,6 +369,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 
         await _notificationPoller.DisposeAsync();
         await _stateNormalizer.DisposeAsync();
+        await _rgbCanary.DisposeAsync();
         ExitThread();
     }
 
