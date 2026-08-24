@@ -19,13 +19,14 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _rgbCanaryItem;
     private readonly ToolStripMenuItem _notificationStatusItem;
     private readonly ToolStripMenuItem _codexHookItem;
+    private readonly ToolStripMenuItem _loggingItem;
     private bool _exiting;
 
     public StatusLabApplicationContext()
     {
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
-        _stateNormalizer = new JournalStateNormalizer(_config.States.Done.DurationSeconds);
+        _stateNormalizer = new JournalStateNormalizer(_config.DoneAttentionTimeoutSeconds);
         _rgbCanary = new K15RgbCanary(_config);
         _trackingOnIcon = TrayIconFactory.Create(trackingEnabled: true);
         _trackingOffIcon = TrayIconFactory.Create(trackingEnabled: false);
@@ -39,19 +40,23 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             rgbConfigPath = StatusLabConfig.FilePath,
             configSchema = _config.SchemaVersion,
             wireColorOrder = _config.WireColorOrder.ToString(),
-            doneAttentionTimeoutSeconds = _config.States.Done.DurationSeconds,
+            doneAttentionTimeoutSeconds = _config.DoneAttentionTimeoutSeconds,
+            detailedLogging = EventJournal.DetailedLoggingEnabled,
             configWarning = _config.LoadWarning,
             hardwareProfileSelectionPolicy = "observe_only"
         });
 
         _stateStatusItem = new ToolStripMenuItem("Состояние: NORMAL") { Enabled = false };
-        _trackingStatusItem = new ToolStripMenuItem("RGB-отслеживание: ВЫКЛ") { Enabled = false };
+        _trackingStatusItem = new ToolStripMenuItem("RGB-индикация: ВЫКЛ") { Enabled = false };
         _notificationStatusItem = new ToolStripMenuItem("Уведомления: запуск...") { Enabled = false };
         _rgbStatusItem = new ToolStripMenuItem("RGB: OFF") { Enabled = false };
-        _rgbCanaryItem = new ToolStripMenuItem("Включить K15 RGB tracking");
+        _rgbCanaryItem = new ToolStripMenuItem("Включить RGB-индикацию статусов");
         _rgbCanaryItem.Click += async (_, _) => await ToggleRgbCanaryAsync();
         _codexHookItem = new ToolStripMenuItem("Установить Codex hooks");
         _codexHookItem.Click += async (_, _) => await InstallCodexHooksAsync();
+        _loggingItem = new ToolStripMenuItem();
+        _loggingItem.Click += (_, _) => ToggleDetailedLogging();
+        RefreshLoggingItem();
 
         _trayIcon = new NotifyIcon
         {
@@ -92,6 +97,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         menu.Items.Add("Открыть K15 Lighting Lab", null, async (_, _) => await OpenLightingLabAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_codexHookItem);
+        menu.Items.Add(_loggingItem);
         menu.Items.Add("Открыть журнал событий", null, (_, _) => OpenPath(EventJournal.FilePath));
         menu.Items.Add("Открыть папку журнала", null, (_, _) => OpenPath(EventJournal.DirectoryPath));
         menu.Items.Add("Очистить журнал", null, (_, _) => ClearJournal());
@@ -122,7 +128,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         {
             if (!_rgbCanary.Enabled)
             {
-                ShowBalloon("Сначала включи K15 RGB tracking. Для полного исследования режимов используй отдельный K15 Lighting Lab.");
+                ShowBalloon("Сначала включи RGB-индикацию статусов. Для полного исследования режимов используй отдельный K15 Lighting Lab.");
                 return;
             }
             try { await _rgbCanary.TestEffectAsync(mode); }
@@ -150,7 +156,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             try
             {
                 await _rgbCanary.DisableAsync();
-                _rgbCanaryItem.Text = "Включить K15 RGB tracking";
+                _rgbCanaryItem.Text = "Включить RGB-индикацию статусов";
             }
             finally
             {
@@ -161,11 +167,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         }
 
         var result = MessageBox.Show(
-            "Включить физическое RGB-отслеживание K15?\n\n" +
+            "Включить физическую RGB-индикацию статусов K15?\n\n" +
             "Status Lab только наблюдает физически выбранный Profile A/B и НИКОГДА не переключает его программно. " +
             "Цвет задаёт профиль, состояния и короткие сигналы меняют эффект/палитру. NORMAL восстанавливает exact onboard baseline. " +
             "Закрой W910 WebDriver/VOROTEX перед тестом.\n\nПродолжить?",
-            "VOROTEX K15 RGB tracking", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            "VOROTEX K15 RGB-индикация", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (result != DialogResult.Yes)
             return;
 
@@ -173,7 +179,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         try
         {
             await _rgbCanary.EnableAsync(_stateNormalizer.State);
-            _rgbCanaryItem.Text = "Выключить K15 RGB tracking";
+            _rgbCanaryItem.Text = "Выключить RGB-индикацию статусов";
         }
         catch (Exception ex)
         {
@@ -186,7 +192,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
                 hresult = ex.HResult,
                 message = ex.Message
             });
-            ShowBalloon($"RGB tracking не запущен: {ex.Message}");
+            ShowBalloon($"RGB-индикация не запущена: {ex.Message}");
         }
         finally
         {
@@ -200,9 +206,9 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         Ui(() =>
         {
             var enabled = _rgbCanary.Enabled;
-            _trackingStatusItem.Text = enabled ? "RGB-отслеживание: ВКЛ" : "RGB-отслеживание: ВЫКЛ";
+            _trackingStatusItem.Text = enabled ? "RGB-индикация: ВКЛ" : "RGB-индикация: ВЫКЛ";
             _trayIcon.Icon = enabled ? _trackingOnIcon : _trackingOffIcon;
-            _rgbCanaryItem.Text = enabled ? "Выключить K15 RGB tracking" : "Включить K15 RGB tracking";
+            _rgbCanaryItem.Text = enabled ? "Выключить RGB-индикацию статусов" : "Включить RGB-индикацию статусов";
             RefreshTrayTooltip(JournalStateNormalizer.ToWireName(_stateNormalizer.State));
         });
     }
@@ -211,6 +217,23 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     {
         var tracking = _rgbCanary.Enabled ? "RGB ON" : "RGB OFF";
         _trayIcon.Text = $"K15 Status Lab · {wireState} · {tracking}";
+    }
+
+    private void ToggleDetailedLogging()
+    {
+        var enable = !EventJournal.DetailedLoggingEnabled;
+        EventJournal.SetDetailedLoggingEnabled(enable);
+        RefreshLoggingItem();
+        ShowBalloon(enable
+            ? "Подробный журнал включён. events.jsonl всё равно ограничен ротацией."
+            : "Подробный журнал выключен. Минимальные Codex/notification события остаются для работы отслеживания; журнал автоматически ограничен по размеру.");
+    }
+
+    private void RefreshLoggingItem()
+    {
+        _loggingItem.Text = EventJournal.DetailedLoggingEnabled
+            ? "Подробный журнал: ВКЛ"
+            : "Подробный журнал: ВЫКЛ";
     }
 
     private async Task OpenLightingLabAsync()
@@ -228,7 +251,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             {
                 await _rgbCanary.DisableAsync("lighting_lab_launch");
                 RefreshTrackingIndicator();
-                ShowBalloon("RGB tracking выключен перед Lighting Lab. После исследований включи его снова вручную.");
+                ShowBalloon("RGB-индикация выключена перед Lighting Lab. После исследований включи её снова вручную.");
             }
             catch (Exception ex)
             {
@@ -253,9 +276,9 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         {
             _rgbStatusItem.Text = status;
             var enabled = _rgbCanary.Enabled;
-            _trackingStatusItem.Text = enabled ? "RGB-отслеживание: ВКЛ" : "RGB-отслеживание: ВЫКЛ";
+            _trackingStatusItem.Text = enabled ? "RGB-индикация: ВКЛ" : "RGB-индикация: ВЫКЛ";
             _trayIcon.Icon = enabled ? _trackingOnIcon : _trackingOffIcon;
-            _rgbCanaryItem.Text = enabled ? "Выключить K15 RGB tracking" : "Включить K15 RGB tracking";
+            _rgbCanaryItem.Text = enabled ? "Выключить RGB-индикацию статусов" : "Включить RGB-индикацию статусов";
             RefreshTrayTooltip(JournalStateNormalizer.ToWireName(_stateNormalizer.State));
         });
     }
@@ -362,7 +385,14 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             ShowBalloon("Встроенный RGB configurator не найден рядом со сборкой.");
             return;
         }
-        OpenPath(path);
+
+        StatusLabConfig.EnsureExists();
+        var configText = File.ReadAllText(StatusLabConfig.FilePath, Encoding.UTF8);
+        var configData = Convert.ToBase64String(Encoding.UTF8.GetBytes(configText));
+        var url = new Uri(path).AbsoluteUri +
+                  "?configPath=" + Uri.EscapeDataString(StatusLabConfig.FilePath) +
+                  "&configData=" + Uri.EscapeDataString(configData);
+        Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
     }
 
     private static void OpenPath(string path)
@@ -376,7 +406,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 
     private void ClearJournal()
     {
-        var result = MessageBox.Show("Очистить локальный диагностический журнал Status Lab?",
+        var result = MessageBox.Show("Очистить локальный диагностический журнал Status Lab и его архивы?",
             "VOROTEX K15 Status Lab", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
         if (result != DialogResult.Yes)
             return;
