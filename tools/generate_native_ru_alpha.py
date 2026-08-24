@@ -19,13 +19,16 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
-VERSION = "0.2.0"
-DEFAULT_EVENT_DELAY_MS = 5
-OFFICIAL_RELEASE_MIN_DELAY_MS = 5
+VERSION = "0.3.0"
+TEXT_KEY_EVENT_DELAY_MS = 1
+LAYOUT_SELECTOR_EVENT_DELAY_MS = 5
+STRUCTURAL_EVENT_DELAY_MS = 5
+DEFAULT_EVENT_DELAY_MS = TEXT_KEY_EVENT_DELAY_MS
+OFFICIAL_RELEASE_MIN_DELAY_MS = 1
 EVENT_DELAY_MS = DEFAULT_EVENT_DELAY_MS
 TEXT_COMMAND_SUFFIX = " "
 EVENT_CAPACITY = 500
-SELECTOR_SETTLE_DELAY_MS = 0
+SELECTOR_SETTLE_DELAY_MS = LAYOUT_SELECTOR_EVENT_DELAY_MS
 CORRECTED_NEW_LINE_FIXTURE_SHA256 = "f356f32c6acdf062115d1fc2b7023aa0cb6ec00752dbae2c6502808b7f12017a"
 BOTTOM_BINDING_FIXTURE_SHA256 = "6bb6e1e2a7b2fb896cd046c3323612e25b34c1aa006150784d6556bdc4e39279"
 SPACE_BINDING_FIXTURE_SHA256 = "be038530f798511301e49f9a1d13ea4babf556db64714a8e8fb77bbe7f4fab34"
@@ -45,7 +48,7 @@ RU_HID = {
     "ф": 4, "ы": 22, "в": 7, "а": 9, "п": 10, "р": 11,
     "о": 13, "л": 14, "д": 15, "ж": 51, "э": 52,
     "я": 29, "ч": 27, "с": 6, "м": 25, "и": 5, "т": 17,
-    "ь": 16, "б": 54, "ю": 55, "ё": 53, " ": 44, ",": 54,
+    "ь": 16, "б": 54, "ю": 55, "ё": 53, " ": 44,
 }
 EN_HID = {chr(ord("a") + i): code for i, code in enumerate(
     [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
@@ -58,7 +61,7 @@ RU_OUTPUTS = {
     "AGENT_PROMPT": "Пиши следующий промпт для агента", "FIX": "Исправляй",
     "PUBLISH": "Публикуй", "MERGE": "Мержи", "CREATE": "Создавай",
     "CONTINUE": "Продолжай", "REVIEW": "Проведи ревью", "DONE": "Готово",
-    "STATUS": "Дай статус", "STOP": "Стоп",
+    "STATUS_SHORT": "Дай статус", "STATUS_FULL": "Дай статус: что сделано, что осталось, блокеры и следующий шаг", "STOP": "Стоп",
     "REPORT_NEXT_CHAT": "Подготовь отчет для следующего чата",
     "ACCEPT_OR_APPROVE": "Подтверждаю", "SAFE_CONTINUE": "Давай дальше, без push/merge",
     "REPORT": "Отчет", "HERE_IS_REPORT": "Вот отчет", "ACCEPTED": "Принимается",
@@ -97,7 +100,7 @@ MACROS_B = [
     ("VIBE_08_CONTINUE_RU", "CONTINUE", "403BA4AC-80DA-4AB5-A5F0-44F4A457B4D0"),
     ("VIBE_09_REVIEW_RU", "REVIEW", "BC4A6BA3-10F0-4C2E-AFAF-931959F7B1E0"),
     ("VIBE_10_DONE_RU", "DONE", "22175D34-161A-410A-8A80-BCE322E1FE3B"),
-    ("VIBE_11_STATUS_RU", "STATUS", "C16A8592-DCA2-4036-AB18-6E10AD7CEFC8"),
+    ("VIBE_11_STATUS_RU", "STATUS_SHORT", "C16A8592-DCA2-4036-AB18-6E10AD7CEFC8"),
     ("VIBE_12_NEW_LINE_RU", "NEW_LINE", "C7D4A090-E957-4AD1-B34C-A2FBC473CA33"),
     ("VIBE_13_STOP_RU", "STOP", "2C0417D3-7255-446E-926D-EF77BB6D6DF3"),
     ("VIBE_14_ACCEPTED_RU", "ACCEPTED", "B4A6DEAB-4CCD-4761-8E19-E4D984005A76"),
@@ -114,7 +117,7 @@ MACROS_A = [
     ("TOOLS_08_HERE_IS_REPORT_RU", "HERE_IS_REPORT", _stable_guid("profile-a:here-is-report")),
     ("TOOLS_09_CODE_FENCE", "CODE_FENCE", _stable_guid("profile-a:code-fence")),
     ("TOOLS_10_REPORT_FROM_CLIPBOARD", "REPORT_FROM_CLIPBOARD", _stable_guid("profile-a:report-from-clipboard")),
-    ("TOOLS_11_STATUS_RU", "STATUS", _stable_guid("profile-a:status")),
+    ("TOOLS_11_STATUS_RU", "STATUS_FULL", _stable_guid("profile-a:status")),
     ("TOOLS_12_NEW_LINE_RU", "NEW_LINE", _stable_guid("profile-a:new-line")),
     ("TOOLS_13_STOP_RU", "STOP", _stable_guid("profile-a:stop")),
     ("TOOLS_14_REPORT_NEXT_CHAT_RU", "REPORT_NEXT_CHAT", _stable_guid("profile-a:report-next-chat")),
@@ -125,9 +128,9 @@ PROFILE_SPECS = {
     "A": {
         "id": "tools-auth", "role": "TOOLS_AUTH", "name": "K15_VIBECODING_PROFILE_A_TOOLS_AUTH_V1_RC1",
         "groupName": "K15_TOOLS_AUTH", "groupGuid": _stable_guid("profile-a:group"), "macros": MACROS_A,
-        "bindings": [("1", "COPY"), ("2", "PASTE"), ("3", "CUT"), ("4", "UNDO"),
+    "bindings": [("1", "COPY"), ("2", "PASTE"), ("3", "CUT"), ("4", "UNDO"),
                       ("5", "REDO"), ("6", "SELECT_ALL"), ("7", "REPORT"), ("8", "HERE_IS_REPORT"),
-                      ("9", "CODE_FENCE"), ("0", "REPORT_FROM_CLIPBOARD"), (".", "STATUS"),
+                      ("9", "CODE_FENCE"), ("0", "REPORT_FROM_CLIPBOARD"), (".", "STATUS_FULL"),
                       ("Enter", "NEW_LINE"), ("-", "STOP"), ("+", "REPORT_NEXT_CHAT"),
                       ("Space", "ACCEPT_OR_APPROVE")],
     },
@@ -136,7 +139,7 @@ PROFILE_SPECS = {
         "groupName": GROUP_NAME_B, "groupGuid": GROUP_GUID_B, "macros": MACROS_B,
         "bindings": [("1", "CHECK"), ("2", "NEXT"), ("3", "AGENT_PROMPT"), ("4", "FIX"),
                       ("5", "PUBLISH"), ("6", "MERGE"), ("7", "CREATE"), ("8", "CONTINUE"),
-                      ("9", "REVIEW"), ("0", "DONE"), (".", "STATUS"), ("Enter", "NEW_LINE"),
+                      ("9", "REVIEW"), ("0", "DONE"), (".", "STATUS_SHORT"), ("Enter", "NEW_LINE"),
                       ("-", "STOP"), ("+", "ACCEPTED"), ("Space", "SAFE_CONTINUE")],
     },
 }
@@ -165,20 +168,48 @@ def validate_official_import_delay(event_delay_ms: int,
     return event_delay_ms
 
 
-def hid_events(text: str, layout: str) -> tuple[list[int], list[int]]:
+def _shifted_hid_events(code: int) -> tuple[list[int], list[int]]:
+    return [225, code, code, 225], [1, 1, 2, 2]
+
+
+def hid_event_stream(text: str, layout: str, delay_ms: int = TEXT_KEY_EVENT_DELAY_MS) -> tuple[list[int], list[int], list[int]]:
     table = RU_HID if layout == "RU" else EN_HID
     values: list[int] = []
     states: list[int] = []
+    delays: list[int] = []
     for char in text.lower():
+        if layout == "RU" and char == ",":
+            part_values, part_states = _shifted_hid_events(56)
+            values.extend(part_values); states.extend(part_states); delays.extend([delay_ms] * 4)
+            continue
+        if layout == "RU" and char == ":":
+            part_values, part_states = _shifted_hid_events(35)
+            values.extend(part_values); states.extend(part_states); delays.extend([delay_ms] * 4)
+            continue
+        if layout == "RU" and char == ".":
+            part_values, part_states = _shifted_hid_events(55)
+            values.extend(part_values); states.extend(part_states); delays.extend([delay_ms] * 4)
+            continue
         if char not in table:
             raise ValueError(f"{layout} layout cannot encode character {char!r}")
         values.extend((table[char], table[char]))
         states.extend((1, 2))
+        delays.extend((delay_ms, delay_ms))
+    return values, states, delays
+
+
+def hid_events(text: str, layout: str) -> tuple[list[int], list[int]]:
+    values, states, _ = hid_event_stream(text, layout)
     return values, states
 
 
 def selector_events(layout: str) -> tuple[list[int], list[int]]:
     return LANGUAGE_SELECTOR[layout]
+
+
+def selector_event_stream(layout: str) -> tuple[list[int], list[int], list[int]]:
+    values, states = selector_events(layout)
+    return values, states, [LAYOUT_SELECTOR_EVENT_DELAY_MS] * len(values)
 
 
 def concat_events(*parts: tuple[list[int], list[int]]) -> tuple[list[int], list[int]]:
@@ -190,10 +221,22 @@ def concat_events(*parts: tuple[list[int], list[int]]) -> tuple[list[int], list[
     return values, states
 
 
+def concat_event_streams(*parts: tuple[list[int], list[int], list[int]]) -> tuple[list[int], list[int], list[int]]:
+    values: list[int] = []; states: list[int] = []; delays: list[int] = []
+    for part_values, part_states, part_delays in parts:
+        values.extend(part_values); states.extend(part_states); delays.extend(part_delays)
+    return values, states, delays
+
+
 def key_chord(key: int, modifiers: tuple[int, ...] = ()) -> tuple[list[int], list[int]]:
     values = list(modifiers) + [key, key] + list(reversed(modifiers))
     states = [1] * (len(modifiers) + 1) + [2] * (len(modifiers) + 1)
     return values, states
+
+
+def key_chord_event_stream(key: int, modifiers: tuple[int, ...] = ()) -> tuple[list[int], list[int], list[int]]:
+    values, states = key_chord(key, modifiers)
+    return values, states, [STRUCTURAL_EVENT_DELAY_MS] * len(values)
 
 
 def text_events(text: str, layout: str, append_suffix: bool = True) -> tuple[list[int], list[int]]:
@@ -203,11 +246,22 @@ def text_events(text: str, layout: str, append_suffix: bool = True) -> tuple[lis
     punctuation-free and structural macros can opt out explicitly.
     """
     visible = text + (TEXT_COMMAND_SUFFIX if append_suffix else "")
-    return concat_events(selector_events(layout), hid_events(visible, layout))
+    values, states, _ = text_event_stream(text, layout, append_suffix)
+    return values, states
+
+
+def text_event_stream(text: str, layout: str, append_suffix: bool = True) -> tuple[list[int], list[int], list[int]]:
+    visible = text + (TEXT_COMMAND_SUFFIX if append_suffix else "")
+    return concat_event_streams(selector_event_stream(layout), hid_event_stream(visible, layout))
 
 
 def shift_enter_events() -> tuple[list[int], list[int]]:
     return [225, 40, 40, 225], [1, 1, 2, 2]
+
+
+def shift_enter_event_stream() -> tuple[list[int], list[int], list[int]]:
+    values, states = shift_enter_events()
+    return values, states, [STRUCTURAL_EVENT_DELAY_MS] * len(values)
 
 
 def code_fence_events(return_to_ru: bool = True) -> tuple[list[int], list[int]]:
@@ -218,39 +272,56 @@ def code_fence_events(return_to_ru: bool = True) -> tuple[list[int], list[int]]:
     return concat_events(*parts)
 
 
+def code_fence_event_stream(return_to_ru: bool = True) -> tuple[list[int], list[int], list[int]]:
+    parts = [selector_event_stream("EN"), hid_event_stream("```", "EN")]
+    if return_to_ru:
+        parts.append(selector_event_stream("RU"))
+    return concat_event_streams(*parts)
+
+
 def safe_continue_events() -> tuple[list[int], list[int]]:
-    return concat_events(selector_events("RU"), hid_events("Давай дальше, без ", "RU"),
-                         selector_events("EN"), hid_events("push/merge", "EN"),
-                         selector_events("RU"), hid_events(TEXT_COMMAND_SUFFIX, "RU"))
+    values, states, _ = safe_continue_event_stream()
+    return values, states
+
+
+def safe_continue_event_stream() -> tuple[list[int], list[int], list[int]]:
+    return concat_event_streams(selector_event_stream("RU"), hid_event_stream("Давай дальше, без ", "RU"),
+                                selector_event_stream("EN"), hid_event_stream("push/merge", "EN"),
+                                selector_event_stream("RU"), hid_event_stream(TEXT_COMMAND_SUFFIX, "RU"))
+
+
+def macro_event_stream(profile: str, action: str, layout: str = "RU") -> tuple[list[int], list[int], list[int]]:
+    if profile == "B" and action == "SAFE_CONTINUE":
+        return safe_continue_event_stream()
+    if action == "NEW_LINE":
+        return shift_enter_event_stream()
+    if action == "COPY":
+        return key_chord_event_stream(6, (224,))
+    if action == "PASTE":
+        return concat_event_streams(key_chord_event_stream(25, (224,)), shift_enter_event_stream())
+    if action == "CUT":
+        return key_chord_event_stream(27, (224,))
+    if action == "UNDO":
+        return key_chord_event_stream(29, (224,))
+    if action == "REDO":
+        return key_chord_event_stream(29, (224, 225))
+    if action == "SELECT_ALL":
+        return key_chord_event_stream(4, (224,))
+    if action == "CODE_FENCE":
+        return code_fence_event_stream()
+    if action == "REPORT_FROM_CLIPBOARD":
+        return concat_event_streams(text_event_stream("Вот отчет", "RU", append_suffix=False), shift_enter_event_stream(), code_fence_event_stream(False),
+                             shift_enter_event_stream(), key_chord_event_stream(25, (224,)), shift_enter_event_stream(), selector_event_stream("RU"))
+    if action in {"CHECK", "NEXT", "AGENT_PROMPT", "FIX", "PUBLISH", "MERGE", "CREATE",
+                  "CONTINUE", "REVIEW", "DONE", "REPORT", "HERE_IS_REPORT", "STATUS_SHORT", "STATUS_FULL", "STOP",
+                  "REPORT_NEXT_CHAT", "ACCEPTED", "ACCEPT_OR_APPROVE"}:
+        return text_event_stream(RU_OUTPUTS[action], "RU")
+    raise ValueError(f"unsupported action {action!r} for profile {profile}")
 
 
 def macro_events(profile: str, action: str, layout: str = "RU") -> tuple[list[int], list[int]]:
-    if profile == "B" and action == "SAFE_CONTINUE":
-        return safe_continue_events()
-    if action == "NEW_LINE":
-        return shift_enter_events()
-    if action == "COPY":
-        return key_chord(6, (224,))
-    if action == "PASTE":
-        return concat_events(key_chord(25, (224,)), shift_enter_events())
-    if action == "CUT":
-        return key_chord(27, (224,))
-    if action == "UNDO":
-        return key_chord(29, (224,))
-    if action == "REDO":
-        return key_chord(29, (224, 225))
-    if action == "SELECT_ALL":
-        return key_chord(4, (224,))
-    if action == "CODE_FENCE":
-        return code_fence_events()
-    if action == "REPORT_FROM_CLIPBOARD":
-        return concat_events(text_events("Вот отчет", "RU", append_suffix=False), shift_enter_events(), code_fence_events(False),
-                             shift_enter_events(), key_chord(25, (224,)), shift_enter_events(), selector_events("RU"))
-    if action in {"CHECK", "NEXT", "AGENT_PROMPT", "FIX", "PUBLISH", "MERGE", "CREATE",
-                  "CONTINUE", "REVIEW", "DONE", "REPORT", "HERE_IS_REPORT", "STATUS", "STOP",
-                  "REPORT_NEXT_CHAT", "ACCEPTED", "ACCEPT_OR_APPROVE"}:
-        return text_events(RU_OUTPUTS[action], "RU")
-    raise ValueError(f"unsupported action {action!r} for profile {profile}")
+    values, states, _ = macro_event_stream(profile, action, layout)
+    return values, states
 
 
 def encoded_name(value: str) -> list[int]:
@@ -267,10 +338,10 @@ def data_array(values: Iterable[int]) -> list[int]:
 
 
 def macro_object(profile: str, name: str, action: str, guid: str, layout: str, event_delay_ms: int) -> dict[str, Any]:
-    values, states = macro_events(profile, action, layout)
+    values, states, delays = macro_event_stream(profile, action, layout)
     return {"BindKeys": 0, "ForbidView": False, "MacroGuid": guid, "MacroName": encoded_name(name),
             "macData": {"YStep": 0, "YStepEn": 0, "extVal": [[0, 0] for _ in range(EVENT_CAPACITY)],
-                        "macDly": data_array([event_delay_ms] * len(values)), "macRpt": 1,
+                        "macDly": data_array(delays), "macRpt": 1,
                         "macSta": data_array(states), "macVal": data_array(values), "num": len(values),
                         "numCpi": 0, "numLed": 0, "numMedia": 2, "numWhl": 0, "numXY": 245, "rptType": 0}}
 
@@ -367,7 +438,9 @@ def semantic_maps() -> dict[str, Any]:
                                          "storageField": PROVEN_BINDINGS[physical][0],
                                          "memMacId": PROVEN_BINDINGS[physical][1]}
                                         for physical, action in spec["bindings"]],
-                           "spaceText": RU_OUTPUTS["ACCEPT_OR_APPROVE"] if profile == "A" else RU_OUTPUTS["SAFE_CONTINUE"]}
+                           "spaceText": RU_OUTPUTS["ACCEPT_OR_APPROVE"] if profile == "A" else RU_OUTPUTS["SAFE_CONTINUE"],
+                           "statusMode": "FULL" if profile == "A" else "SHORT",
+                           "statusText": RU_OUTPUTS["STATUS_FULL"] if profile == "A" else RU_OUTPUTS["STATUS_SHORT"]}
     return result
 
 
@@ -400,13 +473,15 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
     write_json(maps_path, semantic_maps())
     manifest = {
         "generatorVersion": VERSION, "generatorCommit": os.environ.get("K15_GENERATOR_COMMIT", "working-tree"),
-        "release": "v1-rc1", "profiles": {p: {"profileId": PROFILE_SPECS[p]["id"],
+        "release": "v1.2-rc1", "profiles": {p: {"profileId": PROFILE_SPECS[p]["id"],
         "role": PROFILE_SPECS[p]["role"], "macroGroupGuid": PROFILE_SPECS[p]["groupGuid"]} for p in ("A", "B")},
         "inputProfileSelection": {"mode": "forced-self-select", "selected": layout,
         "ruSelector": "Ctrl+Shift+2", "enSelector": "Ctrl+Shift+1",
         "selectorOrder": "Ctrl down, Shift down, layout key down/up, Shift up, Ctrl up",
         "selectorSettleDelayMs": SELECTOR_SETTLE_DELAY_MS},
         "eventDelayMs": event_delay_ms, "defaultEventDelayMs": DEFAULT_EVENT_DELAY_MS,
+        "textKeyEventDelayMs": TEXT_KEY_EVENT_DELAY_MS, "layoutSelectorEventDelayMs": LAYOUT_SELECTOR_EVENT_DELAY_MS,
+        "structuralEventDelayMs": STRUCTURAL_EVENT_DELAY_MS,
         "officialReleaseMinDelayMs": OFFICIAL_RELEASE_MIN_DELAY_MS,
         "researchUnsafeDelayOverride": research_unsafe_allow_delay_below_min,
         "fiveMsImportCompatibility": "PROVEN_POSSIBLE", "oneMsImportCompatibility": "UNTESTED_AND_DISABLED",
@@ -432,7 +507,7 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "sanitized native Profile mode delta: export current SingleProfile=1, export all SingleProfile=0"]}
     write_json(output_dir / "manifest.json", manifest)
     report_lines = ["# K15 Two-Profile V1 RC generation report", "",
-        "STATUS=READY_FOR_TWO_PROFILE_V1_IMPORT_TEST", "", "PROFILE_A_ROLE=TOOLS_AUTH",
+        "STATUS=READY_FOR_OWNER_STATUS_SPLIT_REVIEW", "", "PROFILE_A_ROLE=TOOLS_AUTH",
         "PROFILE_B_ROLE=MAIN_VIBECODING", "PROFILE_A_SPACE=Подтверждаю",
         "PROFILE_B_SPACE=Давай дальше, без push/merge", "PROFILE_A_COPY=PASS", "PROFILE_A_PASTE=PASS",
         "PROFILE_A_CUT=PASS", "PROFILE_A_UNDO=PASS", "PROFILE_A_REDO=PASS", "PROFILE_A_SELECT_ALL=PASS",
@@ -444,9 +519,13 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         'TEXT_COMMAND_SUFFIX=" "', "AUTO_PUNCTUATION=NO", "ALL_TEXT_SUFFIX_TESTS=PASS",
         f"DEFAULT_KEY_EVENT_DELAY_MS={DEFAULT_EVENT_DELAY_MS}",
         f"OFFICIAL_RELEASE_MIN_DELAY_MS={OFFICIAL_RELEASE_MIN_DELAY_MS}",
-        "5MS_IMPORT_COMPATIBILITY=PROVEN_POSSIBLE", "1MS_IMPORT_COMPATIBILITY=UNTESTED_AND_DISABLED",
+        "5MS_IMPORT_COMPATIBILITY=PROVEN_POSSIBLE", "1MS_IMPORT_COMPATIBILITY=PROVEN_POSSIBLE_FOR_TEXT_POLICY",
         "IMPORT_DETERMINISM=NOT_PROVEN",
-        "ONE_MS_CONFIG_SUPPORTED=RESEARCH_UNSAFE_OVERRIDE_ONLY",
+        "ONE_MS_CONFIG_SUPPORTED=YES",
+        "PROFILE_A_STATUS_MODE=FULL", "PROFILE_A_STATUS_TEXT=Дай статус: что сделано, что осталось, блокеры и следующий шаг ",
+        "PROFILE_B_STATUS_MODE=SHORT", "PROFILE_B_STATUS_TEXT=Дай статус ",
+        "SAFE_CONTINUE_COMMA_CHORD=225,56,56,225 / 1,1,2,2",
+        "TEXT_KEY_EVENT_DELAY_MS=1", "LAYOUT_SELECTOR_EVENT_DELAY_MS=5", "STRUCTURAL_EVENT_DELAY_MS=5",
         "ALL_PROFILE_A_RU_TEXT_ROUNDTRIP=PASS", "ALL_PROFILE_B_RU_TEXT_ROUNDTRIP=PASS",
         "SHIFT_ENTER_5MS=PASS", "JOYSTICK_NATIVE_ENTER=PASS", "ALL_15_PHYSICAL_BINDINGS_PROFILE_A=PASS",
         "ALL_15_PHYSICAL_BINDINGS_PROFILE_B=PASS", "MEMMACID_MAPPING_PROVEN=PASS",

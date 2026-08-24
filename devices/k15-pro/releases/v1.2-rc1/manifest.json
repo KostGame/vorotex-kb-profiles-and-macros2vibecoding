@@ -1,0 +1,177 @@
+{
+  "generatorVersion": "0.3.0",
+  "generatorCommit": "working-tree",
+  "release": "v1.2-rc1",
+  "profiles": {
+    "A": {
+      "profileId": "tools-auth",
+      "role": "TOOLS_AUTH",
+      "macroGroupGuid": "0DC9EF30-DE57-5C86-9642-FC1146D642FA"
+    },
+    "B": {
+      "profileId": "main-vibecoding",
+      "role": "MAIN_VIBECODING",
+      "macroGroupGuid": "67FAE5A1-B383-4CC8-A99C-AD70C6DAA277"
+    }
+  },
+  "inputProfileSelection": {
+    "mode": "forced-self-select",
+    "selected": "RU",
+    "ruSelector": "Ctrl+Shift+2",
+    "enSelector": "Ctrl+Shift+1",
+    "selectorOrder": "Ctrl down, Shift down, layout key down/up, Shift up, Ctrl up",
+    "selectorSettleDelayMs": 5
+  },
+  "eventDelayMs": 1,
+  "defaultEventDelayMs": 1,
+  "textKeyEventDelayMs": 1,
+  "layoutSelectorEventDelayMs": 5,
+  "structuralEventDelayMs": 5,
+  "officialReleaseMinDelayMs": 1,
+  "researchUnsafeDelayOverride": false,
+  "fiveMsImportCompatibility": "PROVEN_POSSIBLE",
+  "oneMsImportCompatibility": "PHYSICALLY_ACCEPTED_FOR_TEXT_POLICY",
+  "textCommandSuffix": " ",
+  "autoPunctuation": false,
+  "oneMsConfigSupported": true,
+  "macRpt": 1,
+  "rptType": 0,
+  "packages": {
+    "A": {
+      "macro": "K15_VIBECODING_PROFILE_A_TOOLS_AUTH_V1_2_RC1.Macro.Config",
+      "kb": "K15_VIBECODING_PROFILE_A_TOOLS_AUTH_V1_2_RC1.KB.Config",
+      "macroSha256": "8cd2039c21bbefe7e03298ab3c11bb227b0b2131d2500dd062301869983c07e2",
+      "kbSha256": "8aaead41881e2aaad7d612105d0761902760fc259ab1d859d2962579a3b58c33",
+      "unresolvedBindings": []
+    },
+    "B": {
+      "macro": "K15_VIBECODING_PROFILE_B_MAIN_V1_2_RC1.Macro.Config",
+      "kb": "K15_VIBECODING_PROFILE_B_MAIN_V1_2_RC1.KB.Config",
+      "macroSha256": "46b0cecabdee02443dfa89cf0f8816153abbc1b85a39f867b5ea2ab360cf293b",
+      "kbSha256": "d296f6417743ceda602d1a08a9155c2a32447d0418fb0d949773678621def339",
+      "unresolvedBindings": []
+    }
+  },
+  "semanticMaps": "semantic-maps.json",
+  "physicalSlotModel": [
+    {
+      "control": "1",
+      "storage": "btn_KBKey_KeyPad1",
+      "memMacId": 2
+    },
+    {
+      "control": "2",
+      "storage": "btn_KBKey_KeyPad2",
+      "memMacId": 1
+    },
+    {
+      "control": "3",
+      "storage": "btn_KBKey_KeyPad3",
+      "memMacId": 3
+    },
+    {
+      "control": "4",
+      "storage": "btn_KBKey_KeyPad4",
+      "memMacId": 4
+    },
+    {
+      "control": "5",
+      "storage": "btn_KBKey_KeyPad5",
+      "memMacId": 5
+    },
+    {
+      "control": "6",
+      "storage": "btn_KBKey_KeyPad6",
+      "memMacId": 6
+    },
+    {
+      "control": "7",
+      "storage": "btn_KBKey_KeyPad7",
+      "memMacId": 7
+    },
+    {
+      "control": "8",
+      "storage": "btn_KBKey_KeyPad8",
+      "memMacId": 8
+    },
+    {
+      "control": "9",
+      "storage": "btn_KBKey_KeyPad9",
+      "memMacId": 9
+    },
+    {
+      "control": "0",
+      "storage": "btn_KBKey_KeyPad0",
+      "memMacId": 0
+    },
+    {
+      "control": ".",
+      "storage": "btn_KBKey_KeyPadPoint",
+      "memMacId": 10
+    },
+    {
+      "control": "Enter",
+      "storage": "btn_KBKey_KeyPadEnter",
+      "memMacId": 11
+    },
+    {
+      "control": "-",
+      "storage": "btn_KBKey_KeyPadSub",
+      "memMacId": 13
+    },
+    {
+      "control": "+",
+      "storage": "btn_KBKey_KeyPadAdd",
+      "memMacId": 14
+    },
+    {
+      "control": "Space",
+      "storage": "btn_KBKey_Space",
+      "memMacId": 12
+    }
+  ],
+  "unresolvedBindings": [],
+  "joystickClick": {
+    "storage": "btn_KBKey_Enter",
+    "mode": "NATIVE_ENTER",
+    "keyValue": 40
+  },
+  "kbConfigContainsProfileLighting": "PROVEN",
+  "kbConfigImportAppliesProfileLighting": "PROVEN",
+  "profileLedBankMapping": {
+    "A": "PROVEN",
+    "B": "PROVEN"
+  },
+  "profileLightingFixtureSha256": "b2df93221d95566416420dff0ad9fb23d61fffe5ff93a98ecefb244f700e1f30",
+  "profileAEncoderFixtureSha256": "e79cf4bd047b2faa89a3027a2ce2e1fdda30d218e76eec45cebef7c6aa891abf",
+  "profileAEncoder": {
+    "behavior": "VERTICAL_SCROLL",
+    "upField": "btn_KB_Scr_Up0",
+    "downField": "btn_KB_Scr_Dn0",
+    "upValue": 304,
+    "downValue": 305
+  },
+  "rgbScope": "OBSERVED_PROFILE_LIGHTING_BANKS_ONLY",
+  "allProfiles": {
+    "status": "PARTIAL",
+    "package": null,
+    "reason": "Sanitized evidence proves the SingleProfile/profile-count delta, not the full Export-All object shape; unsupported fields are not guessed."
+  },
+  "fixtureProvenance": [
+    "corrected native Shift+Enter fixture SHA-256: f356f32c6acdf062115d1fc2b7023aa0cb6ec00752dbae2c6502808b7f12017a",
+    "native bottom-binding fixture SHA-256: 6bb6e1e2a7b2fb896cd046c3323612e25b34c1aa006150784d6556bdc4e39279",
+    "native Space-binding fixture SHA-256: be038530f798511301e49f9a1d13ea4babf556db64714a8e8fb77bbe7f4fab34",
+    "native profile lighting fixture SHA-256: b2df93221d95566416420dff0ad9fb23d61fffe5ff93a98ecefb244f700e1f30",
+    "native Profile A encoder fixture SHA-256: e79cf4bd047b2faa89a3027a2ce2e1fdda30d218e76eec45cebef7c6aa891abf",
+    "sanitized native Profile mode delta: export current SingleProfile=1, export all SingleProfile=0"
+  ],
+  "physicalAcceptance": {
+    "physicalImport": "PASS",
+    "functionalAcceptance": "PASS",
+    "profileBPhysicalLightingAfterImport": "WHITE",
+    "lightingPhysicalParity": "KNOWN_NONBLOCKING_DISCREPANCY",
+    "ownerAcceptedLightingDiscrepancy": true,
+    "serializedLightingPreservation": "PASS",
+    "note": "No runtime lighting fix included in V1.2 RC1"
+  }
+}

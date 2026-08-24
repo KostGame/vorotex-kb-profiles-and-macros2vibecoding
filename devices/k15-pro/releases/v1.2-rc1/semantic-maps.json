@@ -1,0 +1,234 @@
+{
+  "A": {
+    "profileId": "tools-auth",
+    "role": "TOOLS_AUTH",
+    "groupName": "K15_TOOLS_AUTH",
+    "groupGuid": "0DC9EF30-DE57-5C86-9642-FC1146D642FA",
+    "bindings": [
+      {
+        "physicalControl": "1",
+        "semanticAction": "COPY",
+        "macro": "TOOLS_01_COPY",
+        "storageField": "btn_KBKey_KeyPad1",
+        "memMacId": 2
+      },
+      {
+        "physicalControl": "2",
+        "semanticAction": "PASTE",
+        "macro": "TOOLS_02_PASTE",
+        "storageField": "btn_KBKey_KeyPad2",
+        "memMacId": 1
+      },
+      {
+        "physicalControl": "3",
+        "semanticAction": "CUT",
+        "macro": "TOOLS_03_CUT",
+        "storageField": "btn_KBKey_KeyPad3",
+        "memMacId": 3
+      },
+      {
+        "physicalControl": "4",
+        "semanticAction": "UNDO",
+        "macro": "TOOLS_04_UNDO",
+        "storageField": "btn_KBKey_KeyPad4",
+        "memMacId": 4
+      },
+      {
+        "physicalControl": "5",
+        "semanticAction": "REDO",
+        "macro": "TOOLS_05_REDO",
+        "storageField": "btn_KBKey_KeyPad5",
+        "memMacId": 5
+      },
+      {
+        "physicalControl": "6",
+        "semanticAction": "SELECT_ALL",
+        "macro": "TOOLS_06_SELECT_ALL",
+        "storageField": "btn_KBKey_KeyPad6",
+        "memMacId": 6
+      },
+      {
+        "physicalControl": "7",
+        "semanticAction": "REPORT",
+        "macro": "TOOLS_07_REPORT_RU",
+        "storageField": "btn_KBKey_KeyPad7",
+        "memMacId": 7
+      },
+      {
+        "physicalControl": "8",
+        "semanticAction": "HERE_IS_REPORT",
+        "macro": "TOOLS_08_HERE_IS_REPORT_RU",
+        "storageField": "btn_KBKey_KeyPad8",
+        "memMacId": 8
+      },
+      {
+        "physicalControl": "9",
+        "semanticAction": "CODE_FENCE",
+        "macro": "TOOLS_09_CODE_FENCE",
+        "storageField": "btn_KBKey_KeyPad9",
+        "memMacId": 9
+      },
+      {
+        "physicalControl": "0",
+        "semanticAction": "REPORT_FROM_CLIPBOARD",
+        "macro": "TOOLS_10_REPORT_FROM_CLIPBOARD",
+        "storageField": "btn_KBKey_KeyPad0",
+        "memMacId": 0
+      },
+      {
+        "physicalControl": ".",
+        "semanticAction": "STATUS_FULL",
+        "macro": "TOOLS_11_STATUS_RU",
+        "storageField": "btn_KBKey_KeyPadPoint",
+        "memMacId": 10
+      },
+      {
+        "physicalControl": "Enter",
+        "semanticAction": "NEW_LINE",
+        "macro": "TOOLS_12_NEW_LINE_RU",
+        "storageField": "btn_KBKey_KeyPadEnter",
+        "memMacId": 11
+      },
+      {
+        "physicalControl": "-",
+        "semanticAction": "STOP",
+        "macro": "TOOLS_13_STOP_RU",
+        "storageField": "btn_KBKey_KeyPadSub",
+        "memMacId": 13
+      },
+      {
+        "physicalControl": "+",
+        "semanticAction": "REPORT_NEXT_CHAT",
+        "macro": "TOOLS_14_REPORT_NEXT_CHAT_RU",
+        "storageField": "btn_KBKey_KeyPadAdd",
+        "memMacId": 14
+      },
+      {
+        "physicalControl": "Space",
+        "semanticAction": "ACCEPT_OR_APPROVE",
+        "macro": "TOOLS_15_CONFIRM_RU",
+        "storageField": "btn_KBKey_Space",
+        "memMacId": 12
+      }
+    ],
+    "spaceText": "Подтверждаю",
+    "statusMode": "FULL",
+    "statusText": "Дай статус: что сделано, что осталось, блокеры и следующий шаг"
+  },
+  "B": {
+    "profileId": "main-vibecoding",
+    "role": "MAIN_VIBECODING",
+    "groupName": "K15_VIBECODING_RU_ALPHA",
+    "groupGuid": "67FAE5A1-B383-4CC8-A99C-AD70C6DAA277",
+    "bindings": [
+      {
+        "physicalControl": "1",
+        "semanticAction": "CHECK",
+        "macro": "VIBE_01_CHECK_RU",
+        "storageField": "btn_KBKey_KeyPad1",
+        "memMacId": 2
+      },
+      {
+        "physicalControl": "2",
+        "semanticAction": "NEXT",
+        "macro": "VIBE_02_NEXT_RU",
+        "storageField": "btn_KBKey_KeyPad2",
+        "memMacId": 1
+      },
+      {
+        "physicalControl": "3",
+        "semanticAction": "AGENT_PROMPT",
+        "macro": "VIBE_03_AGENT_PROMPT_RU",
+        "storageField": "btn_KBKey_KeyPad3",
+        "memMacId": 3
+      },
+      {
+        "physicalControl": "4",
+        "semanticAction": "FIX",
+        "macro": "VIBE_04_FIX_RU",
+        "storageField": "btn_KBKey_KeyPad4",
+        "memMacId": 4
+      },
+      {
+        "physicalControl": "5",
+        "semanticAction": "PUBLISH",
+        "macro": "VIBE_05_PUBLISH_RU",
+        "storageField": "btn_KBKey_KeyPad5",
+        "memMacId": 5
+      },
+      {
+        "physicalControl": "6",
+        "semanticAction": "MERGE",
+        "macro": "VIBE_06_MERGE_RU",
+        "storageField": "btn_KBKey_KeyPad6",
+        "memMacId": 6
+      },
+      {
+        "physicalControl": "7",
+        "semanticAction": "CREATE",
+        "macro": "VIBE_07_CREATE_RU",
+        "storageField": "btn_KBKey_KeyPad7",
+        "memMacId": 7
+      },
+      {
+        "physicalControl": "8",
+        "semanticAction": "CONTINUE",
+        "macro": "VIBE_08_CONTINUE_RU",
+        "storageField": "btn_KBKey_KeyPad8",
+        "memMacId": 8
+      },
+      {
+        "physicalControl": "9",
+        "semanticAction": "REVIEW",
+        "macro": "VIBE_09_REVIEW_RU",
+        "storageField": "btn_KBKey_KeyPad9",
+        "memMacId": 9
+      },
+      {
+        "physicalControl": "0",
+        "semanticAction": "DONE",
+        "macro": "VIBE_10_DONE_RU",
+        "storageField": "btn_KBKey_KeyPad0",
+        "memMacId": 0
+      },
+      {
+        "physicalControl": ".",
+        "semanticAction": "STATUS_SHORT",
+        "macro": "VIBE_11_STATUS_RU",
+        "storageField": "btn_KBKey_KeyPadPoint",
+        "memMacId": 10
+      },
+      {
+        "physicalControl": "Enter",
+        "semanticAction": "NEW_LINE",
+        "macro": "VIBE_12_NEW_LINE_RU",
+        "storageField": "btn_KBKey_KeyPadEnter",
+        "memMacId": 11
+      },
+      {
+        "physicalControl": "-",
+        "semanticAction": "STOP",
+        "macro": "VIBE_13_STOP_RU",
+        "storageField": "btn_KBKey_KeyPadSub",
+        "memMacId": 13
+      },
+      {
+        "physicalControl": "+",
+        "semanticAction": "ACCEPTED",
+        "macro": "VIBE_14_ACCEPTED_RU",
+        "storageField": "btn_KBKey_KeyPadAdd",
+        "memMacId": 14
+      },
+      {
+        "physicalControl": "Space",
+        "semanticAction": "SAFE_CONTINUE",
+        "macro": "VIBE_15_SAFE_CONTINUE_RU",
+        "storageField": "btn_KBKey_Space",
+        "memMacId": 12
+      }
+    ],
+    "spaceText": "Давай дальше, без push/merge",
+    "statusMode": "SHORT",
+    "statusText": "Дай статус"
+  }
+}
