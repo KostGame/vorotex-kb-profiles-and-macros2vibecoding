@@ -104,13 +104,13 @@ function Remove-OldStatusLabHandlers {
 
 function Install-StatusLabHooks {
     param(
-        [Parameter(Mandatory)][string]$Home,
+        [Parameter(Mandatory)][string]$CodexHomePath,
         [Parameter(Mandatory)][string]$Logger
     )
 
-    New-Item -ItemType Directory -Path $Home -Force | Out-Null
+    New-Item -ItemType Directory -Path $CodexHomePath -Force | Out-Null
 
-    $target = Join-Path $Home 'hooks.json'
+    $target = Join-Path $CodexHomePath 'hooks.json'
     $backup = $target + '.vorotex-k15-status-lab.bak'
 
     if (Test-Path -LiteralPath $target -PathType Leaf) {
@@ -201,7 +201,7 @@ function Install-StatusLabHooks {
     }
 
     return [pscustomobject]@{
-        home = $Home
+        home = $CodexHomePath
         hooksPath = $target
         backupPath = if (Test-Path -LiteralPath $backup -PathType Leaf) { $backup } else { $null }
     }
@@ -214,8 +214,8 @@ if (-not (Test-Path -LiteralPath $logger -PathType Leaf)) {
 
 $homes = Get-DetectedCodexHomes -ExplicitHomes $CodexHome
 $installed = @()
-foreach ($home in $homes) {
-    $installed += Install-StatusLabHooks -Home $home -Logger $logger
+foreach ($codexHomePath in $homes) {
+    $installed += Install-StatusLabHooks -CodexHomePath $codexHomePath -Logger $logger
 }
 
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
