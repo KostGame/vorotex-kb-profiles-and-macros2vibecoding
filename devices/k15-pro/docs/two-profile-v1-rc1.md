@@ -35,6 +35,14 @@ generated HID stream ends with exactly one Space event. Structural macros such
 as Shift+Enter, shortcuts, raw code fences, and the composite clipboard report
 sequence opt out of this suffix.
 
+Profile A key `0` is intentionally a ChatGPT-composer-specific composite: it
+types `Вот отчет`, performs Shift+Enter, opens a three-backtick English code
+block, performs Shift+Enter, pastes with Ctrl+V, and returns the input layout
+to Russian. It emits neither a closing fence nor a newline after the paste, so
+the caret remains in the composer code-block node until the joystick's native
+Enter is deliberately used to submit. This end-of-message behavior is not a
+general Markdown macro pattern.
+
 The generator emits independently importable `.KB.Config` packages and
 optional standalone `.Macro.Config` packages. A combined Export-All package is
 not emitted in this RC because the sanitized evidence proves only the

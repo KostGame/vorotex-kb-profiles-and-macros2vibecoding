@@ -162,15 +162,35 @@ class SerializerTests(unittest.TestCase):
         self.assertEqual(data["macVal"][0:data["num"]][-6:], [224, 225, 31, 31, 225, 224])
         self.assertEqual(data["num"], 18)
 
-    def test_report_from_clipboard_structure_contains_ctrl_v_and_no_submit(self):
+    def test_report_from_clipboard_has_exact_chatgpt_composer_sequence(self):
         data = self.macro("A", "REPORT_FROM_CLIPBOARD")["macData"]
         values = data["macVal"][:data["num"]]
-        self.assertIn([224, 25, 25, 224], [values[i:i + 4] for i in range(len(values) - 3)])
-        self.assertEqual(values.count(40), 6)
-        self.assertEqual(values.count(53), 12)
+        states = data["macSta"][:data["num"]]
+        expected_values, expected_states = gen.concat_events(
+            gen.selector_events("RU"),
+            gen.hid_events("Вот отчет", "RU"),
+            gen.shift_enter_events(),
+            gen.selector_events("EN"),
+            gen.hid_events("```", "EN"),
+            gen.shift_enter_events(),
+            gen.key_chord(25, (224,)),
+            gen.selector_events("RU"),
+        )
+        self.assertEqual(values, expected_values)
+        self.assertEqual(states, expected_states)
+
+        ctrl_v = [224, 25, 25, 224]
+        ctrl_v_index = next(index for index in range(len(values) - 3) if values[index:index + 4] == ctrl_v)
+        post_paste = values[ctrl_v_index + len(ctrl_v):]
+        self.assertEqual(post_paste, gen.selector_events("RU")[0])
+        self.assertNotIn(53, post_paste, "closing fence must not follow Ctrl+V")
+        self.assertNotIn(40, post_paste, "newline/native Enter must not follow Ctrl+V")
+        self.assertEqual(values.count(40), 4, "only the two structural Shift+Enter sequences are allowed")
+        self.assertEqual(values.count(53), 6, "only the opening three-backtick fence is allowed")
         self.assertEqual(values[-6:], [224, 225, 31, 31, 225, 224])
-        self.assertNotEqual(values[6 + len(gen.hid_events("Вот отчет", "RU")[0]) - 2:]
-                            [0:2], [44, 44])
+        report_start = len(gen.selector_events("RU")[0])
+        report_end = report_start + len(gen.hid_events("Вот отчет", "RU")[0])
+        self.assertNotEqual(values[report_end - 2:report_end], [44, 44], "structural text must not receive suffix")
 
     def test_ru_hid_mapping_and_cyrillic_ge(self):
         values, states = gen.hid_events("Проверь", "RU")

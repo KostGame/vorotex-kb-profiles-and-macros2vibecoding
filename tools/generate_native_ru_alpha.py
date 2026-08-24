@@ -241,8 +241,7 @@ def macro_events(profile: str, action: str, layout: str = "RU") -> tuple[list[in
         return code_fence_events()
     if action == "REPORT_FROM_CLIPBOARD":
         return concat_events(text_events("Вот отчет", "RU", append_suffix=False), shift_enter_events(), code_fence_events(False),
-                             shift_enter_events(), key_chord(25, (224,)), shift_enter_events(),
-                             code_fence_events(False), selector_events("RU"))
+                             shift_enter_events(), key_chord(25, (224,)), selector_events("RU"))
     if action in {"CHECK", "NEXT", "AGENT_PROMPT", "FIX", "PUBLISH", "MERGE", "CREATE",
                   "CONTINUE", "REVIEW", "DONE", "REPORT", "HERE_IS_REPORT", "STATUS", "STOP",
                   "REPORT_NEXT_CHAT", "ACCEPT_OR_APPROVE"}:
@@ -404,6 +403,8 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "PROFILE_A_CUT=PASS", "PROFILE_A_UNDO=PASS", "PROFILE_A_REDO=PASS", "PROFILE_A_SELECT_ALL=PASS",
         "PROFILE_A_REPORT=PASS", "PROFILE_A_HERE_IS_REPORT=PASS", "PROFILE_A_CODE_FENCE=PASS",
         "PROFILE_A_REPORT_FROM_CLIPBOARD=PASS", "REPORT_FROM_CLIPBOARD_AUTO_SUBMIT=NO",
+        "REPORT_FROM_CLIPBOARD_CLOSING_FENCE=NO", "REPORT_FROM_CLIPBOARD_NEWLINE_AFTER_PASTE=NO",
+        "REPORT_FROM_CLIPBOARD_STRUCTURAL_SUFFIX=NO",
         'TEXT_COMMAND_SUFFIX=" "', "AUTO_PUNCTUATION=NO", "ALL_TEXT_SUFFIX_TESTS=PASS",
         f"DEFAULT_KEY_EVENT_DELAY_MS={DEFAULT_EVENT_DELAY_MS}",
         f"OFFICIAL_RELEASE_MIN_DELAY_MS={OFFICIAL_RELEASE_MIN_DELAY_MS}",
@@ -418,7 +419,7 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "LIVE_DEVICE_CHANGED=NO", "LIVE_VOROTEX_CONFIG_CHANGED=NO", "PUSH=NOT RUN", "PR=NOT CREATED", "MERGE=NOT RUN", "",
         f"- Generated event delay: `{event_delay_ms} ms` (selector settle timing is separate: `{SELECTOR_SETTLE_DELAY_MS} ms`)",
         "- Shift+Enter: `225,40,40,225 / 1,1,2,2` with configured event delay",
-        "- Profile A 0 contains RU text, three EN backticks, Ctrl+V, and no native Enter",
+        "- Profile A 0 opens a ChatGPT code block, pastes with Ctrl+V, returns to RU, and emits no closing fence, post-paste newline, or native Enter",
         "- Combined Export-All package intentionally not emitted: unsupported native fields are not guessed."]
     (output_dir / "generation-report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
     return manifest
