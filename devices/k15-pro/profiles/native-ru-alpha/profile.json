@@ -33,7 +33,7 @@
     {"physicalControl": ".", "semanticAction": "STATUS", "macro": "VIBE_11_STATUS_RU", "storageField": "btn_KBKey_KeyPadPoint", "memMacId": 10, "bindingProof": "native-fixture"},
     {"physicalControl": "Enter", "semanticAction": "NEW_LINE", "macro": "VIBE_12_NEW_LINE_RU", "storageField": "btn_KBKey_KeyPadEnter", "memMacId": 11, "bindingProof": "native-fixture"},
     {"physicalControl": "-", "semanticAction": "STOP", "macro": "VIBE_13_STOP_RU", "storageField": "btn_KBKey_KeyPadSub", "memMacId": 13, "bindingProof": "native-fixture-observed-state"},
-    {"physicalControl": "+", "semanticAction": "REPORT", "macro": "VIBE_14_REPORT_RU", "storageField": "btn_KBKey_KeyPadAdd", "memMacId": 14, "bindingProof": "native-fixture-observed-state"},
+    {"physicalControl": "+", "semanticAction": "ACCEPTED", "macro": "VIBE_14_ACCEPTED_RU", "storageField": "btn_KBKey_KeyPadAdd", "memMacId": 14, "bindingProof": "native-fixture-observed-state-guid-preserved"},
     {"physicalControl": "Space", "semanticAction": "ACCEPT_OR_APPROVE", "macro": "VIBE_15_ACCEPT_RU", "storageField": "btn_KBKey_Space", "memMacId": 12, "bindingProof": "native-fixture-observed-state"}
   ],
   "joystickClick": {"storageField": "btn_KBKey_Enter", "mode": "NATIVE_ENTER", "keyValue": 40},

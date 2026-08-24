@@ -47,6 +47,12 @@ uses Shift+Enter after Ctrl+V. It emits no closing fence and never uses native
 Enter, so it cannot submit the composer. This is a deliberate clipboard UX
 invariant, not a general Markdown macro pattern.
 
+V1.1 RC1 changes only Profile B `+`: it now emits `Принимается ` with the
+existing RU selector, 5 ms timing, and exactly one compiler-added trailing
+space. The physical slot `btn_KBKey_KeyPadAdd`, `MemMacId=14`, and macro GUID
+`B4A6DEAB-4CCD-4761-8E19-E4D984005A76` remain stable. Profile A `+` remains
+`TOOLS_14_REPORT_NEXT_CHAT_RU`; Profile B `-` and Space are unchanged.
+
 Profile A encoder rotation is now proven as vertical scroll through
 `btn_KB_Scr_Up0=304` and `btn_KB_Scr_Dn0=305`; Profile B encoder behavior is
 unchanged. Profile lighting is applied by `.KB.Config` and preserved from the

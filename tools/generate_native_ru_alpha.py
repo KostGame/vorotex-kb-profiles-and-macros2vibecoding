@@ -61,7 +61,7 @@ RU_OUTPUTS = {
     "STATUS": "Дай статус", "STOP": "Стоп",
     "REPORT_NEXT_CHAT": "Подготовь отчет для следующего чата",
     "ACCEPT_OR_APPROVE": "Подтверждаю", "SAFE_CONTINUE": "Давай дальше, без push/merge",
-    "REPORT": "Отчет", "HERE_IS_REPORT": "Вот отчет",
+    "REPORT": "Отчет", "HERE_IS_REPORT": "Вот отчет", "ACCEPTED": "Принимается",
 }
 LANGUAGE_SELECTOR = {
     "RU": ([224, 225, 31, 31, 225, 224], [1, 1, 1, 2, 2, 2]),
@@ -100,7 +100,7 @@ MACROS_B = [
     ("VIBE_11_STATUS_RU", "STATUS", "C16A8592-DCA2-4036-AB18-6E10AD7CEFC8"),
     ("VIBE_12_NEW_LINE_RU", "NEW_LINE", "C7D4A090-E957-4AD1-B34C-A2FBC473CA33"),
     ("VIBE_13_STOP_RU", "STOP", "2C0417D3-7255-446E-926D-EF77BB6D6DF3"),
-    ("VIBE_14_REPORT_RU", "REPORT_NEXT_CHAT", "B4A6DEAB-4CCD-4761-8E19-E4D984005A76"),
+    ("VIBE_14_ACCEPTED_RU", "ACCEPTED", "B4A6DEAB-4CCD-4761-8E19-E4D984005A76"),
     ("VIBE_15_SAFE_CONTINUE_RU", "SAFE_CONTINUE", "9C22A63B-A5F8-4D2A-A473-F49DFD668F17"),
 ]
 MACROS_A = [
@@ -137,7 +137,7 @@ PROFILE_SPECS = {
         "bindings": [("1", "CHECK"), ("2", "NEXT"), ("3", "AGENT_PROMPT"), ("4", "FIX"),
                       ("5", "PUBLISH"), ("6", "MERGE"), ("7", "CREATE"), ("8", "CONTINUE"),
                       ("9", "REVIEW"), ("0", "DONE"), (".", "STATUS"), ("Enter", "NEW_LINE"),
-                      ("-", "STOP"), ("+", "REPORT_NEXT_CHAT"), ("Space", "SAFE_CONTINUE")],
+                      ("-", "STOP"), ("+", "ACCEPTED"), ("Space", "SAFE_CONTINUE")],
     },
 }
 
@@ -248,7 +248,7 @@ def macro_events(profile: str, action: str, layout: str = "RU") -> tuple[list[in
                              shift_enter_events(), key_chord(25, (224,)), shift_enter_events(), selector_events("RU"))
     if action in {"CHECK", "NEXT", "AGENT_PROMPT", "FIX", "PUBLISH", "MERGE", "CREATE",
                   "CONTINUE", "REVIEW", "DONE", "REPORT", "HERE_IS_REPORT", "STATUS", "STOP",
-                  "REPORT_NEXT_CHAT", "ACCEPT_OR_APPROVE"}:
+                  "REPORT_NEXT_CHAT", "ACCEPTED", "ACCEPT_OR_APPROVE"}:
         return text_events(RU_OUTPUTS[action], "RU")
     raise ValueError(f"unsupported action {action!r} for profile {profile}")
 

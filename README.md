@@ -94,7 +94,7 @@ do not assume Import state is deterministic from file bytes alone.
 | 7–0 | Отчет, Вот отчет, ``` fence, report from clipboard | Создавай, Продолжай, Проведи ревью, Готово |
 | . | Дай статус | Дай статус |
 | Enter | Shift+Enter / newline | Shift+Enter / newline |
-| - / + | Стоп / Подготовь отчет для следующего чата | Стоп / Подготовь отчет для следующего чата |
+| - / + | Стоп / Подготовь отчет для следующего чата | Стоп / Принимается |
 | Space | Подтверждаю | Давай дальше, без push/merge |
 
 Profile A key `0` opens a code block, pastes the clipboard, adds a safe
