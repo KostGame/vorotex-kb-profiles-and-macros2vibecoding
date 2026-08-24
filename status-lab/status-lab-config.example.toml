@@ -1,0 +1,81 @@
+# VOROTEX K15 Status Lab
+#
+# Цвет задаёт аппаратный профиль. Состояния меняют только эффект.
+# NORMAL всегда восстанавливает точный baseline, считанный с клавиатуры.
+#
+# Effects: constant, flowing_water, mono_water, single_color_breathing,
+#          cycle_breathing, tetris_blocks, neon, ambilight, off
+# tetris_blocks и cycle_breathing не рекомендуются до физической классификации:
+# они могут давать лишнюю многоцветную активность.
+
+schema_version = 2
+
+[device]
+# rgb доказан на текущей физической K15; grb оставлен для совместимости.
+wire_color_order = "rgb"
+
+[profiles.A]
+# RED / TOOLS-AUTH
+color = "#FF0000"
+
+[profiles.B]
+# BLUE / MAIN-VIBECODING
+color = "#0000FF"
+
+[states.running]
+# RUNNING: спокойное движение в цвете активного профиля.
+enabled = true
+effect = "mono_water"
+brightness = 4      # 1..6
+speed = 3           # 1..7
+direction = 0       # 0..1
+duration_seconds = 0
+
+[states.waiting]
+# WAITING: заметное ожидание в том же цвете.
+enabled = true
+effect = "single_color_breathing"
+brightness = 6
+speed = 6
+direction = 0
+duration_seconds = 0
+
+[states.done]
+# DONE: ограниченный attention-effect; затем exact baseline.
+enabled = true
+effect = "single_color_breathing"
+brightness = 6
+speed = 3
+direction = 0
+duration_seconds = 10
+
+[states.error]
+# ERROR: только high-confidence semantic error.
+enabled = true
+effect = "single_color_breathing"
+brightness = 6
+speed = 7
+direction = 0
+duration_seconds = 15
+
+[profile_switch]
+# Overlay всегда использует цвет НОВОГО профиля и затем возвращает semantic state.
+enabled = true
+effect = "mono_water"
+brightness = 6
+speed = 5
+direction = 0
+duration_seconds = 2
+
+[activation]
+# Выключено по умолчанию: никакой красно-синей дискотеки при старте notifier.
+enabled = false
+effect = "mono_water"
+brightness = 4
+speed = 4
+direction = 0
+duration_seconds = 2
+
+[effect_lab]
+# Время одного теста перед автоматическим exact restore.
+test_duration_seconds = 4

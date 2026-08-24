@@ -1,87 +1,191 @@
 # VOROTEX K15 Status Lab
 
-Windows-компаньон для RGB-индикации состояний Codex на VOROTEX K15 Pro.
+Windows tray helper для RGB-индикации состояний Codex на VOROTEX K15 Pro.
 
-Status Lab объединяет:
-
-1. lifecycle hooks Codex;
-2. Windows notifications через `UserNotificationListener`;
-3. normalized state machine;
-4. opt-in RGB output через доказанный W909/W910-family HID protocol;
-5. пользовательский RGB policy config без перекомпиляции приложения.
-
-Локальный журнал:
+Текущая продуктовая модель:
 
 ```text
-%LOCALAPPDATA%\VOROTEX\K15 Status Lab\events.jsonl
+PROFILE A = RED
+PROFILE B = BLUE
+
+цвет   -> какой hardware profile активен
+эффект -> что сейчас делает агент
 ```
 
-Локальный RGB config:
+Состояния не владеют цветом. `NORMAL` не является notification-effect и всегда восстанавливает точный onboard baseline, считанный с клавиатуры до первой записи Status Lab.
+
+## Источники состояния
+
+Primary semantic source: Codex lifecycle hooks.
 
 ```text
-%LOCALAPPDATA%\VOROTEX\K15 Status Lab\config.json
-```
-
-В tray есть пункт `Открыть RGB config`. Изменения config применяются после полного перезапуска Status Lab.
-
-## Privacy boundary
-
-Журнал хранит только диагностические метаданные: timestamps, source/event, безопасный subset Codex hook metadata, Windows notification identity/fingerprint, normalized-state и K15 transport events.
-
-Status Lab намеренно не сохраняет prompt text, assistant response text, tool input/response, transcript contents и открытый текст Windows notifications.
-
-## Codex hooks
-
-Устанавливаются пять hooks:
-
-```text
-UserPromptSubmit
-PermissionRequest
-PostToolUse
-Stop
-SessionEnd
-```
-
-Ключевая коррекция после физической канарейки:
-
-```text
+UserPromptSubmit  -> RUNNING
 PermissionRequest -> WAITING
-successful PostToolUse -> RUNNING
+PostToolUse       -> RUNNING после approval
+Stop              -> DONE_PENDING_ATTENTION
+SessionEnd        -> NORMAL
 ```
 
-Подтверждение permission внутри Codex не обязано удалять Windows toast, поэтому `PostToolUse` является более сильным сигналом продолжения работы. Удаление correlated permission toast остаётся дополнительным путём `WAITING -> RUNNING`.
+Windows `UserNotificationListener` остаётся supplemental attention channel. Toast keyword heuristics не имеют права самостоятельно создавать semantic `ERROR`.
 
-Инсталлятор ищет активные Codex homes (`.codex-agentloop`, `.codex`, `.codex-*`, explicit `CODEX_HOME`), сохраняет существующие hook groups, делает one-time backup и идемпотентно проверяет все пять handlers после записи.
+HID transport failure и semantic agent error являются разными доменами. `0x82` timeout/transition отображается как transport `RETRYING/RECONNECTED`, а не как semantic `ERROR`.
 
-После изменения hooks полностью перезапусти Codex.
+## Конфигурация
 
-## Normalized state
+Canonical user config:
 
 ```text
-NORMAL
-RUNNING
-WAITING
-DONE_PENDING_ATTENTION
-ERROR
+%LOCALAPPDATA%\VOROTEX\K15 Status Lab\config.toml
 ```
 
-Текущие правила:
+Формат TOML выбран специально для комментариев и подсказок рядом с параметрами. Первый запуск создаёт annotated config. Пример также поставляется в artifact как `status-lab-config.example.toml`.
 
-- `UserPromptSubmit` -> `RUNNING`;
-- `PermissionRequest` -> `WAITING`;
-- `PostToolUse` во время `WAITING` -> `RUNNING`;
-- correlated permission toast removed -> `RUNNING` как дополнительный путь;
-- `Stop` -> `DONE_PENDING_ATTENTION`;
-- post-Stop toast removed -> `NORMAL`;
-- если completion toast остаётся, semantic DONE сейчас также ограничен защитным 15-second timeout -> `NORMAL`;
-- `SessionEnd` -> `NORMAL`.
+Главное структурное правило:
 
-Toast keyword heuristic не имеет права самостоятельно создавать semantic `ERROR`. `ERROR` зарезервирован для будущего high-confidence failure source от Codex/AgentLoop.
+```toml
+[profiles.A]
+color = "#FF0000"
+
+[profiles.B]
+color = "#0000FF"
+
+[states.running]
+effect = "mono_water"
+brightness = 4
+speed = 3
+```
+
+В `[states.*]` нет `color`. Renderer всегда использует цвет активного профиля.
+
+Если `config.toml` невалиден:
+
+- пользовательский файл сохраняется без изменений;
+- Status Lab запускается с безопасными defaults для текущей сессии;
+- tray показывает понятную ошибку с путём/строкой;
+- приложение не перезаписывает ошибочный файл дефолтами.
+
+Изменения TOML применяются после перезапуска Status Lab в этой итерации.
+
+Старый `status-lab-config.example.json` остаётся только как исторический артефакт прототипа и больше не публикуется в runtime artifact.
+
+## Встроенный HTML configurator
+
+В portable artifact находится:
+
+```text
+configurator\index.html
+```
+
+Tray:
+
+```text
+Открыть RGB configurator
+```
+
+Configurator полностью локальный:
+
+- без сервера;
+- без network calls;
+- без telemetry;
+- Profile A/B color picker + HEX;
+- dropdown всех известных K15 effect modes;
+- brightness/speed/direction/duration controls;
+- activation checkbox;
+- profile-switch settings;
+- wire color order;
+- предупреждения для потенциально многоцветных/раздражающих modes;
+- Load `config.toml` через browser File API;
+- live validation;
+- generated annotated TOML preview;
+- Download `config.toml`.
+
+Browser сам не записывает `%LOCALAPPDATA%`: первая версия скачивает готовый `config.toml`, который пользователь заменяет вручную.
+
+## Default RGB policy
+
+До физической Effect Lab классификации defaults являются кандидатами, а не финальным решением:
+
+```text
+NORMAL   -> exact device baseline
+RUNNING  -> Mono Water, profile color
+WAITING  -> Single-color breathing, profile color
+DONE     -> Single-color breathing, profile color, 10 s
+ERROR    -> Single-color breathing, profile color, reserved high-confidence source
+
+profile switch -> Mono Water, NEW profile color, 2 s, then resume semantic state
+activation     -> OFF
+```
+
+Tetris больше не является default. Он сохранён как явно выбираемый experimental mode для исследований.
+
+## Effect Lab
+
+Tray submenu:
+
+```text
+RGB Effect Test
+  Constant (control)
+  Mono Water
+  Single-color breathing
+  Flowing Water (single color)
+  Restore exact baseline
+```
+
+Effect Lab доступен только когда RGB canary уже включён. Каждый тест использует единственный configured color текущего profile и автоматически восстанавливает exact baseline после `effect_lab.test_duration_seconds`.
+
+Первый physical gate:
+
+```text
+EFFECT-LAB-001
+
+Profile A / RED:
+Constant -> Restore
+Mono Water -> Restore
+Single-color breathing -> Restore
+Flowing Water single RED -> Restore
+
+Profile B / BLUE:
+повторить те же тесты single BLUE
+
+RGB OFF
+manual A -> B -> A
+```
+
+Owner классифицирует каждый эффект как `GOOD / ACCEPTABLE / ANNOYING / MULTICOLOR`. Только после этого выбираются постоянные defaults.
+
+## Exact rollback
+
+`DeviceBaselineSnapshot` является rollback authority.
+
+Перед первой RGB-записью для профиля Status Lab читает:
+
+- точный lighting header;
+- baseline mode record, если mode известен;
+- все mode records, которые notifier/Effect Lab потенциально может затронуть.
+
+Никакой configured normal не записывается до snapshot.
+
+При A -> B / B -> A:
+
+1. exact restore профиля, который пользователь покидает;
+2. возврат на выбранный пользователем новый slot;
+3. exact snapshot нового profile до первой записи, если он ещё не встречался;
+4. profile-switch overlay в цвете нового profile;
+5. resume текущего semantic state.
+
+При RGB OFF / application exit:
+
+- сначала требуется стабильный `0x82` active slot;
+- если slot не стабилизируется, Status Lab не угадывает профиль и не делает потенциально неверную запись;
+- если slot известен, best-effort восстанавливаются все touched profile snapshots;
+- затем возвращается профиль, выбранный пользователем;
+- HID handle освобождается независимо от restore failure;
+- WinForms process не должен падать из-за transport exception.
 
 ## K15 HID path
 
 ```text
-VID        36A4 / B6A4
+VID        B6A4 / 36A4
 PID        4100 / 4101
 UsagePage  FF01
 Usage      0001
@@ -89,238 +193,50 @@ Report ID  06
 Report     41 bytes
 lighting write 09
 lighting read  89
-active-slot read  82 selector 2
-slot select       02 selector 2
+active slot    82 selector 2
+slot select    02 selector 2
 ```
 
 Каждая lighting write проверяется readback через `0x89`.
 
+Текущий физически принятый default channel order:
+
+```toml
+[device]
+wire_color_order = "rgb"
+```
+
+`grb` оставлен как explicit compatibility option.
+
 Status Lab не пишет key mappings, macros, power settings или firmware.
 
-### Physical channel calibration
-
-Open W910 research предполагает `G,R,B`, но физическая VOROTEX K15 canary показала обратное для нашего экземпляра: semantic red при старой GRB-записи физически становился зелёным.
-
-Поэтому default:
-
-```json
-"wireColorOrder": "rgb"
-```
-
-Это даёт ожидаемые физические primary colors на тестируемой K15. Для совместимости/повторной калибровки config допускает `"grb"`.
-
-### Transport faults are not semantic ERROR
-
-Кратковременные `0x82` timeouts/transition values рассматриваются как HID transport state. Active-slot read повторяется до стабилизации, reconnect показывается как `RGB: RETRYING` / `RECONNECTED`, а не semantic ERROR.
-
-Отключение RGB не должно ронять приложение: restore failure журналируется, HID handle всё равно освобождается.
-
-## Editable RGB config
-
-Status Lab создаёт `config.json` автоматически при первом запуске. В artifact также публикуется `status-lab-config.example.json`.
-
-Поддерживаемые `mode`:
+## Tray
 
 ```text
-constant
-flowingWater
-monoWater
-singleColorBreathing
-cycleBreathing
-tetrisBlocks
-neon
-ambilight
-off
+Состояние: ...
+Уведомления: ...
+RGB: ...
+Сбросить состояние в NORMAL
+
+Включить/Выключить K15 RGB canary
+Открыть RGB config.toml
+Открыть RGB configurator
+RGB Effect Test >
+Установить Codex hooks
+Открыть журнал событий
+Открыть папку журнала
+Очистить журнал
+Выход
 ```
 
-Для каждого effect можно задавать:
-
-```json
-{
-  "enabled": true,
-  "mode": "singleColorBreathing",
-  "brightness": 6,
-  "speed": 7,
-  "direction": 0,
-  "durationSeconds": 5,
-  "colors": ["red"]
-}
-```
-
-Диапазоны:
-
-```text
-brightness       1..6
-speed            1..7
-direction        0..1
-durationSeconds  0..3600
-colors           максимум 7
-```
-
-`durationSeconds = 0` у state effect означает: показывать его до следующего normalized-state transition. Для временных overlays (`activationSignal`, profile `switchSignal`) default duration > 0.
-
-Цвета можно задавать именами или `#RRGGBB`:
-
-```text
-red green blue white black cyan magenta purple yellow
-#RRGGBB
-```
-
-## Accepted profile baseline defaults
-
-Owner baseline зафиксирован прямо в editable config:
-
-```text
-Profile A normal = red Constant
-Profile B normal = blue Constant
-```
-
-При первом обнаружении профиля во время RGB session Status Lab применяет его configured `normal`, а затем сохраняет точный snapshot header + всех mode records, которые может затронуть notifier. Это одновременно чинит старый persisted breathing residue и даёт exact in-process restore после временных эффектов.
-
-Default config можно менять. Например, если позже базовая подсветка Profile B должна быть не синей, достаточно изменить `profiles.b.normal` и перезапустить Status Lab.
-
-## Default notification policy
-
-Жёлтый/янтарный исключены как недостаточно различимые на физической K15.
-
-Default:
-
-```text
-NORMAL A                configured red Constant
-NORMAL B                configured blue Constant
-RUNNING                 Tetris blocks
-WAITING                 white fast breathing
-DONE_PENDING_ATTENTION  green breathing, 15s max visual duration
-ERROR                    red fast breathing, reserved high-confidence error
-```
-
-Все эти параметры теперь являются config, а не hardcoded policy.
-
-## Activation signal
-
-При каждом ручном включении RGB canary сначала один раз показывается `activationSignal`, чтобы периферическим зрением было понятно, что клавиатура перешла в режим индикации уведомлений.
-
-Default согласно owner request:
-
-```text
-mode        Flowing Water
-speed       7 (max)
-brightness  4
-colors      red + blue
-duration    3 seconds
-```
-
-После activation overlay автоматически возвращается текущее notification state. Если состояние `NORMAL`, возвращается normal текущего профиля.
-
-## Profile switch overlay
-
-Profile switch signal полностью задаётся в config отдельно для A и B.
-
-Default:
-
-```text
-switch to A -> red fast breathing 5s
-switch to B -> blue fast breathing 5s
-```
-
-Profile switch overlay имеет временный приоритет над notification state. Через `durationSeconds` возвращается актуальное состояние. Пример:
-
-```text
-WAITING
--> switch A -> B
--> blue profile signal 5s
--> WAITING effect again
-```
-
-Если state = NORMAL, после overlay возвращается configured normal нового профиля.
-
-При быстром A/B switching Status Lab временно выбирает предыдущий slot через доказанный `0x02 / selector 2`, восстанавливает cached baseline предыдущего профиля и сразу возвращается на выбранный пользователем slot. Это не должно оставлять скрытый профиль в notifier mode.
-
-## Effect record writes
-
-Для любого config-driven effect Status Lab:
-
-1. пишет detail record конкретного mode по адресу `(mode & 0x3F) * 25`;
-2. проверяет exact readback;
-3. только после этого переключает lighting header на выбранный mode;
-4. снова проверяет readback.
-
-Так новый palette/speed уже записан до визуального включения эффекта, что уменьшает wrong-color transients.
-
-При restore сначала восстанавливается baseline mode record, затем baseline header, затем скрытые records остальных затронутых режимов.
-
-## RGB canary
-
-RGB по умолчанию OFF. Перед включением закрой официальный VOROTEX software и W910 WebDriver.
-
-Tray:
-
-```text
-Включить K15 RGB canary
-Открыть RGB config
-```
-
-Profile A/B можно переключать во время canary.
-
-## Next owner gate
-
-После изменения policy/config layer нужен один короткий physical canary:
-
-```text
-enable RGB
--> Flowing Water red+blue, speed 7, brightness 4
--> current profile baseline / current state
-
-UserPromptSubmit
--> Tetris (default RUNNING)
-
-PermissionRequest
--> white fast breathing
-
-approve
--> PostToolUse -> Tetris
-
-Stop
--> physical green breathing
-
-completion removed OR visual duration expires
--> configured current-profile normal
-```
-
-Отдельно:
-
-```text
-A -> B during state
--> blue profile overlay 5s
--> resume state
-
-B -> A
--> physical RED profile overlay, not green
--> resume state / red Constant baseline
-```
-
-## Build
+## Build / tests
 
 ```text
 dotnet run --project status-lab/Vorotex.K15.StatusLab.csproj
-
+powershell -ExecutionPolicy Bypass -File status-lab/tests/smoke.ps1
+dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
+dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release
 dotnet publish status-lab/Vorotex.K15.StatusLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
-Smoke tests:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\status-lab\tests\smoke.ps1
-
-dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
-```
-
-## Canary evidence
-
-- [`docs/owner-canary-2026-08-24.md`](docs/owner-canary-2026-08-24.md)
-- [`docs/owner-canary-2-2026-08-24.md`](docs/owner-canary-2-2026-08-24.md)
-- [`docs/owner-canary-3-2026-08-24.md`](docs/owner-canary-3-2026-08-24.md)
-- [`docs/owner-canary-4-2026-08-24.md`](docs/owner-canary-4-2026-08-24.md)
-- [`docs/owner-canary-5-2026-08-24.md`](docs/owner-canary-5-2026-08-24.md)
-
-PR #20 remains intentionally unmerged until the config-driven RGB canary is physically accepted.
+PR/CI должны пройти до физического `EFFECT-LAB-001`. Финальные effect defaults принимаются только по owner canary на реальной K15.

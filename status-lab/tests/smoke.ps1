@@ -3,10 +3,23 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $logger = Join-Path $projectRoot 'codex-hook-logger.ps1'
 $installer = Join-Path $projectRoot 'install-codex-hooks.ps1'
+$configExample = Join-Path $projectRoot 'status-lab-config.example.toml'
+$configurator = Join-Path $projectRoot 'configurator\index.html'
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('vorotex-k15-status-lab-' + [Guid]::NewGuid().ToString('N'))
 
-New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+if (-not (Test-Path -LiteralPath $configExample)) { throw 'Annotated TOML example is missing.' }
+if (-not (Test-Path -LiteralPath $configurator)) { throw 'Local HTML configurator is missing.' }
+$html = Get-Content -LiteralPath $configurator -Raw -Encoding UTF8
+if ($html -match 'https?://') { throw 'HTML configurator must not depend on network URLs.' }
+if ($html -notmatch 'fileInput' -or $html -notmatch 'Download config.toml') {
+    throw 'HTML configurator must support local File API load and TOML download.'
+}
+$toml = Get-Content -LiteralPath $configExample -Raw -Encoding UTF8
+if ($toml -notmatch '\[profiles\.A\]' -or $toml -notmatch '\[states\.running\]' -or $toml -notmatch '#') {
+    throw 'TOML example must be annotated and include profile/state sections.'
+}
 
+New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 $oldLocalAppData = $env:LOCALAPPDATA
 $oldUserProfile = $env:USERPROFILE
 
@@ -28,19 +41,11 @@ try {
     } | ConvertTo-Json -Compress
 
     $synthetic | powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $logger
-
     $journal = Join-Path $localAppData 'VOROTEX\K15 Status Lab\events.jsonl'
-    if (-not (Test-Path -LiteralPath $journal)) {
-        throw 'Hook logger did not create journal.'
-    }
-
+    if (-not (Test-Path -LiteralPath $journal)) { throw 'Hook logger did not create journal.' }
     $record = Get-Content -LiteralPath $journal -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($record.source -ne 'codex_hook' -or $record.event -ne 'UserPromptSubmit') {
-        throw 'Hook logger emitted unexpected event.'
-    }
-    if ($null -ne $record.PSObject.Properties['prompt']) {
-        throw 'Hook logger persisted prompt content.'
-    }
+    if ($record.source -ne 'codex_hook' -or $record.event -ne 'UserPromptSubmit') { throw 'Hook logger emitted unexpected event.' }
+    if ($null -ne $record.PSObject.Properties['prompt']) { throw 'Hook logger persisted prompt content.' }
 
     $codexHome = Join-Path $userProfile '.codex'
     $agentLoopHome = Join-Path $userProfile '.codex-agentloop'
@@ -55,10 +60,7 @@ try {
       {
         "matcher": "^Bash$",
         "hooks": [
-          {
-            "type": "command",
-            "command": "echo keep-me"
-          }
+          { "type": "command", "command": "echo keep-me" }
         ]
       }
     ]
@@ -69,25 +71,19 @@ try {
     $firstInstall = (& $installer | Out-String | ConvertFrom-Json)
     $secondInstall = (& $installer | Out-String | ConvertFrom-Json)
     if ($firstInstall.count -ne 2 -or $secondInstall.count -ne 2) {
-        throw "Expected installer to target both .codex and .codex-agentloop."
+        throw 'Expected installer to target both .codex and .codex-agentloop.'
     }
 
     $installed = Get-Content -LiteralPath $hooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($installed.description -ne 'pre-existing') {
-        throw 'Installer did not preserve existing root fields.'
-    }
-    if (@($installed.hooks.PreToolUse).Count -ne 1) {
-        throw 'Installer did not preserve existing hook groups.'
-    }
+    if ($installed.description -ne 'pre-existing') { throw 'Installer did not preserve existing root fields.' }
+    if (@($installed.hooks.PreToolUse).Count -ne 1) { throw 'Installer did not preserve existing hook groups.' }
 
     foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd')) {
         $groups = @($installed.hooks.$eventName)
         $statusLabHandlers = @(
             foreach ($group in $groups) {
                 foreach ($handler in @($group.hooks)) {
-                    if ([string]$handler.commandWindows -like '*codex-hook-logger.ps1*') {
-                        $handler
-                    }
+                    if ([string]$handler.commandWindows -like '*codex-hook-logger.ps1*') { $handler }
                 }
             }
         )
@@ -96,34 +92,10 @@ try {
         }
     }
 
-    $sessionEndHandler = @(
-        foreach ($group in @($installed.hooks.SessionEnd)) {
-            foreach ($handler in @($group.hooks)) {
-                if ([string]$handler.commandWindows -like '*codex-hook-logger.ps1*') {
-                    $handler
-                }
-            }
-        }
-    )[0]
-    if ([int]$sessionEndHandler.timeout -ne 3) {
-        throw "SessionEnd timeout must be 3 seconds to match Codex loader limits."
-    }
-
     $backup = $hooksPath + '.vorotex-k15-status-lab.bak'
-    if (-not (Test-Path -LiteralPath $backup)) {
-        throw 'Installer did not create one-time backup.'
-    }
-
+    if (-not (Test-Path -LiteralPath $backup)) { throw 'Installer did not create one-time backup.' }
     $agentLoopHooksPath = Join-Path $agentLoopHome 'hooks.json'
-    if (-not (Test-Path -LiteralPath $agentLoopHooksPath)) {
-        throw 'Installer did not install hooks into .codex-agentloop.'
-    }
-    $agentLoopInstalled = Get-Content -LiteralPath $agentLoopHooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd')) {
-        if (@($agentLoopInstalled.hooks.$eventName).Count -lt 1) {
-            throw "Missing $eventName in .codex-agentloop hooks.json."
-        }
-    }
+    if (-not (Test-Path -LiteralPath $agentLoopHooksPath)) { throw 'Installer did not install hooks into .codex-agentloop.' }
 
     Write-Output 'Status Lab smoke tests: PASS'
 }

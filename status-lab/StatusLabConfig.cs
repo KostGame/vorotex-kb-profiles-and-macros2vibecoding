@@ -1,6 +1,4 @@
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Vorotex.K15.StatusLab;
 
@@ -29,9 +27,11 @@ internal sealed class LightingEffectConfig
     public K15LightingMode Mode { get; set; } = K15LightingMode.SingleColorBreathing;
     public int Brightness { get; set; } = 5;
     public int Speed { get; set; } = 4;
-    public int Direction { get; set; } = 0;
-    public double DurationSeconds { get; set; } = 0;
-    public string[] Colors { get; set; } = ["white"];
+    public int Direction { get; set; }
+    public double DurationSeconds { get; set; }
+
+    // Runtime-only palette. Canonical TOML deliberately has no color under states/overlays.
+    public string[] Colors { get; set; } = [];
 
     public LightingEffectConfig Clone() => new()
     {
@@ -47,8 +47,7 @@ internal sealed class LightingEffectConfig
 
 internal sealed class ProfileLightingConfig
 {
-    public LightingEffectConfig Normal { get; set; } = new();
-    public LightingEffectConfig SwitchSignal { get; set; } = new();
+    public string Color { get; set; } = "#FFFFFF";
 }
 
 internal sealed class StateLightingConfig
@@ -67,110 +66,52 @@ internal sealed class ProfileSetConfig
 
 internal sealed class StatusLabConfig
 {
-    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    public static string FilePath { get; } = Path.Combine(EventJournal.DirectoryPath, "config.toml");
 
-    [JsonIgnore]
-    public static string FilePath { get; } = Path.Combine(EventJournal.DirectoryPath, "config.json");
-
-    [JsonIgnore]
     public string? LoadWarning { get; private set; }
 
-    public int SchemaVersion { get; set; } = 1;
+    public int SchemaVersion { get; set; } = 2;
     public WireColorOrder WireColorOrder { get; set; } = WireColorOrder.RGB;
-    public LightingEffectConfig ActivationSignal { get; set; } = new();
     public ProfileSetConfig Profiles { get; set; } = new();
     public StateLightingConfig States { get; set; } = new();
+    public LightingEffectConfig ProfileSwitch { get; set; } = new();
+    public LightingEffectConfig ActivationSignal { get; set; } = new();
+    public double EffectLabDurationSeconds { get; set; } = 4;
 
     public static StatusLabConfig CreateDefault() => new()
     {
-        SchemaVersion = 1,
-
-        // Physical K15 canary proved that writing semantic red as the first channel produces
-        // actual red on this hardware. The older GRB assumption produced green profile-A flashes.
+        SchemaVersion = 2,
         WireColorOrder = WireColorOrder.RGB,
-
-        // One-time visual handshake when RGB notifier mode is enabled.
-        ActivationSignal = new LightingEffectConfig
-        {
-            Enabled = true,
-            Mode = K15LightingMode.FlowingWater,
-            Brightness = 4,
-            Speed = 7,
-            Direction = 0,
-            DurationSeconds = 3,
-            Colors = ["red", "blue"]
-        },
-
         Profiles = new ProfileSetConfig
         {
-            A = new ProfileLightingConfig
-            {
-                Normal = new LightingEffectConfig
-                {
-                    Mode = K15LightingMode.Constant,
-                    Brightness = 6,
-                    Speed = 7,
-                    DurationSeconds = 0,
-                    Colors = ["red"]
-                },
-                SwitchSignal = new LightingEffectConfig
-                {
-                    Mode = K15LightingMode.SingleColorBreathing,
-                    Brightness = 6,
-                    Speed = 7,
-                    DurationSeconds = 5,
-                    Colors = ["red"]
-                }
-            },
-            B = new ProfileLightingConfig
-            {
-                Normal = new LightingEffectConfig
-                {
-                    Mode = K15LightingMode.Constant,
-                    Brightness = 6,
-                    Speed = 7,
-                    DurationSeconds = 0,
-                    Colors = ["blue"]
-                },
-                SwitchSignal = new LightingEffectConfig
-                {
-                    Mode = K15LightingMode.SingleColorBreathing,
-                    Brightness = 6,
-                    Speed = 7,
-                    DurationSeconds = 5,
-                    Colors = ["blue"]
-                }
-            }
+            A = new ProfileLightingConfig { Color = "#FF0000" },
+            B = new ProfileLightingConfig { Color = "#0000FF" }
         },
-
         States = new StateLightingConfig
         {
             Running = new LightingEffectConfig
             {
-                Mode = K15LightingMode.TetrisBlocks,
-                Brightness = 5,
-                Speed = 7,
+                Mode = K15LightingMode.MonoWater,
+                Brightness = 4,
+                Speed = 3,
                 Direction = 0,
-                DurationSeconds = 0,
-                Colors = ["white"]
+                DurationSeconds = 0
             },
             Waiting = new LightingEffectConfig
             {
                 Mode = K15LightingMode.SingleColorBreathing,
                 Brightness = 6,
-                Speed = 7,
+                Speed = 6,
                 Direction = 0,
-                DurationSeconds = 0,
-                Colors = ["white"]
+                DurationSeconds = 0
             },
             Done = new LightingEffectConfig
             {
                 Mode = K15LightingMode.SingleColorBreathing,
                 Brightness = 6,
-                Speed = 4,
+                Speed = 3,
                 Direction = 0,
-                DurationSeconds = 15,
-                Colors = ["green"]
+                DurationSeconds = 10
             },
             Error = new LightingEffectConfig
             {
@@ -178,56 +119,53 @@ internal sealed class StatusLabConfig
                 Brightness = 6,
                 Speed = 7,
                 Direction = 0,
-                DurationSeconds = 15,
-                Colors = ["red"]
+                DurationSeconds = 15
             }
-        }
+        },
+        ProfileSwitch = new LightingEffectConfig
+        {
+            Mode = K15LightingMode.MonoWater,
+            Brightness = 6,
+            Speed = 5,
+            Direction = 0,
+            DurationSeconds = 2
+        },
+        ActivationSignal = new LightingEffectConfig
+        {
+            Enabled = false,
+            Mode = K15LightingMode.MonoWater,
+            Brightness = 4,
+            Speed = 4,
+            Direction = 0,
+            DurationSeconds = 2
+        },
+        EffectLabDurationSeconds = 4
     };
 
     public static StatusLabConfig LoadOrCreate()
     {
-        Directory.CreateDirectory(EventJournal.DirectoryPath);
-
-        if (!File.Exists(FilePath))
-        {
-            var created = CreateDefault();
-            Save(created);
-            return created;
-        }
-
+        EnsureExists();
         try
         {
-            var json = File.ReadAllText(FilePath, Encoding.UTF8);
-            var config = JsonSerializer.Deserialize<StatusLabConfig>(json, JsonOptions)
-                ?? throw new InvalidDataException("Config JSON deserialized to null.");
-            config.NormalizeAndValidate();
-            return config;
+            return ConfigToml.Parse(File.ReadAllText(FilePath, Encoding.UTF8));
         }
         catch (Exception ex)
         {
-            var backup = FilePath + ".invalid-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".bak";
-            try
-            {
-                File.Copy(FilePath, backup, overwrite: false);
-            }
-            catch
-            {
-                backup = "backup failed";
-            }
-
             var fallback = CreateDefault();
-            fallback.LoadWarning = $"RGB config was invalid and defaults were loaded: {ex.Message}. Backup: {backup}";
-            Save(fallback);
+            fallback.LoadWarning =
+                $"RGB config invalid: {ex.Message}. Existing config.toml was preserved unchanged; defaults are active for this run.";
             return fallback;
         }
     }
 
-    public static void Save(StatusLabConfig config)
+    public static void EnsureExists()
     {
-        config.NormalizeAndValidate();
         Directory.CreateDirectory(EventJournal.DirectoryPath);
-        var json = JsonSerializer.Serialize(config, JsonOptions);
-        File.WriteAllText(FilePath, json + Environment.NewLine, new UTF8Encoding(false));
+        if (File.Exists(FilePath))
+            return;
+
+        var config = CreateDefault();
+        File.WriteAllText(FilePath, ConfigToml.Serialize(config), new UTF8Encoding(false));
     }
 
     public ProfileLightingConfig GetProfile(byte onboardSlot) => onboardSlot switch
@@ -243,23 +181,32 @@ internal sealed class StatusLabConfig
         K15NormalizedState.Waiting => States.Waiting,
         K15NormalizedState.DonePendingAttention => States.Done,
         K15NormalizedState.Error => States.Error,
-        _ => throw new ArgumentOutOfRangeException(nameof(state), "NORMAL uses the active profile normal effect.")
+        _ => throw new ArgumentOutOfRangeException(nameof(state), "NORMAL restores the exact device baseline.")
     };
 
-    private void NormalizeAndValidate()
+    public LightingEffectConfig RenderForProfile(byte onboardSlot, LightingEffectConfig source)
     {
-        if (SchemaVersion != 1)
-            throw new InvalidDataException($"Unsupported config schemaVersion {SchemaVersion}; expected 1.");
+        var rendered = source.Clone();
+        rendered.Colors = [GetProfile(onboardSlot).Color];
+        return rendered;
+    }
 
-        ValidateEffect(ActivationSignal, "activationSignal");
-        ValidateEffect(Profiles.A.Normal, "profiles.A.normal");
-        ValidateEffect(Profiles.A.SwitchSignal, "profiles.A.switchSignal");
-        ValidateEffect(Profiles.B.Normal, "profiles.B.normal");
-        ValidateEffect(Profiles.B.SwitchSignal, "profiles.B.switchSignal");
+    public void Validate()
+    {
+        if (SchemaVersion != 2)
+            throw new InvalidDataException($"Unsupported schema_version {SchemaVersion}; expected 2.");
+
+        _ = ParseColor(Profiles.A.Color);
+        _ = ParseColor(Profiles.B.Color);
         ValidateEffect(States.Running, "states.running");
         ValidateEffect(States.Waiting, "states.waiting");
         ValidateEffect(States.Done, "states.done");
         ValidateEffect(States.Error, "states.error");
+        ValidateEffect(ProfileSwitch, "profile_switch");
+        ValidateEffect(ActivationSignal, "activation");
+
+        if (EffectLabDurationSeconds is < 0.5 or > 30)
+            throw new InvalidDataException("effect_lab.test_duration_seconds must be 0.5..30.");
     }
 
     private static void ValidateEffect(LightingEffectConfig effect, string path)
@@ -271,17 +218,36 @@ internal sealed class StatusLabConfig
         if (effect.Direction is < 0 or > 1)
             throw new InvalidDataException($"{path}.direction must be 0 or 1.");
         if (effect.DurationSeconds is < 0 or > 3600)
-            throw new InvalidDataException($"{path}.durationSeconds must be 0..3600.");
-
-        effect.Colors ??= [];
-        if (effect.Colors.Length > 7)
-            throw new InvalidDataException($"{path}.colors supports at most 7 entries.");
-        if (effect.Mode != K15LightingMode.Off && effect.Colors.Length == 0)
-            throw new InvalidDataException($"{path}.colors must contain at least one color unless mode=Off.");
-
-        foreach (var color in effect.Colors)
-            _ = ParseColor(color);
+            throw new InvalidDataException($"{path}.duration_seconds must be 0..3600.");
     }
+
+    public static string ModeName(K15LightingMode mode) => mode switch
+    {
+        K15LightingMode.Constant => "constant",
+        K15LightingMode.FlowingWater => "flowing_water",
+        K15LightingMode.MonoWater => "mono_water",
+        K15LightingMode.SingleColorBreathing => "single_color_breathing",
+        K15LightingMode.CycleBreathing => "cycle_breathing",
+        K15LightingMode.TetrisBlocks => "tetris_blocks",
+        K15LightingMode.Neon => "neon",
+        K15LightingMode.Ambilight => "ambilight",
+        K15LightingMode.Off => "off",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode))
+    };
+
+    public static K15LightingMode ParseModeName(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "constant" => K15LightingMode.Constant,
+        "flowing_water" => K15LightingMode.FlowingWater,
+        "mono_water" => K15LightingMode.MonoWater,
+        "single_color_breathing" => K15LightingMode.SingleColorBreathing,
+        "cycle_breathing" => K15LightingMode.CycleBreathing,
+        "tetris_blocks" => K15LightingMode.TetrisBlocks,
+        "neon" => K15LightingMode.Neon,
+        "ambilight" => K15LightingMode.Ambilight,
+        "off" => K15LightingMode.Off,
+        _ => throw new InvalidDataException($"Unknown effect '{value}'.")
+    };
 
     public static (byte R, byte G, byte B) ParseColor(string value)
     {
@@ -311,17 +277,5 @@ internal sealed class StatusLabConfig
             throw new InvalidDataException($"Invalid color '{value}'. Use a named color or #RRGGBB.");
 
         return ((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
-    }
-
-    private static JsonSerializerOptions CreateJsonOptions()
-    {
-        var options = new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = true,
-            PropertyNameCaseInsensitive = true
-        };
-        options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
-        return options;
     }
 }

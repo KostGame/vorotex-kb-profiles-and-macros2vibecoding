@@ -32,23 +32,15 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             @event = "started",
             version = typeof(StatusLabApplicationContext).Assembly.GetName().Version?.ToString(),
             rgbConfigPath = StatusLabConfig.FilePath,
+            configSchema = _config.SchemaVersion,
             wireColorOrder = _config.WireColorOrder.ToString(),
             doneAttentionTimeoutSeconds = _config.States.Done.DurationSeconds,
             configWarning = _config.LoadWarning
         });
 
-        _stateStatusItem = new ToolStripMenuItem("Состояние: NORMAL")
-        {
-            Enabled = false
-        };
-        _notificationStatusItem = new ToolStripMenuItem("Уведомления: запуск...")
-        {
-            Enabled = false
-        };
-        _rgbStatusItem = new ToolStripMenuItem("RGB: OFF")
-        {
-            Enabled = false
-        };
+        _stateStatusItem = new ToolStripMenuItem("Состояние: NORMAL") { Enabled = false };
+        _notificationStatusItem = new ToolStripMenuItem("Уведомления: запуск...") { Enabled = false };
+        _rgbStatusItem = new ToolStripMenuItem("RGB: OFF") { Enabled = false };
         _rgbCanaryItem = new ToolStripMenuItem("Включить K15 RGB canary");
         _rgbCanaryItem.Click += async (_, _) => await ToggleRgbCanaryAsync();
         _codexHookItem = new ToolStripMenuItem("Установить Codex hooks");
@@ -67,17 +59,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             try
             {
                 if (_trayIcon.ContextMenuStrip?.InvokeRequired == true)
-                {
                     _trayIcon.ContextMenuStrip.BeginInvoke(() => _notificationStatusItem.Text = status);
-                }
                 else
-                {
                     _notificationStatusItem.Text = status;
-                }
             }
-            catch
-            {
-            }
+            catch { }
         };
 
         _stateNormalizer.StateChanged += (state, transition) =>
@@ -102,7 +88,9 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         menu.Items.Add("Сбросить состояние в NORMAL", null, (_, _) => _stateNormalizer.Acknowledge());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_rgbCanaryItem);
-        menu.Items.Add("Открыть RGB config", null, (_, _) => OpenPath(StatusLabConfig.FilePath));
+        menu.Items.Add("Открыть RGB config.toml", null, (_, _) => OpenPath(StatusLabConfig.FilePath));
+        menu.Items.Add("Открыть RGB configurator", null, (_, _) => OpenConfigurator());
+        menu.Items.Add(BuildEffectLabMenu());
         menu.Items.Add(_codexHookItem);
         menu.Items.Add("Открыть журнал событий", null, (_, _) => OpenPath(EventJournal.FilePath));
         menu.Items.Add("Открыть папку журнала", null, (_, _) => OpenPath(EventJournal.DirectoryPath));
@@ -112,10 +100,46 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         return menu;
     }
 
+    private ToolStripMenuItem BuildEffectLabMenu()
+    {
+        var lab = new ToolStripMenuItem("RGB Effect Test");
+        AddEffectTest(lab, "Constant (control)", K15LightingMode.Constant);
+        AddEffectTest(lab, "Mono Water", K15LightingMode.MonoWater);
+        AddEffectTest(lab, "Single-color breathing", K15LightingMode.SingleColorBreathing);
+        AddEffectTest(lab, "Flowing Water (single color)", K15LightingMode.FlowingWater);
+        lab.DropDownItems.Add(new ToolStripSeparator());
+        lab.DropDownItems.Add("Restore exact baseline", null, async (_, _) =>
+        {
+            try { await _rgbCanary.RestoreCurrentAsync(); }
+            catch (Exception ex) { ShowBalloon($"Effect Lab restore: {ex.Message}"); }
+        });
+        return lab;
+    }
+
+    private void AddEffectTest(ToolStripMenuItem parent, string title, K15LightingMode mode)
+    {
+        parent.DropDownItems.Add(title, null, async (_, _) =>
+        {
+            if (!_rgbCanary.Enabled)
+            {
+                ShowBalloon("Сначала включи K15 RGB canary. Effect Lab не пишет в клавиатуру, пока RGB выключен.");
+                return;
+            }
+
+            try
+            {
+                await _rgbCanary.TestEffectAsync(mode);
+            }
+            catch (Exception ex)
+            {
+                ShowBalloon($"Effect Lab: {ex.Message}");
+            }
+        });
+    }
+
     private void UpdateNormalizedState(K15NormalizedState state, StateTransition? transition)
     {
         var wire = JournalStateNormalizer.ToWireName(state);
-
         void Apply()
         {
             _stateStatusItem.Text = $"Состояние: {wire}";
@@ -129,9 +153,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             else
                 Apply();
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private async Task ToggleRgbCanaryAsync()
@@ -153,10 +175,8 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 
         var result = MessageBox.Show(
             "Включить физическую RGB-индикацию K15?\n\n" +
-            "Режимы, цвета, яркость, скорость и длительности читаются из локального config.json при запуске Status Lab. " +
-            "После изменения config перезапусти приложение. " +
-            "При включении сначала показывается activationSignal, затем текущее notification-состояние. " +
-            "Переключать Profile A/B во время работы можно: profile switch signal временно имеет приоритет, затем возвращается текущее состояние. " +
+            "Цвет задаёт активный Profile A/B, состояние меняет только эффект. NORMAL восстанавливает точный onboard baseline. " +
+            "Настройки читаются из config.toml при запуске; локальный HTML configurator помогает его собрать. " +
             "Закрой VOROTEX и W910 WebDriver перед тестом.\n\nПродолжить?",
             "VOROTEX K15 RGB canary",
             MessageBoxButtons.YesNo,
@@ -195,11 +215,8 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         void Apply()
         {
             _rgbStatusItem.Text = status;
-            _rgbCanaryItem.Text = _rgbCanary.Enabled
-                ? "Выключить K15 RGB canary"
-                : "Включить K15 RGB canary";
+            _rgbCanaryItem.Text = _rgbCanary.Enabled ? "Выключить K15 RGB canary" : "Включить K15 RGB canary";
         }
-
         try
         {
             if (_trayIcon.ContextMenuStrip?.InvokeRequired == true)
@@ -207,9 +224,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             else
                 Apply();
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private async Task StartNotificationPollingAsync()
@@ -218,7 +233,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         {
             var started = await _notificationPoller.StartAsync();
             if (!started)
-                ShowBalloon("Доступ к уведомлениям не разрешен. Разреши его в системном диалоге Windows и перезапусти Status Lab.");
+                ShowBalloon("Доступ к уведомлениям не разрешен. Разреши его в Windows и перезапусти Status Lab.");
         }
         catch (Exception ex)
         {
@@ -266,13 +281,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             await process.WaitForExitAsync();
             var stdout = (await stdoutTask).Trim();
             var stderr = (await stderrTask).Trim();
-
             if (process.ExitCode != 0)
             {
                 ShowBalloon(string.IsNullOrWhiteSpace(stderr)
                     ? $"Установщик hooks завершился с кодом {process.ExitCode}."
                     : $"Не удалось установить hooks. Код {process.ExitCode}. Подробности записаны в журнал.");
-
                 EventJournal.Append(new
                 {
                     timestampUtc = DateTimeOffset.UtcNow,
@@ -287,29 +300,13 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             using var document = JsonDocument.Parse(stdout);
             var root = document.RootElement;
             var count = root.TryGetProperty("count", out var countNode) ? countNode.GetInt32() : 0;
-            var paths = new List<string>();
-            if (root.TryGetProperty("installed", out var installedNode) && installedNode.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in installedNode.EnumerateArray())
-                {
-                    if (item.TryGetProperty("hooksPath", out var pathNode))
-                    {
-                        var value = pathNode.GetString();
-                        if (!string.IsNullOrWhiteSpace(value))
-                            paths.Add(value);
-                    }
-                }
-            }
-
             EventJournal.Append(new
             {
                 timestampUtc = DateTimeOffset.UtcNow,
                 source = "status_lab",
                 @event = "codex_hooks_installed",
-                count,
-                hooksPaths = paths
+                count
             });
-
             ShowBalloon($"Codex hooks установлены в {count} окружение(я). Полностью перезапусти Codex перед тестом.");
         }
         catch (Exception ex)
@@ -330,28 +327,31 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         }
     }
 
+    private void OpenConfigurator()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "configurator", "index.html");
+        if (!File.Exists(path))
+        {
+            ShowBalloon("Встроенный RGB configurator не найден рядом со сборкой.");
+            return;
+        }
+        OpenPath(path);
+    }
+
     private static void OpenPath(string path)
     {
         if (path == StatusLabConfig.FilePath && !File.Exists(path))
-            StatusLabConfig.Save(StatusLabConfig.CreateDefault());
-        else
+            StatusLabConfig.EnsureExists();
+        else if (path == EventJournal.FilePath)
             EventJournal.EnsureExists();
 
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = path,
-            UseShellExecute = true
-        });
+        Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
     }
 
     private void ClearJournal()
     {
-        var result = MessageBox.Show(
-            "Очистить локальный диагностический журнал Status Lab?",
-            "VOROTEX K15 Status Lab",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Question);
-
+        var result = MessageBox.Show("Очистить локальный диагностический журнал Status Lab?",
+            "VOROTEX K15 Status Lab", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
         if (result != DialogResult.Yes)
             return;
 
@@ -377,7 +377,6 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     {
         if (_exiting)
             return;
-
         _exiting = true;
         EventJournal.Append(new
         {
