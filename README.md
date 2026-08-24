@@ -44,62 +44,62 @@ VOROTEX Export
 
 See [`app/README.md`](app/README.md) for current scope and limitations.
 
-## Manual installation of generated configuration files
+## Legacy/research direct-file installation
 
-For K15 Pro, the currently proven practical path uses generated files plus the official VOROTEX application.
+Direct mutation of live VOROTEX installation files is **not** the normal installation path anymore. It remains documented only as a research/recovery technique for old experiments.
 
-1. **Close VOROTEX completely** and make sure `VOROTEX-K15-PRO.exe` is no longer running.
-2. **Back up your current VOROTEX configuration outside this repository.** At minimum keep copies of `Profile0.json`, `Profile1.json`, `macroConfig.json`, and `DeviceFeature.ini`.
-3. Copy the released/generated profile file into the matching profile slot under the VOROTEX installation. For a Profile2 package this is normally `res/KeyboardDock/KeyboardA/Config/Profile1.json` relative to the VOROTEX install directory.
-4. Copy the released/generated `macroConfig.json` to `res/MacroDock/MacroData/macroConfig.json` relative to the VOROTEX install directory.
-5. Start VOROTEX with the K15 Pro connected and verify that the expected macros and key assignments appear in the GUI.
-6. **Reassign the target key(s) through the native VOROTEX GUI.** Controlled testing showed that merely replacing the local JSON files is not sufficient to prove that the new assignment has been written to onboard keyboard memory. A native GUI assignment/reassignment is the currently proven device-write path.
-7. Test the physical key output, then close VOROTEX and test again. For an onboard profile, also power-cycle/reconnect the keyboard and verify the assignment still works without reopening VOROTEX.
+The supported K15 profile path is the official VOROTEX `.KB.Config` Import workflow. Generated profile packages carry their embedded macro groups and physical key → macro GUID bindings, so manual replacement of `Profile*.json` and `macroConfig.json` is unnecessary for normal use.
 
-To roll back, restore your backed-up files with VOROTEX closed, reopen VOROTEX, and reassign the original key action through the native GUI so the onboard state is restored as well.
+If low-level research against live files is ever required, close VOROTEX first, back up the full configuration, avoid firmware/reset/restore actions, and treat onboard state as separate from local JSON state. VOROTEX Import is non-pruning/state-dependent, so repeated imports may leave duplicate or stale macro groups.
 
-Do **not** use Firmware, Update, Reset, or Restore actions as part of these instructions. Never overwrite your only copy of a working configuration.
+## K15 V1.2 RC1 quick start
 
-See [`devices/k15-pro/README.md`](devices/k15-pro/README.md) for device-specific proof status and details.
+The current physically accepted baseline is **V1.2 RC1**. Use the official VOROTEX profile Import workflow with the K15 connected:
 
-## K15 V1 release quick start
-
-The primary installation path is the official VOROTEX `.KB.Config` Import
-workflow. With the VOROTEX software open and the K15 connected:
-
-1. Import `K15_VIBECODING_PROFILE_A_TOOLS_AUTH_V1.KB.Config`.
-2. Import `K15_VIBECODING_PROFILE_B_MAIN_V1.KB.Config`.
+1. Import `K15_VIBECODING_PROFILE_A_TOOLS_AUTH_V1_2_RC1.KB.Config`.
+2. Import `K15_VIBECODING_PROFILE_B_MAIN_V1_2_RC1.KB.Config`.
 3. Assign the two hardware profile slots as appropriate in the native GUI.
-4. Configure the owner-specific Windows selectors: RU = `Ctrl+Shift+2`, EN =
-   `Ctrl+Shift+1`.
-5. Verify the physical keys. Ordinary text macros use 5 ms event timing and
-   append one ASCII space; clipboard macros use `Ctrl+V` followed by safe
-   Shift+Enter.
+4. Configure the owner-specific Windows selectors: RU = `Ctrl+Shift+2`, EN = `Ctrl+Shift+1`.
+5. Verify the physical keys after import.
 
-Profile A is the tools/authorization layer; Profile B is the main vibecoding
-layer. Profile A key `0` uses the opening-fence-only report-from-clipboard flow
-for ChatGPT Web/Codex. Physical Enter emits Shift+Enter; joystick click is
-native Enter/Send; Profile A encoder rotation is vertical scroll. The `.KB.Config`
-packages preserve each profile's native 14-record lighting bank.
+V1.2 timing policy:
 
-VOROTEX Import is non-pruning: repeated imports can leave duplicate or stale
-macro groups. Remove duplicates only through a deliberate native GUI workflow;
-do not assume Import state is deterministic from file bytes alone.
+- ordinary text HID events: **1 ms**;
+- layout selector events: **5 ms**;
+- structural/UI-sensitive events: **5 ms**;
+- ordinary text commands append exactly one ASCII space;
+- no automatic punctuation is added.
 
-### Final V1 key maps
+Profile A is the tools/authorization layer; Profile B is the main vibecoding layer. Physical Enter emits Shift+Enter; joystick click remains native Enter/Send. Profile A encoder rotation is vertical scroll.
+
+The generated files preserve the serialized lighting banks from the canonical source. In physical owner testing, Profile B appeared with white lighting after VOROTEX Import. This is a known, accepted non-blocking V1.2 RC1 discrepancy; physical lighting parity is not claimed.
+
+VOROTEX Import is non-pruning: repeated imports can leave duplicate or stale macro groups. Remove duplicates deliberately in the native GUI rather than assuming import state is deterministic from file bytes alone.
+
+### Current V1.2 key maps
 
 | Key | Profile A — TOOLS_AUTH | Profile B — MAIN_VIBECODING |
 |---|---|---|
-| 1–6 | Copy, Paste+newline, Cut, Undo, Redo, Select all | Проверь, Следующий шаг, Пиши следующий промпт для агента, Исправляй, Публикуй, Мержи |
-| 7–0 | Отчет, Вот отчет, ``` fence, report from clipboard | Создавай, Продолжай, Проведи ревью, Готово |
-| . | Дай статус | Дай статус |
+| 1 | Copy | Проверь |
+| 2 | Paste + Shift+Enter | Следующий шаг |
+| 3 | Cut | Пиши следующий промпт для агента |
+| 4 | Undo | Исправляй |
+| 5 | Redo | Публикуй |
+| 6 | Select all | Мержи |
+| 7 | Отчет | Создавай |
+| 8 | Вот отчет | Продолжай |
+| 9 | \`\`\` code fence | Проведи ревью |
+| 0 | Report from clipboard | Готово |
+| . | Дай статус: что сделано, что осталось, блокеры и следующий шаг | Дай статус |
 | Enter | Shift+Enter / newline | Shift+Enter / newline |
-| - / + | Стоп / Подготовь отчет для следующего чата | Стоп / Принимается |
+| - | Стоп | Стоп |
+| + | Подготовь отчет для следующего чата | Принимается |
 | Space | Подтверждаю | Давай дальше, без push/merge |
+| Joystick click | Native Enter / Send | Native Enter / Send |
 
-Profile A key `0` opens a code block, pastes the clipboard, adds a safe
-Shift+Enter, and leaves the caret in the composer; it does not close the fence
-or submit. Joystick click is the explicit Send control.
+Profile A key `0` opens a code block, pastes the clipboard, adds a safe Shift+Enter, and leaves the caret in the composer. It does not close the fence or submit.
+
+Historical V1/V1.1 packages remain in the repository for reproducibility, but V1.2 RC1 is the current canonical K15 vibecoding baseline.
 
 ## Design reference
 
