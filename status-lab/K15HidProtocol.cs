@@ -60,19 +60,47 @@ internal static class K15HidProtocol
         int brightness = 5,
         int speed = 3)
     {
+        var rgb = state switch
+        {
+            // User baseline already uses red for Profile A and blue for Profile B.
+            // Notification states therefore use only unmistakable primary colors + white,
+            // with animation speed carrying the RUNNING vs WAITING distinction.
+            K15NormalizedState.Running => (R: (byte)0xFF, G: (byte)0xFF, B: (byte)0xFF),
+            K15NormalizedState.Waiting => (R: (byte)0xFF, G: (byte)0xFF, B: (byte)0xFF),
+            K15NormalizedState.DonePendingAttention => (R: (byte)0x00, G: (byte)0xFF, B: (byte)0x00),
+            K15NormalizedState.Error => (R: (byte)0xFF, G: (byte)0x00, B: (byte)0x00),
+            _ => throw new ArgumentOutOfRangeException(nameof(state), "NORMAL is restored from snapshot, not synthesized.")
+        };
+
+        return CreateSingleColorBreathingRecord(rgb.R, rgb.G, rgb.B, brightness, speed);
+    }
+
+    public static byte[] CreateProfileFlashLightingRecord(
+        byte onboardSlot,
+        int brightness = 6,
+        int speed = 6)
+    {
+        var rgb = onboardSlot switch
+        {
+            0 => (R: (byte)0xFF, G: (byte)0x00, B: (byte)0x00), // Profile A
+            1 => (R: (byte)0x00, G: (byte)0x00, B: (byte)0xFF), // Profile B
+            _ => throw new ArgumentOutOfRangeException(nameof(onboardSlot))
+        };
+
+        return CreateSingleColorBreathingRecord(rgb.R, rgb.G, rgb.B, brightness, speed);
+    }
+
+    private static byte[] CreateSingleColorBreathingRecord(
+        byte red,
+        byte green,
+        byte blue,
+        int brightness,
+        int speed)
+    {
         if (brightness is < 1 or > 6)
             throw new ArgumentOutOfRangeException(nameof(brightness));
         if (speed is < 1 or > 6)
             throw new ArgumentOutOfRangeException(nameof(speed));
-
-        var rgb = state switch
-        {
-            K15NormalizedState.Running => (R: (byte)0xA0, G: (byte)0x20, B: (byte)0xF0),
-            K15NormalizedState.Waiting => (R: (byte)0xFF, G: (byte)0xA5, B: (byte)0x00),
-            K15NormalizedState.DonePendingAttention => (R: (byte)0x00, G: (byte)0xFF, B: (byte)0x40),
-            K15NormalizedState.Error => (R: (byte)0xFF, G: (byte)0x00, B: (byte)0x00),
-            _ => throw new ArgumentOutOfRangeException(nameof(state), "NORMAL is restored from snapshot, not synthesized.")
-        };
 
         var record = new byte[LightingRecordSize];
         record[0] = (byte)speed;
@@ -83,9 +111,9 @@ internal static class K15HidProtocol
         for (var index = 0; index < 7; index++)
         {
             var offset = 4 + index * 3;
-            record[offset] = rgb.G;
-            record[offset + 1] = rgb.R;
-            record[offset + 2] = rgb.B;
+            record[offset] = green;
+            record[offset + 1] = red;
+            record[offset + 2] = blue;
         }
 
         return record;
