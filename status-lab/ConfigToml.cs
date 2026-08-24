@@ -7,7 +7,7 @@ internal static class ConfigToml
 {
     private static readonly HashSet<string> KnownSections = new(StringComparer.Ordinal)
     {
-        "device", "profiles.A", "profiles.B", "states.running", "states.waiting",
+        "device", "behavior", "profiles.A", "profiles.B", "states.running", "states.waiting",
         "states.done", "states.error", "profile_switch", "stop_signal", "activation", "effect_lab"
     };
 
@@ -71,6 +71,11 @@ internal static class ConfigToml
         b.AppendLine("# rgb доказан на текущей физической K15; grb оставлен для совместимости.");
         b.AppendLine($"wire_color_order = \"{config.WireColorOrder.ToString().ToLowerInvariant()}\"");
         b.AppendLine();
+        b.AppendLine("[behavior]");
+        b.AppendLine("# Safety fallback: DONE не должен мигать бесконечно даже если toast correlation не сработал.");
+        b.AppendLine("# 0 = отключить fallback timeout; рекомендуется 15..60 секунд.");
+        b.AppendLine($"done_attention_timeout_seconds = {Format(config.DoneAttentionTimeoutSeconds)}");
+        b.AppendLine();
         WriteProfile(b, "A", config.Profiles.A, "RED / TOOLS-AUTH");
         WriteProfile(b, "B", config.Profiles.B, "BLUE / MAIN-VIBECODING");
         WriteEffect(b, "states.running", config.States.Running,
@@ -78,15 +83,15 @@ internal static class ConfigToml
         WriteEffect(b, "states.waiting", config.States.Waiting,
             "WAITING: быстрое Single-color breathing, speed 7.");
         WriteEffect(b, "states.done", config.States.Done,
-            "DONE_PENDING_ATTENTION: спокойное Single-color breathing, speed 5, до acknowledge/notification resolve.");
+            "DONE_PENDING_ATTENTION: Single-color breathing speed 5; semantic timeout задаётся в [behavior].");
         WriteEffect(b, "states.error", config.States.Error,
             "ERROR зарезервирован для high-confidence semantic source; default disabled.");
         WriteEffect(b, "profile_switch", config.ProfileSwitch,
-            "Короткий Flowing Water только в цвете уже физически выбранного НОВОГО профиля.");
+            "Flowing Water после физического переключения. У K15 есть собственная тройная flash-анимация; duration 4s оставляет наш сигнал видимым после неё.");
         WriteEffect(b, "stop_signal", config.StopSignal,
             "Момент STOP: короткий Cycle breathing RED <-> BLUE, затем states.done.");
         WriteEffect(b, "activation", config.ActivationSignal,
-            "Включение RGB tracking: короткий Flowing Water двумя основными цветами A/B.");
+            "Включение RGB-индикации: короткий Flowing Water двумя основными цветами A/B.");
         b.AppendLine("[effect_lab]");
         b.AppendLine("# Встроенный tray Effect Test остаётся коротким smoke. Полные исследования делаются в Lighting Lab.");
         b.AppendLine($"test_duration_seconds = {Format(config.EffectLabDurationSeconds)}");
@@ -108,6 +113,14 @@ internal static class ConfigToml
             if (key != "wire_color_order")
                 throw new InvalidDataException($"unknown key '{section}.{key}'");
             config.WireColorOrder = ParseWireOrder(ParseString(value));
+            return;
+        }
+
+        if (section == "behavior")
+        {
+            if (key != "done_attention_timeout_seconds")
+                throw new InvalidDataException($"unknown key '{section}.{key}'");
+            config.DoneAttentionTimeoutSeconds = ParseDouble(value);
             return;
         }
 
