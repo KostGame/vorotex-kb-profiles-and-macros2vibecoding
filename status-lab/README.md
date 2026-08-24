@@ -1,13 +1,12 @@
 # VOROTEX K15 Status Lab
 
-Диагностический Windows-компаньон для проверки двух входных каналов будущего RGB notifier:
+Windows-компаньон для исследования и канареечного запуска RGB-индикации состояний Codex на VOROTEX K15 Pro.
 
-1. штатные lifecycle hooks Codex;
-2. системные уведомления Windows через `UserNotificationListener`.
+Status Lab объединяет три слоя:
 
-На этом этапе Status Lab **не управляет подсветкой K15**. Его задача — собрать воспроизводимую временную шкалу событий до подключения RGB output.
-
-## Что пишет в журнал
+1. lifecycle hooks Codex;
+2. системные уведомления Windows через `UserNotificationListener`;
+3. opt-in RGB output на K15 через доказанный W909/W910-family HID protocol.
 
 Локальный журнал:
 
@@ -15,22 +14,17 @@
 %LOCALAPPDATA%\VOROTEX\K15 Status Lab\events.jsonl
 ```
 
-В журнал попадают только метаданные:
+## Privacy boundary
 
-- время события;
-- источник (`codex_hook` / `windows_notification`);
-- тип события;
-- Codex `session_id`, `turn_id`, model, cwd, tool name, permission mode;
-- Windows notification id, creation time, app display name, AppUserModelId и PackageFamilyName;
-- privacy-safe fingerprint текста toast, число/длины текстовых элементов и только вычисленные hint-флаги `permission/completion/error`.
+В журнал попадают только диагностические метаданные:
 
-Status Lab намеренно **не сохраняет**:
+- timestamp/source/event;
+- Codex session/turn/model/cwd/tool name/permission mode;
+- Windows notification id, app identity, creation time;
+- SHA-256 fingerprint текста toast, размеры текстовых элементов и coarse hint flags;
+- normalized-state и K15 RGB transport events.
 
-- prompt text;
-- assistant response text;
-- tool input;
-- notification title/body в открытом виде;
-- transcript contents.
+Status Lab намеренно **не сохраняет** prompt text, assistant response text, tool input/tool response, transcript contents и открытый текст Windows notification.
 
 ## Windows notifications
 
@@ -40,22 +34,18 @@ Status Lab использует:
 Windows.UI.Notifications.Management.UserNotificationListener
 ```
 
-и опрашивает текущий notification store каждые 2 секунды через `GetNotificationsAsync(NotificationKinds.Toast)`.
-
-Polling выбран намеренно. Для unpackaged desktop apps чтение текущих уведомлений работает, но подписка на `NotificationChanged` имеет известные ограничения/ошибки на части Windows 11 builds. Для нашего notifier задержка до ~2 секунд приемлема, а упаковка MSIX пока не требуется.
-
-При первом запуске Windows может запросить разрешение на доступ к уведомлениям.
-
-Текст toast используется только в памяти процесса для SHA-256 fingerprint и грубой классификации по ключевым словам; исходный текст в JSONL не сохраняется.
+и опрашивает текущий notification store примерно раз в 2 секунды.
 
 События:
 
-- `windows_notification_present` — уведомление уже было активно при старте Status Lab;
-- `windows_notification_added` — появилось новое;
-- `windows_notification_removed` — ранее видимое уведомление исчезло;
-- `notification_access` / `notification_poll_error` — диагностика доступа.
+- `windows_notification_present`;
+- `windows_notification_added`;
+- `windows_notification_removed`;
+- `notification_access` / `notification_poll_error`.
 
-Важно: `removed` означает, что notification больше нет в доступном notification store. Это не строгое доказательство «прочитано».
+`removed` означает только, что конкретного toast больше нет в доступном Windows notification store. Это не строгое доказательство «прочитано».
+
+ChatGPT и Codex в текущем OpenAI Windows package имеют общий AppUserModelId/PFN, поэтому attribution строится прежде всего по корреляции с Codex hooks, а не по имени приложения.
 
 Microsoft reference:
 
@@ -64,116 +54,36 @@ Microsoft reference:
 
 ## Codex hooks
 
-Status Lab ставит четыре lifecycle hook:
+Status Lab устанавливает пять lifecycle hooks:
 
 ```text
 UserPromptSubmit
 PermissionRequest
+PostToolUse
 Stop
 SessionEnd
 ```
 
-Они пишут sanitized JSONL через `codex-hook-logger.ps1`.
+`PostToolUse` добавлен после физической канарейки: подтверждение permission непосредственно в UI Codex не обязано удалять Windows toast, но успешный `PostToolUse` надёжно показывает, что разрешённый tool уже выполнился и состояние можно вернуть из `WAITING` в `RUNNING`.
 
-Установка из tray:
-
-```text
-Установить Codex hooks
-```
-
-или вручную:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\status-lab\install-codex-hooks.ps1
-```
+Hook input приходит JSON через stdin. `codex-hook-logger.ps1` сохраняет только безопасный subset полей.
 
 Инсталлятор:
 
-- автоматически ищет существующие Codex homes, включая `%USERPROFILE%\.codex-agentloop`, `%USERPROFILE%\.codex` и другие `%USERPROFILE%\.codex-*`;
-- если `CODEX_HOME` задан в окружении запуска, использует его как приоритетный target;
-- сохраняет существующие hook groups в каждом найденном home;
-- делает one-time backup `hooks.json.vorotex-k15-status-lab.bak` рядом с каждым изменённым `hooks.json`;
-- после записи перечитывает файл и проверяет наличие ровно одного Status Lab handler для каждого события;
-- повторный запуск идемпотентен и не создаёт второй набор Status Lab handlers.
+- ищет активные Codex homes, включая `%USERPROFILE%\.codex-agentloop`, `%USERPROFILE%\.codex`, другие `%USERPROFILE%\.codex-*` и явный `CODEX_HOME`;
+- сохраняет существующие hook groups;
+- делает one-time backup `hooks.json.vorotex-k15-status-lab.bak`;
+- идемпотентен;
+- после записи перечитывает файл и проверяет все пять Status Lab handlers;
+- использует допустимый для Codex `SessionEnd timeout = 3s`.
 
-После установки **полностью перезапусти Codex**, потому что hooks обнаруживаются при загрузке Codex config/session. Если Codex попросит подтвердить доверие к пользовательским hooks, подтверди их.
+После изменения hooks полностью перезапусти Codex.
 
-Codex upstream:
+Upstream reference: https://github.com/openai/codex
 
-- lifecycle hooks are a stable feature;
-- command hook input is delivered as JSON through stdin;
-- `UserPromptSubmit`, `PermissionRequest`, `Stop`, `SessionEnd` are supported hook events.
+## Normalized state
 
-Reference: https://github.com/openai/codex
-
-## Ожидаемый первый канареечный прогон
-
-1. Запустить Status Lab.
-2. Разрешить доступ к Windows notifications.
-3. Установить Codex hooks из tray.
-4. Перезапустить Codex.
-5. Отправить обычную задачу.
-6. Добиться запроса permission/user attention, если возможно.
-7. Дождаться завершения.
-8. Убрать/открыть системное уведомление Codex.
-9. Открыть `events.jsonl`.
-
-Ожидаемая последовательность примерно такая:
-
-```text
-codex_hook          UserPromptSubmit
-codex_hook          PermissionRequest        (если был)
-codex_hook          Stop
-windows_notification windows_notification_added
-windows_notification windows_notification_removed
-```
-
-Это не обязательный точный порядок: системное уведомление может появиться немного раньше/позже Stop.
-
-## Запуск из исходников
-
-Требуются Windows и .NET 8 SDK.
-
-```text
-dotnet run --project status-lab/Vorotex.K15.StatusLab.csproj
-```
-
-## Publish portable folder
-
-```text
-dotnet publish status-lab/Vorotex.K15.StatusLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
-```
-
-В publish-каталог должны попасть:
-
-- `Vorotex.K15.StatusLab.exe`;
-- `codex-hook-logger.ps1`;
-- `install-codex-hooks.ps1`.
-
-## Smoke tests
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\status-lab\tests\smoke.ps1
-```
-
-Smoke test проверяет:
-
-- sanitized hook logging;
-- отсутствие prompt text в journal;
-- сохранение существующих Codex hooks;
-- идемпотентность installer;
-- создание one-time backup.
-
-## Canary evidence
-
-- [`docs/owner-canary-2026-08-24.md`](docs/owner-canary-2026-08-24.md) — sanitized findings from the first Windows owner canary, including the `.codex` vs `.codex-agentloop` hook-target correction and notification baseline rules.
-- [`docs/owner-canary-2-2026-08-24.md`](docs/owner-canary-2-2026-08-24.md) — second canary: `UserPromptSubmit`, `PermissionRequest`, `Stop` and Windows notification correlation physically observed; dry-run state normalizer is the next gate.
-- [`docs/owner-canary-3-2026-08-24.md`](docs/owner-canary-3-2026-08-24.md) — dry-run state normalizer physically accepted.
-- [`docs/owner-canary-4-2026-08-24.md`](docs/owner-canary-4-2026-08-24.md) — first physical RGB automation canary; manual restore passed, automatic DONE restore and early-toast correlation were corrected.
-
-## Dry-run normalized state
-
-After the second owner canary, Status Lab also computes a **dry-run** state without writing K15 lighting:
+Status Lab вычисляет:
 
 ```text
 NORMAL
@@ -183,111 +93,171 @@ DONE_PENDING_ATTENTION
 ERROR
 ```
 
-The tray shows the current state. Each transition is appended as `source=state_normalizer`, `event=normalized_state_changed`.
-
-Current reducer rules:
+Текущие правила:
 
 - `UserPromptSubmit` → `RUNNING`;
 - `PermissionRequest` → `WAITING`;
-- the specific correlated OpenAI permission notification disappearing → `RUNNING`;
+- `PostToolUse` во время `WAITING` → `RUNNING`;
+- удаление конкретного correlated permission toast → `RUNNING` как дополнительный путь;
 - `Stop` → `DONE_PENDING_ATTENTION`;
-- a specific post-Stop OpenAI notification is tracked as completion attention;
-- removing that tracked completion notification → `NORMAL`;
-- a post-Stop notification with a coarse error hint may temporarily produce `ERROR`;
+- удаление конкретного post-Stop toast → `NORMAL`;
+- если completion toast продолжает висеть, `DONE_PENDING_ATTENTION` автоматически истекает через 15 секунд → `NORMAL`;
 - `SessionEnd` → `NORMAL`;
-- repeated `PermissionRequest` events are idempotent.
+- повторные `PermissionRequest` идемпотентны.
 
-A 400 ms reorder buffer is used because hook and Windows-notification writers are independent processes and their JSONL append order can differ slightly from event timestamps.
+Toast keyword heuristic **не имеет права самостоятельно создавать semantic `ERROR`**: физическая канарейка показала false positives. `ERROR` зарезервирован для будущего high-confidence failure source от Codex/AgentLoop.
 
-The normalizer also binds an OpenAI toast that appears up to 2 seconds **before** a `PermissionRequest` hook. This was observed physically because the notification writer can win the race by ~100 ms. A `DONE_PENDING_ATTENTION` / `ERROR` state is bounded to 15 seconds; if the completion toast remains in Windows Notification Center, Status Lab restores `NORMAL` automatically instead of holding the K15 lighting indefinitely.
+Используется 400 ms reorder buffer, потому что hook logger и Windows notification poller пишут журнал из независимых процессов. Также разрешена корреляция toast, пришедшего до 2 секунд перед `PermissionRequest`, потому что это реально наблюдалось на Windows.
 
-The tray action **Сбросить состояние в NORMAL** provides manual acknowledgement during the canary.
+## K15 HID path
 
-RGB writes are still disabled in this stage.
+RGB canary открывает только доказанную vendor collection семейства K15/W909/W910:
 
-## Opt-in K15 RGB canary
+```text
+VID        36A4 / B6A4
+PID        4100 / 4101
+UsagePage  FF01
+Usage      0001
+Report ID  06
+Report     41 bytes
+lighting write 09
+lighting read  89
+```
 
-After the third owner canary, the source and dry-run normalization layers are accepted for a guarded physical lighting test.
+Каждая запись подсветки проверяется readback через `0x89`.
 
-RGB remains **OFF by default**. Enable it manually from the tray:
+Status Lab не пишет key mappings, macros, power settings или firmware.
+
+### Transport faults are not semantic ERROR
+
+Кратковременный `No matching K15 HID response for command 0x82` был физически замечен при работе с устройством. Теперь полный HID read request повторяется несколько раз с новым sequence, а Status Lab при транспортном сбое показывает `RGB: RETRYING` / `RECONNECTED`, а не semantic `ERROR` и не красит клавиатуру красным из-за USB/HID ошибки.
+
+## Profile-aware lighting policy
+
+Принятые owner baselines:
+
+```text
+Profile A = red
+Profile B = blue
+```
+
+`NORMAL` никогда не синтезируется цветом: Status Lab восстанавливает точные байты исходной подсветки текущего профиля.
+
+Для notification states используются только хорошо различимые базовые цвета + белый. Жёлтый/янтарный исключены как недостаточно различимые на физической K15.
+
+```text
+NORMAL A                exact Profile A baseline (red)
+NORMAL B                exact Profile B baseline (blue)
+RUNNING                 white, slow breathing
+WAITING                 white, fast breathing
+DONE_PENDING_ATTENTION  green breathing
+ERROR                    red, fast breathing (reserved high-confidence error)
+```
+
+Различие `RUNNING` / `WAITING` сделано скоростью белого breathing, а не близкими оттенками.
+
+## Profile switch overlay
+
+Переключение аппаратного профиля больше не считается ошибкой.
+
+Status Lab опрашивает active onboard slot. При смене:
+
+```text
+switch to Profile A
+→ red fast breathing for 5 seconds
+
+switch to Profile B
+→ blue fast breathing for 5 seconds
+```
+
+Profile flash имеет временно более высокий visual priority. Через 5 секунд Status Lab возвращается к текущему notification state:
+
+```text
+profile switch flash
+        ↓ 5 sec
+current normalized state still WAITING
+        ↓
+white fast breathing
+```
+
+Если notification state = `NORMAL`, после 5 секунд восстанавливается точная baseline-подсветка нового профиля.
+
+Для каждого впервые увиденного onboard slot сохраняется собственный lighting snapshot. Это позволяет корректно возвращать A к красному baseline, а B к синему baseline.
+
+## Enabling RGB canary
+
+RGB по умолчанию OFF. Перед включением закрой официальный VOROTEX software и W910 WebDriver.
+
+В tray:
 
 ```text
 Включить K15 RGB canary
 ```
 
-The canary:
+При enable Status Lab сохраняет exact lighting header и exact single-color-breathing record текущего onboard profile. При `NORMAL`, manual disable и application exit пытается восстановить соответствующий baseline.
 
-- opens only the vendor HID collection for the proven K15/W909/W910 family (`36A4/B6A4 : 4100/4101`, usage page `FF01`, usage `0001`, 41-byte feature report);
-- captures the current onboard profile slot;
-- captures the exact 25-byte lighting header and exact 25-byte single-color-breathing record before the first write;
-- changes only the lighting header and the single-color-breathing record;
-- verifies every write with HID readback;
-- restores the exact captured bytes on `NORMAL`, manual disable, and application exit;
-- refuses writes if the active onboard profile changes while the snapshot is held;
-- never writes key mappings, macros, power settings, firmware, or other profile banks.
+## Expected owner canary
 
-Close the official VOROTEX software and W910 WebDriver before enabling the RGB canary. Do not switch the K15 hardware profile while the canary is active.
-
-Current canary colors use hardware single-color breathing:
+После установки нового build и повторной установки hooks:
 
 ```text
-RUNNING                violet
-WAITING                amber
-DONE_PENDING_ATTENTION green
-ERROR                  red
-NORMAL                 restore exact original lighting bytes
-```
-
-The RGB implementation uses the same report framing proven by the open W910 protocol research:
-
-```text
-report id       = 0x06
-report size     = 41
-lighting write  = 0x09
-lighting read   = 0x89
-detail record   = 25 bytes
-wire color order = G,R,B
-```
-
-Every RGB action is logged as `source=k15_rgb`.
-## Следующий gate
-
-Source capture and dry-run normalization are accepted. The next owner canary is the first **physical RGB automation** test.
-
-Expected visual sequence:
-
-```text
-NORMAL
-  -> original lighting restored
+Profile B NORMAL
+→ exact blue baseline
 
 UserPromptSubmit
-  -> violet breathing
+→ white slow breathing
 
 PermissionRequest
-  -> amber breathing
+→ white fast breathing
 
-permission notification resolved
-  -> violet breathing
+approve inside Codex
+→ PostToolUse
+→ white slow breathing
+
+switch B -> A while Codex still running
+→ red profile flash for 5 sec
+→ white slow breathing resumes
+
+switch A -> B while WAITING
+→ blue profile flash for 5 sec
+→ white fast breathing resumes
 
 Stop
-  -> green breathing
+→ green breathing
 
-tracked completion notification removed
-  -> exact original lighting restored
+completion toast removed OR 15 sec timeout
+→ exact baseline of currently active profile
 ```
 
-A rejected permission may legitimately go from amber directly to green if Codex stops the turn without resuming work.
+Rejected permission may legitimately transition `WAITING → DONE_PENDING_ATTENTION` without an intermediate `RUNNING`.
 
-Record after the canary:
+## Build
+
+Requires Windows + .NET 8 SDK.
 
 ```text
-RGB_ENABLE = PASS/FAIL
-RGB_RUNNING_BLUE = PASS/FAIL
-RGB_WAITING_AMBER = PASS/FAIL
-RGB_DONE_GREEN = PASS/FAIL
-RGB_RESTORE_EXACT = PASS/FAIL
-RGB_READBACK_VERIFY = PASS/FAIL
-PROFILE_SWITCH_SAFETY = NOT_TESTED/REFUSED_AS_EXPECTED
+dotnet run --project status-lab/Vorotex.K15.StatusLab.csproj
 ```
 
-`SessionEnd` remains configured but is not required for this gate.
+Portable publish:
+
+```text
+dotnet publish status-lab/Vorotex.K15.StatusLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+```
+
+Smoke tests:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\status-lab\tests\smoke.ps1
+
+dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
+```
+
+## Canary evidence
+
+- [`docs/owner-canary-2026-08-24.md`](docs/owner-canary-2026-08-24.md) — first Windows notification canary and Codex-home correction.
+- [`docs/owner-canary-2-2026-08-24.md`](docs/owner-canary-2-2026-08-24.md) — Codex hook + notification correlation.
+- [`docs/owner-canary-3-2026-08-24.md`](docs/owner-canary-3-2026-08-24.md) — dry-run state normalizer accepted.
+- [`docs/owner-canary-4-2026-08-24.md`](docs/owner-canary-4-2026-08-24.md) — first physical RGB canary, manual restore proof, automatic-DONE and early-toast corrections.
+
+PR #20 remains intentionally unmerged until the profile-aware RGB canary is physically accepted.
