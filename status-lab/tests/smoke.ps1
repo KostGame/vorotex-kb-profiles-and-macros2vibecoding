@@ -43,7 +43,9 @@ try {
     }
 
     $codexHome = Join-Path $userProfile '.codex'
-    New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
+    $agentLoopHome = Join-Path $userProfile '.codex-agentloop'
+    New-Item -ItemType Directory -Path $codexHome, $agentLoopHome -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $agentLoopHome 'config.toml') -Value 'model = "test"' -Encoding UTF8
     $hooksPath = Join-Path $codexHome 'hooks.json'
     @'
 {
@@ -64,8 +66,11 @@ try {
 }
 '@ | Set-Content -LiteralPath $hooksPath -Encoding UTF8
 
-    & $installer | Out-Null
-    & $installer | Out-Null
+    $firstInstall = (& $installer | Out-String | ConvertFrom-Json)
+    $secondInstall = (& $installer | Out-String | ConvertFrom-Json)
+    if ($firstInstall.count -ne 2 -or $secondInstall.count -ne 2) {
+        throw "Expected installer to target both .codex and .codex-agentloop."
+    }
 
     $installed = Get-Content -LiteralPath $hooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($installed.description -ne 'pre-existing') {
@@ -94,6 +99,17 @@ try {
     $backup = $hooksPath + '.vorotex-k15-status-lab.bak'
     if (-not (Test-Path -LiteralPath $backup)) {
         throw 'Installer did not create one-time backup.'
+    }
+
+    $agentLoopHooksPath = Join-Path $agentLoopHome 'hooks.json'
+    if (-not (Test-Path -LiteralPath $agentLoopHooksPath)) {
+        throw 'Installer did not install hooks into .codex-agentloop.'
+    }
+    $agentLoopInstalled = Get-Content -LiteralPath $agentLoopHooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'Stop', 'SessionEnd')) {
+        if (@($agentLoopInstalled.hooks.$eventName).Count -lt 1) {
+            throw "Missing $eventName in .codex-agentloop hooks.json."
+        }
     }
 
     Write-Output 'Status Lab smoke tests: PASS'
