@@ -88,6 +88,17 @@ internal sealed class StateReducer
                 BindRecentNotificationToWaiting(input.TimestampUtc);
                 return SetState(K15NormalizedState.Waiting, "codex_permission_request", input.TimestampUtc);
 
+            case "PostToolUse":
+                // Approving inside Codex does not always remove the Windows toast. A successful
+                // PostToolUse is a much stronger signal that the requested tool actually ran.
+                if (State == K15NormalizedState.Waiting)
+                {
+                    _waitingNotificationIds.Clear();
+                    _lastPermissionUtc = null;
+                    return SetState(K15NormalizedState.Running, "codex_post_tool_use", input.TimestampUtc);
+                }
+                return null;
+
             case "Stop":
                 _waitingNotificationIds.Clear();
                 _lastPermissionUtc = null;
@@ -126,8 +137,9 @@ internal sealed class StateReducer
                 WithinWindow(stopUtc, input.TimestampUtc))
             {
                 _doneNotificationIds.Add(notificationId);
-                if (input.ErrorHint)
-                    return SetState(K15NormalizedState.Error, "openai_post_stop_error_notification", input.TimestampUtc);
+                // Toast keyword classification is deliberately not allowed to create semantic ERROR.
+                // It produced false positives in the physical canary. ERROR stays reserved for a
+                // future high-confidence Codex/AgentLoop failure source.
                 return null;
             }
 
