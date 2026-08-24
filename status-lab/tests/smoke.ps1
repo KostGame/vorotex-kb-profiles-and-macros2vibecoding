@@ -96,6 +96,19 @@ try {
         }
     }
 
+    $sessionEndHandler = @(
+        foreach ($group in @($installed.hooks.SessionEnd)) {
+            foreach ($handler in @($group.hooks)) {
+                if ([string]$handler.commandWindows -like '*codex-hook-logger.ps1*') {
+                    $handler
+                }
+            }
+        }
+    )[0]
+    if ([int]$sessionEndHandler.timeout -ne 3) {
+        throw "SessionEnd timeout must be 3 seconds to match Codex loader limits."
+    }
+
     $backup = $hooksPath + '.vorotex-k15-status-lab.bak'
     if (-not (Test-Path -LiteralPath $backup)) {
         throw 'Installer did not create one-time backup.'
