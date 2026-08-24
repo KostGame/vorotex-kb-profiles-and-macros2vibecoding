@@ -10,12 +10,15 @@ internal sealed class OverlayForm : Form
 
     private static readonly Color BackgroundColor = Color.FromArgb(17, 21, 25);
     private static readonly Color PanelColor = Color.FromArgb(25, 32, 36);
-    private static readonly Color KeyColor = Color.FromArgb(22, 97, 101);
-    private static readonly Color PrimaryColor = Color.FromArgb(21, 126, 130);
-    private static readonly Color FlowColor = Color.FromArgb(74, 112, 47);
-    private static readonly Color SendColor = Color.FromArgb(194, 137, 22);
-    private static readonly Color TealColor = Color.FromArgb(55, 218, 210);
     private static readonly Color MutedTextColor = Color.FromArgb(169, 184, 188);
+
+    private readonly record struct ProfilePalette(
+        Color Border,
+        Color Title,
+        Color Key,
+        Color Primary,
+        Color Flow,
+        Color Send);
 
     public OverlayForm(int autoHideMs, string hotkeyHint)
     {
@@ -109,7 +112,10 @@ internal sealed class OverlayForm : Form
 
         var scale = Math.Max(1f, DeviceDpi / 96f);
         var outer = RectangleF.Inflate(ClientRectangle, -1 * scale, -1 * scale);
-        using var borderPen = new Pen(Color.FromArgb(120, TealColor), 1.2f * scale);
+        var outerBorder = _profiles.Count == 1
+            ? PaletteFor(_profiles[0]).Border
+            : Color.FromArgb(105, 105, 122, 135);
+        using var borderPen = new Pen(Color.FromArgb(145, outerBorder), 1.2f * scale);
         using var outerPath = RoundedRect(Rectangle.Round(outer), (int)(18 * scale));
         g.DrawPath(borderPen, outerPath);
 
@@ -139,16 +145,21 @@ internal sealed class OverlayForm : Form
 
     private static void DrawProfile(Graphics g, ProfileDefinition profile, RectangleF panel, float scale)
     {
+        var palette = PaletteFor(profile);
+
         using var panelBrush = new SolidBrush(PanelColor);
-        using var panelPen = new Pen(Color.FromArgb(95, TealColor), Math.Max(1f, scale));
+        using var panelPen = new Pen(Color.FromArgb(190, palette.Border), Math.Max(1f, scale));
         using var panelPath = RoundedRect(Rectangle.Round(panel), (int)(14 * scale));
         g.FillPath(panelBrush, panelPath);
         g.DrawPath(panelPen, panelPath);
 
         using var profileFont = new Font("Segoe UI Semibold", 15.5f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
-        using var profileBrush = new SolidBrush(TealColor);
+        using var profileBrush = new SolidBrush(palette.Title);
         g.DrawString($"ПРОФИЛЬ {profile.Id}  ·  {profile.Title}", profileFont, profileBrush,
             panel.Left + 13 * scale, panel.Top + 11 * scale);
+
+        if (profile.TryGetKey("Encoder", out var encoder))
+            DrawEncoderBadge(g, encoder.DisplayText, panel, palette, scale);
 
         var gridTop = panel.Top + 45 * scale;
         var innerLeft = panel.Left + 12 * scale;
@@ -164,10 +175,10 @@ internal sealed class OverlayForm : Form
         for (var i = 0; i < 6; i++)
         {
             var rect1 = new RectangleF(innerLeft + i * (colWidth + colGap), gridTop, colWidth, keyHeight);
-            DrawKey(g, row1[i], profile.GetKey(row1[i]), rect1, scale);
+            DrawKey(g, row1[i], profile.GetKey(row1[i]), rect1, scale, palette);
 
             var rect2 = new RectangleF(innerLeft + i * (colWidth + colGap), gridTop + keyHeight + rowGap, colWidth, keyHeight);
-            DrawKey(g, row2[i], profile.GetKey(row2[i]), rect2, scale);
+            DrawKey(g, row2[i], profile.GetKey(row2[i]), rect2, scale, palette);
         }
 
         var bottomTop = gridTop + (2 * keyHeight) + (2 * rowGap);
@@ -180,27 +191,69 @@ internal sealed class OverlayForm : Form
         for (var i = 0; i < keys.Length; i++)
         {
             var width = i == keys.Length - 1 ? innerLeft + innerWidth - x : widths[i];
-            DrawKey(g, keys[i], profile.GetKey(keys[i]), new RectangleF(x, bottomTop, width, bottomHeight), scale);
+            DrawKey(g, keys[i], profile.GetKey(keys[i]), new RectangleF(x, bottomTop, width, bottomHeight), scale, palette);
             x += width + colGap;
         }
     }
 
-    private static void DrawKey(Graphics g, string key, HudKeyDefinition definition, RectangleF rect, float scale)
+    private static void DrawEncoderBadge(
+        Graphics g,
+        string label,
+        RectangleF panel,
+        ProfilePalette palette,
+        float scale)
+    {
+        var text = $"ENC: {label}";
+        using var font = new Font("Segoe UI Semibold", 11.5f * scale, FontStyle.Bold, GraphicsUnit.Pixel);
+        var measured = g.MeasureString(text, font);
+        var width = measured.Width + 18 * scale;
+        var height = 24 * scale;
+        var rect = new RectangleF(
+            panel.Right - width - 12 * scale,
+            panel.Top + 8 * scale,
+            width,
+            height);
+
+        using var fill = new SolidBrush(Color.FromArgb(72, palette.Key));
+        using var pen = new Pen(Color.FromArgb(175, palette.Border), Math.Max(1f, scale));
+        using var path = RoundedRect(Rectangle.Round(rect), (int)(10 * scale));
+        g.FillPath(fill, path);
+        g.DrawPath(pen, path);
+
+        using var brush = new SolidBrush(palette.Title);
+        using var format = new StringFormat
+        {
+            Alignment = StringAlignment.Center,
+            LineAlignment = StringAlignment.Center,
+            FormatFlags = StringFormatFlags.NoWrap
+        };
+        g.DrawString(text, font, brush, rect, format);
+    }
+
+    private static void DrawKey(
+        Graphics g,
+        string key,
+        HudKeyDefinition definition,
+        RectangleF rect,
+        float scale,
+        ProfilePalette palette)
     {
         var fill = definition.Accent?.ToLowerInvariant() switch
         {
-            "primary" => PrimaryColor,
-            "flow" => FlowColor,
-            "send" => SendColor,
-            _ => KeyColor
+            "primary" => palette.Primary,
+            "flow" => palette.Flow,
+            "send" => palette.Send,
+            _ => palette.Key
         };
 
         using var shadowBrush = new SolidBrush(Color.FromArgb(75, 0, 0, 0));
-        using var shadowPath = RoundedRect(Rectangle.Round(new RectangleF(rect.X + 2 * scale, rect.Y + 3 * scale, rect.Width, rect.Height)), (int)(8 * scale));
+        using var shadowPath = RoundedRect(
+            Rectangle.Round(new RectangleF(rect.X + 2 * scale, rect.Y + 3 * scale, rect.Width, rect.Height)),
+            (int)(8 * scale));
         g.FillPath(shadowBrush, shadowPath);
 
         using var keyBrush = new SolidBrush(fill);
-        using var keyPen = new Pen(Color.FromArgb(150, TealColor), Math.Max(1f, scale));
+        using var keyPen = new Pen(Color.FromArgb(185, palette.Border), Math.Max(1f, scale));
         using var keyPath = RoundedRect(Rectangle.Round(rect), (int)(8 * scale));
         g.FillPath(keyBrush, keyPath);
         g.DrawPath(keyPen, keyPath);
@@ -211,13 +264,19 @@ internal sealed class OverlayForm : Form
 
         g.DrawString(DisplayKey(key), keyFont, labelBrush, rect.Left + 7 * scale, rect.Top + 6 * scale);
 
-        var actionRect = new RectangleF(rect.Left + 7 * scale, rect.Top + 30 * scale, rect.Width - 14 * scale, rect.Height - 38 * scale);
+        var actionRect = new RectangleF(
+            rect.Left + 7 * scale,
+            rect.Top + 30 * scale,
+            rect.Width - 14 * scale,
+            rect.Height - 38 * scale);
+
+        var displayText = definition.DisplayText;
         using var format = CreateActionStringFormat();
-        using var actionFont = CreateActionFont(g, definition.Action, actionRect.Width, scale);
+        using var actionFont = CreateActionFont(g, displayText, actionRect.Width, scale);
 
         var state = g.Save();
         g.SetClip(Rectangle.Round(actionRect));
-        g.DrawString(definition.Action, actionFont, actionBrush, actionRect, format);
+        g.DrawString(displayText, actionFont, actionBrush, actionRect, format);
         g.Restore(state);
     }
 
@@ -232,7 +291,7 @@ internal sealed class OverlayForm : Form
     private static Font CreateActionFont(Graphics g, string action, float availableWidth, float scale)
     {
         var size = ActionFontSize(action);
-        const float minimumSize = 6.2f;
+        const float minimumSize = 7.2f;
         var targetWidth = Math.Max(1f, availableWidth - 2f * scale);
 
         while (size > minimumSize)
@@ -258,6 +317,32 @@ internal sealed class OverlayForm : Form
             _ => 14.4f
         };
     }
+
+    private static ProfilePalette PaletteFor(ProfileDefinition profile) =>
+        profile.Color.Trim().ToLowerInvariant() switch
+        {
+            "red" => new ProfilePalette(
+                Color.FromArgb(214, 76, 78),
+                Color.FromArgb(255, 111, 112),
+                Color.FromArgb(112, 39, 44),
+                Color.FromArgb(145, 50, 55),
+                Color.FromArgb(92, 34, 39),
+                Color.FromArgb(174, 62, 57)),
+            "blue" => new ProfilePalette(
+                Color.FromArgb(74, 132, 214),
+                Color.FromArgb(103, 169, 255),
+                Color.FromArgb(30, 78, 126),
+                Color.FromArgb(38, 101, 164),
+                Color.FromArgb(27, 69, 109),
+                Color.FromArgb(49, 117, 182)),
+            _ => new ProfilePalette(
+                Color.FromArgb(55, 218, 210),
+                Color.FromArgb(83, 231, 224),
+                Color.FromArgb(22, 97, 101),
+                Color.FromArgb(21, 126, 130),
+                Color.FromArgb(37, 101, 103),
+                Color.FromArgb(42, 145, 146))
+        };
 
     private static string DisplayKey(string key) => key switch
     {
