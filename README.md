@@ -62,6 +62,45 @@ Do **not** use Firmware, Update, Reset, or Restore actions as part of these inst
 
 See [`devices/k15-pro/README.md`](devices/k15-pro/README.md) for device-specific proof status and details.
 
+## K15 V1 release quick start
+
+The primary installation path is the official VOROTEX `.KB.Config` Import
+workflow. With the VOROTEX software open and the K15 connected:
+
+1. Import `K15_VIBECODING_PROFILE_A_TOOLS_AUTH_V1.KB.Config`.
+2. Import `K15_VIBECODING_PROFILE_B_MAIN_V1.KB.Config`.
+3. Assign the two hardware profile slots as appropriate in the native GUI.
+4. Configure the owner-specific Windows selectors: RU = `Ctrl+Shift+2`, EN =
+   `Ctrl+Shift+1`.
+5. Verify the physical keys. Ordinary text macros use 5 ms event timing and
+   append one ASCII space; clipboard macros use `Ctrl+V` followed by safe
+   Shift+Enter.
+
+Profile A is the tools/authorization layer; Profile B is the main vibecoding
+layer. Profile A key `0` uses the opening-fence-only report-from-clipboard flow
+for ChatGPT Web/Codex. Physical Enter emits Shift+Enter; joystick click is
+native Enter/Send; Profile A encoder rotation is vertical scroll. The `.KB.Config`
+packages preserve each profile's native 14-record lighting bank.
+
+VOROTEX Import is non-pruning: repeated imports can leave duplicate or stale
+macro groups. Remove duplicates only through a deliberate native GUI workflow;
+do not assume Import state is deterministic from file bytes alone.
+
+### Final V1 key maps
+
+| Key | Profile A — TOOLS_AUTH | Profile B — MAIN_VIBECODING |
+|---|---|---|
+| 1–6 | Copy, Paste+newline, Cut, Undo, Redo, Select all | Проверь, Следующий шаг, Пиши следующий промпт для агента, Исправляй, Публикуй, Мержи |
+| 7–0 | Отчет, Вот отчет, ``` fence, report from clipboard | Создавай, Продолжай, Проведи ревью, Готово |
+| . | Дай статус | Дай статус |
+| Enter | Shift+Enter / newline | Shift+Enter / newline |
+| - / + | Стоп / Подготовь отчет для следующего чата | Стоп / Подготовь отчет для следующего чата |
+| Space | Подтверждаю | Давай дальше, без push/merge |
+
+Profile A key `0` opens a code block, pastes the clipboard, adds a safe
+Shift+Enter, and leaves the caret in the composer; it does not close the fence
+or submit. Joystick click is the explicit Send control.
+
 ## Design reference
 
 The vibecoding UX is informed by the OpenAI + Work Louder **Codex Micro** control philosophy: workflow actions on a joystick, frequently used commands on dedicated keys, reasoning control on a rotary encoder, and status feedback through lighting.

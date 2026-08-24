@@ -2,6 +2,10 @@
 
 The V1 RC keeps language selection orthogonal to profile role:
 
+Both profiles have been physically imported and functionally accepted. The
+official `.KB.Config` package is the primary installation path; embedded macro
+groups and bindings remain editable in native VOROTEX UI.
+
 | Profile | Role | Space |
 |---|---|---|
 | A | `TOOLS_AUTH` | `Подтверждаю` |
@@ -42,6 +46,12 @@ to Russian. Every Profile A clipboard paste, including key `0`, immediately
 uses Shift+Enter after Ctrl+V. It emits no closing fence and never uses native
 Enter, so it cannot submit the composer. This is a deliberate clipboard UX
 invariant, not a general Markdown macro pattern.
+
+Profile A encoder rotation is now proven as vertical scroll through
+`btn_KB_Scr_Up0=304` and `btn_KB_Scr_Dn0=305`; Profile B encoder behavior is
+unchanged. Profile lighting is applied by `.KB.Config` and preserved from the
+corresponding native 14-record bank. The serialized native value
+`0xFF00FF00` is retained without claiming universal RGB channel semantics.
 
 The generator emits independently importable `.KB.Config` packages and
 optional standalone `.Macro.Config` packages. A combined Export-All package is

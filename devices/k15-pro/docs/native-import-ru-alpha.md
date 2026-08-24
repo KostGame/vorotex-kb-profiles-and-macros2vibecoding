@@ -59,8 +59,11 @@ macro or a new Alpha `MemMacId`.
 
 ## Manual owner test boundary
 
-The generated files are test artifacts. Do not perform Import through this
-agent. The owner should first back up the current VOROTEX configuration, then
-use the official VOROTEX Import workflow and physically test the K15. No
-firmware, reset, restore, AutoHotkey, joystick, encoder, or live configuration
-mutation is part of this task.
+The generated files are portable release artifacts for the official VOROTEX
+`.KB.Config` Import workflow. Profile A and Profile B have both been physically
+validated. A0 keeps the ChatGPT Web/Codex opening-fence-only clipboard flow;
+all clipboard pastes append safe Shift+Enter, and ordinary text commands append
+one ASCII space. Profile A encoder rotation is serialized as vertical scroll
+through `btn_KB_Scr_Up0=304` and `btn_KB_Scr_Dn0=305`; joystick click remains
+native Enter/Send. Import is non-pruning and can leave duplicate groups, so
+record the pre-import state and review the native GUI after each import.

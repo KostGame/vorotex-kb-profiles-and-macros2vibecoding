@@ -90,6 +90,10 @@ class SerializerTests(unittest.TestCase):
         config["FnKeyMacro"] = {"btn_KBKey_native_sentinel": gen.empty_macro_binding()}
         config["KBKey"]["btn_KBKey_native_sentinel"] = 91
         config["KBKeyMacro"]["btn_KBKey_native_sentinel"] = gen.empty_macro_binding()
+        config["KBKey"]["btn_KB_Scr_Up0"] = 234
+        config["KBKey"]["btn_KB_Scr_Dn0"] = 233
+        config["FnKey"]["btn_KB_Scr_Up0"] = 234
+        config["FnKey"]["btn_KB_Scr_Dn0"] = 233
         config["KBled"] = [{"nativeLedSentinel": 0}]
         return {"KBconfig": config}
 
@@ -231,6 +235,8 @@ class SerializerTests(unittest.TestCase):
             package, unresolved = gen.serialize_kb(profile, self.native_template())
             macros = package["KBconfig"]["KBKeyMacro"]
             self.assertEqual(unresolved, [])
+            self.assertEqual(len(package["MacroGrpInfo"]), 1)
+            self.assertEqual(package["MacroGrpInfo"][0]["GrpGuid"], gen.PROFILE_SPECS[profile]["groupGuid"])
             self.assertEqual(len(package["MacroGrpInfo"][0]["MacroInfo"]), 15)
             self.assertEqual(package["KBconfig"]["KBKey"]["btn_KBKey_Enter"], 40)
             self.assertEqual(macros["btn_KBKey_Enter"]["MemMacId"], 0)
@@ -262,6 +268,19 @@ class SerializerTests(unittest.TestCase):
     def test_profile_lighting_fixture_fails_closed_on_missing_bank(self):
         with self.assertRaises(ValueError):
             gen.serialize_kb("A", self.native_template(), profile_lighting_template={"KBconfig": {"KBled": [[]]}})
+
+    def test_profile_a_encoder_is_vertical_scroll_and_profile_b_is_unchanged(self):
+        template = self.native_template()
+        profile_a, _ = gen.serialize_kb("A", template, profile_lighting_template=self.native_lighting_fixture())
+        self.assertEqual(profile_a["KBconfig"]["KBKey"]["btn_KB_Scr_Up0"], 304)
+        self.assertEqual(profile_a["KBconfig"]["KBKey"]["btn_KB_Scr_Dn0"], 305)
+        self.assertEqual(profile_a["KBconfig"]["FnKey"]["btn_KB_Scr_Up0"], 234)
+        self.assertEqual(profile_a["KBconfig"]["FnKey"]["btn_KB_Scr_Dn0"], 233)
+        profile_b, _ = gen.serialize_kb("B", template, profile_lighting_template=self.native_lighting_fixture())
+        self.assertEqual(profile_b["KBconfig"]["KBKey"]["btn_KB_Scr_Up0"], 234)
+        self.assertEqual(profile_b["KBconfig"]["KBKey"]["btn_KB_Scr_Dn0"], 233)
+        self.assertEqual(profile_b["KBconfig"]["FnKey"]["btn_KB_Scr_Up0"], 234)
+        self.assertEqual(profile_b["KBconfig"]["FnKey"]["btn_KB_Scr_Dn0"], 233)
 
     def test_configurable_timing_uses_5ms_release_minimum(self):
         self.assertEqual(gen.DEFAULT_EVENT_DELAY_MS, 5)

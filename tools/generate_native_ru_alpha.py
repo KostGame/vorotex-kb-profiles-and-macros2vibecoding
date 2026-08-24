@@ -30,6 +30,9 @@ CORRECTED_NEW_LINE_FIXTURE_SHA256 = "f356f32c6acdf062115d1fc2b7023aa0cb6ec00752d
 BOTTOM_BINDING_FIXTURE_SHA256 = "6bb6e1e2a7b2fb896cd046c3323612e25b34c1aa006150784d6556bdc4e39279"
 SPACE_BINDING_FIXTURE_SHA256 = "be038530f798511301e49f9a1d13ea4babf556db64714a8e8fb77bbe7f4fab34"
 PROFILE_LIGHTING_FIXTURE_SHA256 = "b2df93221d95566416420dff0ad9fb23d61fffe5ff93a98ecefb244f700e1f30"
+PROFILE_A_ENCODER_FIXTURE_SHA256 = "e79cf4bd047b2faa89a3027a2ce2e1fdda30d218e76eec45cebef7c6aa891abf"
+PROFILE_A_ENCODER_UP_VALUE = 304
+PROFILE_A_ENCODER_DOWN_VALUE = 305
 JOYSTICK_CLICK_STORAGE = "btn_KBKey_Enter"
 GROUP_GUID_B = "67FAE5A1-B383-4CC8-A99C-AD70C6DAA277"
 GROUP_NAME_B = "K15_VIBECODING_RU_ALPHA"
@@ -328,6 +331,9 @@ def serialize_kb(profile: str = "B", template: dict[str, Any] | None = None,
     config = copy.deepcopy(template["KBconfig"] if template else minimal_kb_config())
     if profile_lighting_template is not None:
         config["KBled"] = _profile_led_bank(profile, profile_lighting_template)
+    if profile == "A":
+        config.setdefault("KBKey", {})["btn_KB_Scr_Up0"] = PROFILE_A_ENCODER_UP_VALUE
+        config.setdefault("KBKey", {})["btn_KB_Scr_Dn0"] = PROFILE_A_ENCODER_DOWN_VALUE
     action_to_guid = {action: guid for _, action, guid in spec["macros"]}
     for physical, action in spec["bindings"]:
         slot, mem_id = PROVEN_BINDINGS[physical]
@@ -412,12 +418,17 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "kbConfigContainsProfileLighting": "PROVEN", "kbConfigImportAppliesProfileLighting": "PROVEN",
         "profileLedBankMapping": {"A": "PROVEN", "B": "PROVEN"},
         "profileLightingFixtureSha256": PROFILE_LIGHTING_FIXTURE_SHA256 if profile_lighting_template_path else None,
+        "profileAEncoderFixtureSha256": PROFILE_A_ENCODER_FIXTURE_SHA256,
+        "profileAEncoder": {"behavior": "VERTICAL_SCROLL", "upField": "btn_KB_Scr_Up0",
+                             "downField": "btn_KB_Scr_Dn0", "upValue": PROFILE_A_ENCODER_UP_VALUE,
+                             "downValue": PROFILE_A_ENCODER_DOWN_VALUE},
         "rgbScope": "OBSERVED_PROFILE_LIGHTING_BANKS_ONLY", "allProfiles": {"status": "PARTIAL", "package": None,
         "reason": "Sanitized evidence proves the SingleProfile/profile-count delta, not the full Export-All object shape; unsupported fields are not guessed."},
         "fixtureProvenance": ["corrected native Shift+Enter fixture SHA-256: " + CORRECTED_NEW_LINE_FIXTURE_SHA256,
         "native bottom-binding fixture SHA-256: " + BOTTOM_BINDING_FIXTURE_SHA256,
         "native Space-binding fixture SHA-256: " + SPACE_BINDING_FIXTURE_SHA256,
         "native profile lighting fixture SHA-256: " + PROFILE_LIGHTING_FIXTURE_SHA256,
+        "native Profile A encoder fixture SHA-256: " + PROFILE_A_ENCODER_FIXTURE_SHA256,
         "sanitized native Profile mode delta: export current SingleProfile=1, export all SingleProfile=0"]}
     write_json(output_dir / "manifest.json", manifest)
     report_lines = ["# K15 Two-Profile V1 RC generation report", "",
@@ -441,6 +452,9 @@ def generate(output_dir: Path, layout: str = "RU", kb_template_path: Path | None
         "ALL_15_PHYSICAL_BINDINGS_PROFILE_B=PASS", "MEMMACID_MAPPING_PROVEN=PASS",
         "KB_CONFIG_CONTAINS_PROFILE_LIGHTING=PROVEN", "KB_CONFIG_IMPORT_APPLIES_PROFILE_LIGHTING=PROVEN",
         "KBLED_PROFILE_BANK_MAPPING_A=PROVEN", "KBLED_PROFILE_BANK_MAPPING_B=PROVEN",
+        "PROFILE_A_ENCODER_ROTATION_STORAGE=PROVEN", "PROFILE_A_ENCODER_UP_FIELD=btn_KB_Scr_Up0",
+        "PROFILE_A_ENCODER_DOWN_FIELD=btn_KB_Scr_Dn0", "PROFILE_A_ENCODER_UP_VALUE=304",
+        "PROFILE_A_ENCODER_DOWN_VALUE=305", "PROFILE_A_ENCODER_BEHAVIOR=VERTICAL_SCROLL",
         "PROFILE_A_LED_BANK_SOURCE=profile lighting fixture KBled[0]",
         "PROFILE_B_LED_BANK_SOURCE=profile lighting fixture KBled[1]",
         "PROFILE_A_LED_EXACT_PRESERVATION=PASS", "PROFILE_B_LED_EXACT_PRESERVATION=PASS",

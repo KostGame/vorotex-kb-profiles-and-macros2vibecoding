@@ -22,13 +22,13 @@
     "BOTTOM_SPACE": {"storageField": "btn_KBKey_Space", "status": "confirmed", "generatorSupported": false}
   },
   "specialControls": {
-    "ROLLER_LEFT": {"functionalBehavior": "volume_down", "storageStatus": "unresolved"},
-    "ROLLER_RIGHT": {"functionalBehavior": "volume_up", "storageStatus": "unresolved"},
-    "ROLLER_CLICK": {"functionalBehavior": "profile_switch", "storageStatus": "unresolved"},
+    "ROLLER_LEFT": {"functionalBehavior": "profile_a_vertical_scroll_up", "storageField": "btn_KB_Scr_Up0", "storageValue": 304, "storageStatus": "proven-profile-a"},
+    "ROLLER_RIGHT": {"functionalBehavior": "profile_a_vertical_scroll_down", "storageField": "btn_KB_Scr_Dn0", "storageValue": 305, "storageStatus": "proven-profile-a"},
+    "ROLLER_CLICK": {"functionalBehavior": "profile_switch", "storageStatus": "proven-behavior"},
     "JOYSTICK_UP": {"functionalBehavior": "cursor_up", "storageStatus": "unresolved"},
     "JOYSTICK_DOWN": {"functionalBehavior": "cursor_down", "storageStatus": "unresolved"},
     "JOYSTICK_LEFT": {"functionalBehavior": "cursor_left", "storageStatus": "unresolved"},
     "JOYSTICK_RIGHT": {"functionalBehavior": "cursor_right", "storageStatus": "unresolved"},
-    "JOYSTICK_CLICK": {"functionalBehavior": null, "storageStatus": "unresolved"}
+    "JOYSTICK_CLICK": {"functionalBehavior": "native_enter_send", "storageField": "btn_KBKey_Enter", "storageValue": 40, "storageStatus": "proven"}
   }
 }

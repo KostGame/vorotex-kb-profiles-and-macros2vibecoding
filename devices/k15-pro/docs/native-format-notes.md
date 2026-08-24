@@ -53,6 +53,15 @@ The joystick click is separately represented by `btn_KBKey_Enter` with native
 key value `40`; it remains a plain Enter and is not converted into another
 Alpha text macro.
 
+The owner-proven Profile A encoder export changes only the ordinary KB fields
+`btn_KB_Scr_Up0=304` and `btn_KB_Scr_Dn0=305`; the corresponding `FnKey` fields
+remain unchanged. These values are the proven vertical-scroll storage for
+Profile A. The Profile A and Profile B 14-record lighting banks are selected
+from the native full-profile export and copied exactly into their respective
+single-profile packages. The serialized lighting value `0xFF00FF00` is kept as
+a native value; RGB channel ordering and UI color interpretation remain
+unresolved.
+
 The package contains only the intended `K15_VIBECODING_RU_ALPHA` group. This
 avoids copying unrelated groups from the user's local profile into a public
 artifact.
