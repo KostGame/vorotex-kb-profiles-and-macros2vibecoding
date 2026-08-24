@@ -110,7 +110,7 @@ Require(toml.Contains("[profile_switch]") && toml.Contains("effect = \"flowing_w
     "Annotated TOML must use controlled Flowing Water for profile switching.");
 Require(!toml.Contains("[states.running]\ncolor", StringComparison.Ordinal),
     "State TOML must not contain color keys.");
-Require(toml.Contains("controlled", StringComparison.OrdinalIgnoreCase),
+Require(toml.Contains("1-2 цвета", StringComparison.OrdinalIgnoreCase),
     "Canonical TOML must explain the controlled-color policy.");
 Require(toml.Contains("#"), "Canonical TOML must contain human comments.");
 
