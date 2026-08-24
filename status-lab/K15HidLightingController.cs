@@ -133,10 +133,26 @@ internal sealed class K15HidLightingController : IDisposable
 
     public byte ReadActiveSlot()
     {
-        var data = Query(K15HidProtocol.DeviceReadCommand, K15HidProtocol.ActiveSlotSelector, 0, 1);
-        if (data.Length != 1 || data[0] > 1)
-            throw new InvalidDataException("K15 returned an invalid active onboard slot.");
-        return data[0];
+        var invalidValues = new List<byte>();
+
+        // During a hardware profile switch the device can briefly return a value outside 0/1.
+        // Treat that as a transition and retry instead of crashing the WinForms async handler.
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            var data = Query(K15HidProtocol.DeviceReadCommand, K15HidProtocol.ActiveSlotSelector, 0, 1);
+            if (data.Length == 1 && data[0] <= 1)
+                return data[0];
+
+            if (data.Length == 1)
+                invalidValues.Add(data[0]);
+
+            Thread.Sleep(60);
+        }
+
+        var detail = invalidValues.Count == 0
+            ? "no one-byte slot values"
+            : string.Join(", ", invalidValues.Select(value => $"0x{value:X2}"));
+        throw new TimeoutException($"K15 active onboard slot did not stabilize after retries ({detail}).");
     }
 
     public LightingSnapshot CaptureLightingSnapshot()
@@ -147,15 +163,38 @@ internal sealed class K15HidLightingController : IDisposable
             0,
             0,
             K15HidProtocol.LightingRecordSize);
+        RequireLength(header, K15HidProtocol.LightingRecordSize, "lighting header");
+
+        var baselineModeRepaired = false;
+
+        // Owner baseline is explicit: Profile A = constant red, Profile B = constant blue.
+        // A previous RGB canary can leave its persisted breathing/Tetris header behind if the
+        // user switches away before the five-second overlay is restored. The underlying Constant
+        // record is never modified by Status Lab, so changing only the header back to Constant
+        // safely heals that stale notifier residue without inventing a new baseline color.
+        if (slot <= 1 && header[0] is K15HidProtocol.SingleColorBreathingMode or K15HidProtocol.TetrisMode)
+        {
+            var repairedHeader = K15HidProtocol.CreateConstantHeader(header);
+            WriteAndVerify(
+                K15HidProtocol.LightingWriteCommand,
+                K15HidProtocol.LightingReadCommand,
+                0,
+                0,
+                repairedHeader,
+                "repair stale notifier mode");
+            header = repairedHeader;
+            baselineModeRepaired = true;
+            Thread.Sleep(20);
+        }
+
         var breathingRecord = Query(
             K15HidProtocol.LightingReadCommand,
             0,
             K15HidProtocol.SingleColorBreathingAddress,
             K15HidProtocol.LightingRecordSize);
 
-        RequireLength(header, K15HidProtocol.LightingRecordSize, "lighting header");
         RequireLength(breathingRecord, K15HidProtocol.LightingRecordSize, "breathing record");
-        return new LightingSnapshot(slot, header, breathingRecord);
+        return new LightingSnapshot(slot, header, breathingRecord, baselineModeRepaired);
     }
 
     public void ApplyState(LightingSnapshot snapshot, K15NormalizedState state)
@@ -168,9 +207,16 @@ internal sealed class K15HidLightingController : IDisposable
 
         RequireSameActiveSlot(snapshot);
 
+        if (state == K15NormalizedState.Running)
+        {
+            // RUNNING must be visually distinct from WAITING. Use the device's built-in
+            // Tetris/Enraptured effect and leave its onboard Tetris detail record untouched.
+            ApplyModeOnly(snapshot, K15HidProtocol.CreateRunningHeader(snapshot.Header), "running Tetris");
+            return;
+        }
+
         var speed = state switch
         {
-            K15NormalizedState.Running => 2,
             K15NormalizedState.Waiting => 6,
             K15NormalizedState.DonePendingAttention => 3,
             K15NormalizedState.Error => 6,
@@ -194,12 +240,12 @@ internal sealed class K15HidLightingController : IDisposable
         ApplyBreathingRecord(snapshot, header, detail, "profile flash");
     }
 
-    private void ApplyBreathingRecord(
+    private void ApplyModeOnly(
         LightingSnapshot snapshot,
         ReadOnlySpan<byte> header,
-        ReadOnlySpan<byte> detail,
         string label)
     {
+        RequireSameActiveSlot(snapshot);
         WriteAndVerify(
             K15HidProtocol.LightingWriteCommand,
             K15HidProtocol.LightingReadCommand,
@@ -207,7 +253,17 @@ internal sealed class K15HidLightingController : IDisposable
             0,
             header,
             $"{label} lighting header");
+    }
 
+    private void ApplyBreathingRecord(
+        LightingSnapshot snapshot,
+        ReadOnlySpan<byte> header,
+        ReadOnlySpan<byte> detail,
+        string label)
+    {
+        // Write the hidden detail record first, then activate breathing. The previous order
+        // activated an old breathing palette for a few milliseconds and produced visible
+        // red/green flashes during state changes.
         WriteAndVerify(
             K15HidProtocol.LightingWriteCommand,
             K15HidProtocol.LightingReadCommand,
@@ -215,11 +271,30 @@ internal sealed class K15HidLightingController : IDisposable
             K15HidProtocol.SingleColorBreathingAddress,
             detail,
             $"{label} breathing record");
+
+        WriteAndVerify(
+            K15HidProtocol.LightingWriteCommand,
+            K15HidProtocol.LightingReadCommand,
+            0,
+            0,
+            header,
+            $"{label} lighting header");
     }
 
     public void Restore(LightingSnapshot snapshot)
     {
         RequireSameActiveSlot(snapshot);
+
+        // Restore the baseline mode first. For the accepted A/B baseline this immediately
+        // returns to Constant red/blue, making the subsequent breathing-record repair invisible.
+        // The old reverse order caused a visible red breathing blip at NORMAL.
+        WriteAndVerify(
+            K15HidProtocol.LightingWriteCommand,
+            K15HidProtocol.LightingReadCommand,
+            0,
+            0,
+            snapshot.Header,
+            "restore lighting header");
 
         WriteAndVerify(
             K15HidProtocol.LightingWriteCommand,
@@ -228,14 +303,6 @@ internal sealed class K15HidLightingController : IDisposable
             K15HidProtocol.SingleColorBreathingAddress,
             snapshot.SingleColorBreathingRecord,
             "restore breathing record");
-
-        WriteAndVerify(
-            K15HidProtocol.LightingWriteCommand,
-            K15HidProtocol.LightingReadCommand,
-            0,
-            0,
-            snapshot.Header,
-            "restore lighting header");
     }
 
     private void RequireSameActiveSlot(LightingSnapshot snapshot)
@@ -354,7 +421,8 @@ internal sealed class K15HidLightingController : IDisposable
     internal sealed record LightingSnapshot(
         byte OnboardSlot,
         byte[] Header,
-        byte[] SingleColorBreathingRecord);
+        byte[] SingleColorBreathingRecord,
+        bool BaselineModeRepaired = false);
 
     internal sealed class K15ProfileChangedException : InvalidOperationException
     {
