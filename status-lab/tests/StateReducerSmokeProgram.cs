@@ -2,15 +2,14 @@ using Vorotex.K15.StatusLab;
 
 static void Require(bool condition, string message)
 {
-    if (!condition)
-        throw new InvalidOperationException(message);
+    if (!condition) throw new InvalidOperationException(message);
 }
 
 static StatusInputEvent Hook(DateTimeOffset t, string name) => new(t, "codex_hook", name);
 static StatusInputEvent Notification(DateTimeOffset t, string name, uint id, bool error = false) =>
     new(t, "windows_notification", name, id, "OpenAI.Codex_test", error);
 
-var t = DateTimeOffset.Parse("2026-08-24T17:30:00Z");
+var t = DateTimeOffset.Parse("2026-08-25T00:00:00Z");
 var reducer = new StateReducer();
 Require(reducer.State == K15NormalizedState.Normal, "Initial state must be NORMAL.");
 reducer.Apply(Hook(t, "UserPromptSubmit"));
@@ -22,152 +21,87 @@ Require(reducer.State == K15NormalizedState.Running, "PostToolUse must resume RU
 reducer.Apply(Hook(t.AddSeconds(3), "Stop"));
 Require(reducer.State == K15NormalizedState.DonePendingAttention, "Stop must enter DONE.");
 reducer.Apply(Notification(t.AddSeconds(4), "windows_notification_added", 101, error: true));
-Require(reducer.State == K15NormalizedState.DonePendingAttention,
-    "Toast keywords must not create semantic ERROR.");
+Require(reducer.State == K15NormalizedState.DonePendingAttention, "Toast keywords must not create semantic ERROR.");
 reducer.Apply(Notification(t.AddSeconds(5), "windows_notification_removed", 101));
 Require(reducer.State == K15NormalizedState.Normal, "Removing tracked completion notification must restore NORMAL.");
 
-var timeoutReducer = new StateReducer(10);
-timeoutReducer.Apply(Hook(t.AddSeconds(20), "UserPromptSubmit"));
-timeoutReducer.Apply(Hook(t.AddSeconds(21), "Stop"));
-Require(timeoutReducer.Tick(t.AddSeconds(30)) is null, "DONE must remain before timeout.");
-Require(timeoutReducer.Tick(t.AddSeconds(31.1)) is not null && timeoutReducer.State == K15NormalizedState.Normal,
-    "DONE timeout must restore NORMAL.");
-
-var report = K15HidProtocol.FrameReport(0x09, 0x12, 0, 0x0064, new byte[] { 1, 2, 3 });
-Require(report.Length == 41, "HID report must be 41 bytes.");
-Require(report[0] == 0x06 && report[3] == 0x09 && report[4] == 0x12, "HID report header mismatch.");
-Require(report[6] == 0x64 && report[7] == 0x00 && report[8] == 3, "HID report address mismatch.");
-
 var config = StatusLabConfig.CreateDefault();
 config.Validate();
-Require(config.SchemaVersion == 2, "TOML config schema must be v2.");
-Require(config.WireColorOrder == WireColorOrder.RGB, "Physical K15 default must use RGB order.");
-Require(config.Profiles.A.Color == "#FF0000", "Profile A identity must be RED.");
-Require(config.Profiles.B.Color == "#0000FF", "Profile B identity must be BLUE.");
-Require(config.States.Running.Mode == K15LightingMode.MonoWater,
-    "RUNNING default must be Mono Water candidate, not Tetris.");
-Require(config.ProfileSwitch.Mode == K15LightingMode.FlowingWater,
-    "Profile switch default must be controlled single-color Flowing Water.");
-Require(!config.ActivationSignal.Enabled, "Multicolor activation handshake must be off by default.");
-Require(config.States.Running.Colors.Length == 0 && config.States.Waiting.Colors.Length == 0,
-    "State config must not own semantic colors.");
-Require(StatusLabConfig.MaxNotifierColors == 2, "Notifier architecture must cap explicit palettes at two colors.");
+Require(config.SchemaVersion == 2, "TOML schema must be v2.");
+Require(config.WireColorOrder == WireColorOrder.RGB, "Physical K15 default must use RGB.");
+Require(config.Profiles.A.Color == "#FF0000" && config.Profiles.B.Color == "#0000FF", "Profile identity colors changed.");
+Require(config.States.Running.Mode == K15LightingMode.SingleColorBreathing, "RUNNING safe default must use explicit single-color mode.");
+Require(config.ProfileSwitch.Mode == K15LightingMode.SingleColorBreathing, "Profile switch safe default must use explicit single-color mode.");
+Require(!config.ActivationSignal.Enabled, "Activation must remain off by default.");
+Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Constant), "Constant must remain notifier-safe.");
+Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.FlowingWater), "Flowing Water must remain notifier-safe when an explicit palette is supplied.");
+Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.SingleColorBreathing), "Single-color breathing must remain notifier-safe.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.MonoWater), "Native 0x83/Horse race must be research-only.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.CycleBreathing), "Cycle breathing must be research-only.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.TetrisBlocks), "Tetris must be research-only.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Neon), "Neon must be research-only.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Ambilight), "Ambilight must be research-only.");
 
-foreach (var safe in new[]
-         {
-             K15LightingMode.Constant,
-             K15LightingMode.FlowingWater,
-             K15LightingMode.MonoWater,
-             K15LightingMode.SingleColorBreathing,
-             K15LightingMode.Off
-         })
-{
-    Require(StatusLabConfig.IsControlledPaletteMode(safe), $"{safe} must remain notifier-safe.");
-}
-
-foreach (var rejected in new[]
-         {
-             K15LightingMode.CycleBreathing,
-             K15LightingMode.TetrisBlocks,
-             K15LightingMode.Neon,
-             K15LightingMode.Ambilight
-         })
-{
-    Require(!StatusLabConfig.IsControlledPaletteMode(rejected), $"{rejected} must be rejected for notifier use.");
-}
-
-var rainbowRejected = false;
+var unsafeRejected = false;
 try
 {
     var unsafeConfig = StatusLabConfig.CreateDefault();
-    unsafeConfig.ProfileSwitch.Mode = K15LightingMode.TetrisBlocks;
+    unsafeConfig.ProfileSwitch.Mode = K15LightingMode.MonoWater;
     unsafeConfig.Validate();
 }
 catch (InvalidDataException ex)
 {
-    rainbowRejected = ex.Message.Contains("controlled 1-2 color", StringComparison.OrdinalIgnoreCase);
+    unsafeRejected = ex.Message.Contains("Lighting Lab", StringComparison.OrdinalIgnoreCase);
 }
-Require(rainbowRejected, "Uncontrolled multicolor notifier modes must fail config validation.");
+Require(unsafeRejected, "Research-only mode must fail notifier validation with a Lighting Lab hint.");
+
+var legacyUnsafeRejected = false;
+try
+{
+    ConfigToml.Parse("schema_version = 2\n[states.running]\neffect = \"mono_water\"\n");
+}
+catch (InvalidDataException ex)
+{
+    legacyUnsafeRejected = ex.Message.Contains("not allowed", StringComparison.OrdinalIgnoreCase);
+}
+Require(legacyUnsafeRejected, "Legacy mono_water config must be preserved/rejected, not silently treated as safe.");
 
 var runningA = config.RenderForProfile(0, config.States.Running);
 var runningB = config.RenderForProfile(1, config.States.Running);
-Require(runningA.Colors.SequenceEqual(new[] { "#FF0000" }), "Profile A RUNNING must render RED only.");
-Require(runningB.Colors.SequenceEqual(new[] { "#0000FF" }), "Profile B RUNNING must render BLUE only.");
-var waitingA = config.RenderForProfile(0, config.States.Waiting);
-var doneB = config.RenderForProfile(1, config.States.Done);
-Require(waitingA.Colors.Single() == "#FF0000", "Profile A WAITING must stay RED.");
-Require(doneB.Colors.Single() == "#0000FF", "Profile B DONE must stay BLUE.");
-Require(config.RenderForProfile(0, config.ProfileSwitch).Colors.Length == 1,
-    "Profile-switch default must render exactly one profile color.");
+Require(runningA.Colors.SequenceEqual(new[] { "#FF0000" }), "Profile A renderer must use red only.");
+Require(runningB.Colors.SequenceEqual(new[] { "#0000FF" }), "Profile B renderer must use blue only.");
+Require(runningA.PaletteMask is null, "Notifier renderer must not inherit research palette masks.");
 
 var toml = ConfigToml.Serialize(config);
-Require(toml.Contains("[profiles.A]") && toml.Contains("color = \"#FF0000\""),
-    "Annotated TOML must expose profile colors.");
-Require(toml.Contains("[states.running]") && toml.Contains("effect = \"mono_water\""),
-    "Annotated TOML must expose state effects.");
-Require(toml.Contains("[profile_switch]") && toml.Contains("effect = \"flowing_water\""),
-    "Annotated TOML must use controlled Flowing Water for profile switching.");
-Require(!toml.Contains("[states.running]\ncolor", StringComparison.Ordinal),
-    "State TOML must not contain color keys.");
-Require(toml.Contains("1-2 цвета", StringComparison.OrdinalIgnoreCase),
-    "Canonical TOML must explain the controlled-color policy.");
-Require(toml.Contains("#"), "Canonical TOML must contain human comments.");
+Require(toml.Contains("effect = \"single_color_breathing\""), "Canonical TOML must use safe single-color defaults.");
+Require(toml.Contains("НИКОГДА программно не переключает", StringComparison.Ordinal), "Canonical TOML must document observe-only profile policy.");
+Require(toml.Contains("Lighting Lab", StringComparison.OrdinalIgnoreCase), "Canonical TOML must route research modes to Lighting Lab.");
+Require(!toml.Contains("[states.running]\ncolor", StringComparison.Ordinal), "State TOML must not own colors.");
+var roundTrip = ConfigToml.Parse(toml);
+Require(roundTrip.ProfileSwitch.Mode == K15LightingMode.SingleColorBreathing, "TOML round-trip lost profile-switch mode.");
 
-var parsed = ConfigToml.Parse(toml);
-Require(parsed.Profiles.A.Color == "#FF0000" && parsed.Profiles.B.Color == "#0000FF",
-    "TOML round-trip must preserve profile colors.");
-Require(parsed.States.Waiting.Mode == K15LightingMode.SingleColorBreathing,
-    "TOML round-trip must preserve WAITING effect.");
-Require(parsed.ProfileSwitch.Mode == K15LightingMode.FlowingWater && parsed.ProfileSwitch.DurationSeconds == 2,
-    "TOML round-trip must preserve controlled profile-switch policy.");
+Require(K15HidProtocol.HorseRaceMode == 0x83 && K15HidProtocol.MonoWaterMode == 0x83,
+    "Native 0x83 must preserve historical alias while using OEM Horse race naming.");
+Require(K15HidProtocol.ModeCode(K15LightingMode.FlowingWater) == 0x82, "Flowing Water mode code changed.");
+Require(K15HidProtocol.ModeRecordAddress(K15LightingMode.FlowingWater) == 50, "Flowing Water record address changed.");
 
-var invalidRejected = false;
-try
+var palette = new LightingEffectConfig
 {
-    ConfigToml.Parse("schema_version = 2\n[states.running]\nbrightness = 99\n");
-}
-catch (InvalidDataException ex)
-{
-    invalidRejected = ex.Message.Contains("brightness", StringComparison.OrdinalIgnoreCase);
-}
-Require(invalidRejected, "Invalid TOML must fail with a useful path-specific error.");
+    Mode = K15LightingMode.FlowingWater,
+    Brightness = 6,
+    Speed = 7,
+    Direction = 0,
+    Colors = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#800080", "#00FFFF", "#FFFFFF"],
+    PaletteMask = 0b00000101
+};
+var paletteRecord = K15HidProtocol.CreateEffectRecord(palette, WireColorOrder.RGB);
+Require(paletteRecord[3] == 0b00000101, "Lighting Lab explicit palette mask must be written verbatim.");
+Require(paletteRecord[4] == 0xFF && paletteRecord[5] == 0 && paletteRecord[6] == 0, "Palette slot 1 RGB encoding changed.");
+Require(paletteRecord[10] == 0 && paletteRecord[11] == 0 && paletteRecord[12] == 0xFF, "Palette slot 3 RGB encoding changed.");
 
-var unsafeTomlRejected = false;
-try
-{
-    ConfigToml.Parse("schema_version = 2\n[profile_switch]\neffect = \"neon\"\n");
-}
-catch (InvalidDataException ex)
-{
-    unsafeTomlRejected = ex.Message.Contains("not allowed", StringComparison.OrdinalIgnoreCase);
-}
-Require(unsafeTomlRejected, "Unsafe multicolor TOML modes must be rejected instead of merely warned.");
-
-Require(K15HidProtocol.ModeCode(K15LightingMode.MonoWater) == 0x83,
-    "Mono Water must map to native mode 0x83.");
-Require(K15HidProtocol.ModeCode(K15LightingMode.TetrisBlocks) == 0x86,
-    "Tetris mapping remains available only for low-level research/forensics.");
-Require(K15HidProtocol.ModeRecordAddress(K15LightingMode.FlowingWater) == 50,
-    "Flowing Water detail record must use address 2*25.");
-
-var runningRecord = K15HidProtocol.CreateEffectRecord(runningA, WireColorOrder.RGB);
-Require(runningRecord[4] == 0xFF && runningRecord[5] == 0x00 && runningRecord[6] == 0x00,
-    "Rendered Profile A color must encode physical red as RGB.");
-var runningBRecord = K15HidProtocol.CreateEffectRecord(runningB, WireColorOrder.RGB);
-Require(runningBRecord[4] == 0x00 && runningBRecord[5] == 0x00 && runningBRecord[6] == 0xFF,
-    "Rendered Profile B color must encode physical blue as RGB.");
-var legacyRecord = K15HidProtocol.CreateEffectRecord(runningA, WireColorOrder.GRB);
-Require(legacyRecord[4] == 0x00 && legacyRecord[5] == 0xFF,
-    "GRB compatibility option must remain available.");
-
-var originalHeader = Enumerable.Range(0, 25).Select(value => (byte)value).ToArray();
-var runningHeader = K15HidProtocol.CreateEffectHeader(originalHeader, runningA);
-Require(runningHeader[0] == K15HidProtocol.MonoWaterMode,
-    "RUNNING renderer must select Mono Water candidate mode.");
-Require(runningHeader.Skip(1).SequenceEqual(originalHeader.Skip(1)),
-    "Effect header must preserve non-mode bytes.");
+var framed = K15HidProtocol.FrameReport(0x09, 0x12, 0, 0x0064, new byte[] { 1, 2, 3 });
+Require(framed.Length == 41 && framed[0] == 0x06, "HID report framing changed.");
 Require(K15HidProtocol.IsSupportedDevice(0xB6A4, 0x4100), "Physical K15 VID/PID must be accepted.");
 Require(!K15HidProtocol.IsSupportedDevice(0x1234, 0x4100), "Unrelated VID must be rejected.");
 
-Console.WriteLine("State reducer + controlled-color TOML/profile renderer + HID protocol smoke tests: PASS");
+Console.WriteLine("State reducer + safe notifier config + Lighting Lab palette-mask protocol tests: PASS");

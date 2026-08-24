@@ -15,8 +15,11 @@
 
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="lighting-lab\**\*.cs" />
     <EmbeddedResource Remove="tests\**\*" />
+    <EmbeddedResource Remove="lighting-lab\**\*" />
     <None Remove="tests\**\*" />
+    <None Remove="lighting-lab\**\*" />
   </ItemGroup>
 
   <ItemGroup>

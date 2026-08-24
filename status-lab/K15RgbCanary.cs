@@ -47,20 +47,16 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 profile = ProfileName(_snapshot.OnboardSlot),
                 exactBaselineMode = _snapshot.Header[0],
                 configPath = StatusLabConfig.FilePath,
-                wireColorOrder = _config.WireColorOrder.ToString()
+                wireColorOrder = _config.WireColorOrder.ToString(),
+                hardwareProfileSelectionPolicy = "observe_only"
             });
             StatusChanged?.Invoke($"RGB: ON · profile {ProfileName(_snapshot.OnboardSlot)}");
             StartMonitorLocked();
 
             if (_config.ActivationSignal.Enabled && _config.ActivationSignal.DurationSeconds > 0)
-            {
-                BeginOverlayLocked(_config.ActivationSignal, "ACTIVATION",
-                    _config.ActivationSignal.DurationSeconds, "rgb_activation_signal_started");
-            }
+                BeginOverlayLocked(_config.ActivationSignal, "ACTIVATION", _config.ActivationSignal.DurationSeconds, "rgb_activation_signal_started");
             else
-            {
                 ApplyDesiredLocked();
-            }
         }
         catch
         {
@@ -91,16 +87,17 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 var currentSlot = _controller.ReadActiveSlot();
                 if (currentSlot != _snapshot.OnboardSlot)
                 {
-                    BeginProfileOverlayLocked(currentSlot);
+                    AdoptActiveProfileLocked(currentSlot, startProfileOverlay: true);
                     return;
                 }
+
                 if (!IsOverlayActive())
                     ApplyDesiredLocked();
                 _transportFailures = 0;
             }
             catch (K15HidLightingController.K15ProfileChangedException ex)
             {
-                BeginProfileOverlayLocked(ex.CurrentSlot);
+                AdoptActiveProfileLocked(ex.CurrentSlot, startProfileOverlay: true);
             }
             catch (Exception ex) when (IsTransportFault(ex))
             {
@@ -123,7 +120,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
             var currentSlot = _controller.ReadActiveSlot();
             if (currentSlot != _snapshot.OnboardSlot)
-                BeginProfileOverlayLocked(currentSlot);
+                AdoptActiveProfileLocked(currentSlot, startProfileOverlay: false);
 
             var test = new LightingEffectConfig
             {
@@ -153,7 +150,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
             var currentSlot = _controller.ReadActiveSlot();
             if (currentSlot != _snapshot.OnboardSlot)
-                BeginProfileOverlayLocked(currentSlot);
+                AdoptActiveProfileLocked(currentSlot, startProfileOverlay: false);
 
             ClearOverlayLocked();
             _controller.Restore(_snapshot);
@@ -219,7 +216,9 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             try { await Task.Delay(ProfilePollInterval, token); }
             catch (OperationCanceledException) { break; }
 
-            await _gate.WaitAsync(token);
+            try { await _gate.WaitAsync(token); }
+            catch (OperationCanceledException) { break; }
+
             try
             {
                 if (!Enabled || _controller is null || _snapshot is null)
@@ -230,7 +229,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                     var currentSlot = _controller.ReadActiveSlot();
                     if (currentSlot != _snapshot.OnboardSlot)
                     {
-                        BeginProfileOverlayLocked(currentSlot);
+                        AdoptActiveProfileLocked(currentSlot, startProfileOverlay: true);
                         continue;
                     }
 
@@ -273,7 +272,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 }
                 catch (K15HidLightingController.K15ProfileChangedException ex)
                 {
-                    BeginProfileOverlayLocked(ex.CurrentSlot);
+                    AdoptActiveProfileLocked(ex.CurrentSlot, startProfileOverlay: true);
                 }
                 catch (Exception ex) when (IsTransportFault(ex))
                 {
@@ -287,66 +286,52 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         }
     }
 
-    private void BeginProfileOverlayLocked(byte newSlot)
+    private void AdoptActiveProfileLocked(byte observedSlot, bool startProfileOverlay)
     {
         if (_controller is null)
             return;
 
         Thread.Sleep(180);
         var stableSlot = _controller.ReadActiveSlot();
-        newSlot = stableSlot;
-        var previousSnapshot = _snapshot;
+        if (stableSlot != observedSlot)
+            observedSlot = stableSlot;
 
-        if (previousSnapshot is not null && previousSnapshot.OnboardSlot != newSlot)
-            RestorePreviousProfileAndReturnLocked(previousSnapshot, newSlot);
+        if (_snapshot?.OnboardSlot == observedSlot)
+            return;
 
-        if (_snapshots.TryGetValue(newSlot, out var knownSnapshot))
+        if (_snapshots.TryGetValue(observedSlot, out var knownSnapshot))
         {
-            _controller.Restore(knownSnapshot);
             _snapshot = knownSnapshot;
         }
         else
         {
             var captured = _controller.PrepareProfileSnapshot(_config);
-            if (captured.OnboardSlot != newSlot)
+            if (captured.OnboardSlot != observedSlot)
                 throw new TimeoutException("K15 profile did not remain stable while capturing exact baseline.");
-            _snapshots[newSlot] = captured;
+            _snapshots[observedSlot] = captured;
             _snapshot = captured;
         }
 
         _appliedState = K15NormalizedState.Normal;
         _expiredState = null;
-        if (!_config.ProfileSwitch.Enabled || _config.ProfileSwitch.DurationSeconds <= 0)
+        ClearOverlayLocked();
+
+        Log("rgb_profile_observed", new
         {
-            ApplyDesiredLocked();
+            onboardSlot = observedSlot,
+            profile = ProfileName(observedSlot),
+            programmaticProfileSelection = false,
+            cachedSnapshot = _snapshots.ContainsKey(observedSlot)
+        });
+
+        if (startProfileOverlay && _config.ProfileSwitch.Enabled && _config.ProfileSwitch.DurationSeconds > 0)
+        {
+            BeginOverlayLocked(_config.ProfileSwitch, $"PROFILE_{ProfileName(observedSlot)}",
+                _config.ProfileSwitch.DurationSeconds, "rgb_profile_overlay_started");
             return;
         }
 
-        BeginOverlayLocked(_config.ProfileSwitch, $"PROFILE_{ProfileName(newSlot)}",
-            _config.ProfileSwitch.DurationSeconds, "rgb_profile_overlay_started");
-    }
-
-    private void RestorePreviousProfileAndReturnLocked(
-        K15HidLightingController.LightingSnapshot previousSnapshot, byte returnSlot)
-    {
-        if (_controller is null || previousSnapshot.OnboardSlot == returnSlot)
-            return;
-
-        try
-        {
-            _controller.SelectActiveSlot(previousSnapshot.OnboardSlot);
-            _controller.Restore(previousSnapshot);
-            Log("rgb_previous_profile_restored", new
-            {
-                onboardSlot = previousSnapshot.OnboardSlot,
-                returnSlot
-            });
-        }
-        finally
-        {
-            _controller.SelectActiveSlot(returnSlot);
-            Thread.Sleep(90);
-        }
+        ApplyDesiredLocked();
     }
 
     private void BeginOverlayLocked(LightingEffectConfig source, string kind,
@@ -372,6 +357,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             brightness = rendered.Brightness,
             speed = rendered.Speed,
             durationSeconds,
+            directActiveProfilePath = true,
             resumeState = JournalStateNormalizer.ToWireName(_desiredState)
         });
         StatusChanged?.Invoke($"RGB: {kind} · {durationSeconds:0.#}s · profile {ProfileName(_snapshot.OnboardSlot)}");
@@ -438,7 +424,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
             if (_snapshot is null || currentSlot != _snapshot.OnboardSlot)
             {
-                BeginProfileOverlayLocked(currentSlot);
+                AdoptActiveProfileLocked(currentSlot, startProfileOverlay: true);
                 return;
             }
 
@@ -496,9 +482,22 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             {
                 if (_controller is not null)
                 {
-                    // If the slot cannot stabilize, do not guess and write to an unknown profile.
-                    var userSelectedSlot = _controller.ReadActiveSlot();
-                    RestoreAllSnapshotsLocked(userSelectedSlot, reason);
+                    var currentSlot = _controller.ReadActiveSlot();
+                    if (_snapshots.TryGetValue(currentSlot, out var currentSnapshot))
+                    {
+                        _snapshot = currentSnapshot;
+                        _controller.Restore(currentSnapshot);
+                        Log("rgb_active_profile_restored_on_disable", new
+                        {
+                            reason,
+                            onboardSlot = currentSlot,
+                            profile = ProfileName(currentSlot)
+                        });
+                    }
+
+                    var deferred = _snapshots.Keys.Where(slot => slot != currentSlot).OrderBy(slot => slot).ToArray();
+                    if (deferred.Length > 0)
+                        Log("rgb_inactive_profile_restore_deferred", new { reason, activeSlot = currentSlot, deferredSlots = deferred });
                 }
             }
             catch (Exception ex)
@@ -523,7 +522,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 ResetVisualStateLocked();
                 Enabled = false;
                 StatusChanged?.Invoke("RGB: OFF");
-                Log("rgb_canary_disabled", new { reason });
+                Log("rgb_canary_disabled", new { reason, programmaticProfileSelection = false });
             }
         }
         finally
@@ -539,43 +538,6 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         monitorCts?.Dispose();
         _monitorCts = null;
         _monitorTask = null;
-    }
-
-    private void RestoreAllSnapshotsLocked(byte returnSlot, string reason)
-    {
-        if (_controller is null)
-            return;
-
-        foreach (var snapshot in _snapshots.Values.OrderBy(s => s.OnboardSlot))
-        {
-            try
-            {
-                var current = _controller.ReadActiveSlot();
-                if (current != snapshot.OnboardSlot)
-                    _controller.SelectActiveSlot(snapshot.OnboardSlot);
-                _controller.Restore(snapshot);
-                Log("rgb_profile_restored_on_disable", new
-                {
-                    reason,
-                    onboardSlot = snapshot.OnboardSlot,
-                    profile = ProfileName(snapshot.OnboardSlot)
-                });
-            }
-            catch (Exception ex)
-            {
-                Log("rgb_profile_restore_failed_on_disable", new
-                {
-                    reason,
-                    onboardSlot = snapshot.OnboardSlot,
-                    exception = ex.GetType().FullName,
-                    message = ex.Message
-                });
-            }
-        }
-
-        var selected = _controller.ReadActiveSlot();
-        if (selected != returnSlot)
-            _controller.SelectActiveSlot(returnSlot);
     }
 
     private static void Log(string eventName, object? details = null)

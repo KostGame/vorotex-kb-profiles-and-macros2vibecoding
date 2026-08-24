@@ -6,7 +6,7 @@ internal enum K15LightingMode
 {
     Constant,
     FlowingWater,
-    MonoWater,
+    MonoWater, // OEM UI calls native mode 0x83 "Horse race"; old Status Lab called it mono_water.
     SingleColorBreathing,
     CycleBreathing,
     TetrisBlocks,
@@ -30,8 +30,9 @@ internal sealed class LightingEffectConfig
     public int Direction { get; set; }
     public double DurationSeconds { get; set; }
 
-    // Runtime-only palette. Canonical TOML deliberately has no color under states/overlays.
+    // Runtime-only data. Canonical notifier TOML deliberately has no state colors or palette masks.
     public string[] Colors { get; set; } = [];
+    public byte? PaletteMask { get; set; }
 
     public LightingEffectConfig Clone() => new()
     {
@@ -41,7 +42,8 @@ internal sealed class LightingEffectConfig
         Speed = Speed,
         Direction = Direction,
         DurationSeconds = DurationSeconds,
-        Colors = Colors.ToArray()
+        Colors = Colors.ToArray(),
+        PaletteMask = PaletteMask
     };
 }
 
@@ -66,21 +68,10 @@ internal sealed class ProfileSetConfig
 
 internal sealed class StatusLabConfig
 {
+    public const int MaxNotifierColors = 2;
     public static string FilePath { get; } = Path.Combine(EventJournal.DirectoryPath, "config.toml");
 
-    private static readonly HashSet<K15LightingMode> ControlledPaletteModes =
-    [
-        K15LightingMode.Constant,
-        K15LightingMode.FlowingWater,
-        K15LightingMode.MonoWater,
-        K15LightingMode.SingleColorBreathing,
-        K15LightingMode.Off
-    ];
-
-    public const int MaxNotifierColors = 2;
-
     public string? LoadWarning { get; private set; }
-
     public int SchemaVersion { get; set; } = 2;
     public WireColorOrder WireColorOrder { get; set; } = WireColorOrder.RGB;
     public ProfileSetConfig Profiles { get; set; } = new();
@@ -100,57 +91,25 @@ internal sealed class StatusLabConfig
         },
         States = new StateLightingConfig
         {
-            Running = new LightingEffectConfig
-            {
-                Mode = K15LightingMode.MonoWater,
-                Brightness = 4,
-                Speed = 3,
-                Direction = 0,
-                DurationSeconds = 0
-            },
-            Waiting = new LightingEffectConfig
-            {
-                Mode = K15LightingMode.SingleColorBreathing,
-                Brightness = 6,
-                Speed = 6,
-                Direction = 0,
-                DurationSeconds = 0
-            },
-            Done = new LightingEffectConfig
-            {
-                Mode = K15LightingMode.SingleColorBreathing,
-                Brightness = 6,
-                Speed = 3,
-                Direction = 0,
-                DurationSeconds = 10
-            },
-            Error = new LightingEffectConfig
-            {
-                Mode = K15LightingMode.SingleColorBreathing,
-                Brightness = 6,
-                Speed = 7,
-                Direction = 0,
-                DurationSeconds = 15
-            }
+            Running = Effect(K15LightingMode.SingleColorBreathing, 4, 3, 0),
+            Waiting = Effect(K15LightingMode.SingleColorBreathing, 6, 6, 0),
+            Done = Effect(K15LightingMode.SingleColorBreathing, 6, 3, 10),
+            Error = Effect(K15LightingMode.SingleColorBreathing, 6, 7, 15)
         },
-        ProfileSwitch = new LightingEffectConfig
-        {
-            Mode = K15LightingMode.FlowingWater,
-            Brightness = 6,
-            Speed = 5,
-            Direction = 0,
-            DurationSeconds = 2
-        },
-        ActivationSignal = new LightingEffectConfig
-        {
-            Enabled = false,
-            Mode = K15LightingMode.MonoWater,
-            Brightness = 4,
-            Speed = 4,
-            Direction = 0,
-            DurationSeconds = 2
-        },
+        ProfileSwitch = Effect(K15LightingMode.SingleColorBreathing, 6, 5, 2),
+        ActivationSignal = Effect(K15LightingMode.SingleColorBreathing, 4, 4, 2, enabled: false),
         EffectLabDurationSeconds = 4
+    };
+
+    private static LightingEffectConfig Effect(K15LightingMode mode, int brightness, int speed,
+        double duration, bool enabled = true) => new()
+    {
+        Enabled = enabled,
+        Mode = mode,
+        Brightness = brightness,
+        Speed = speed,
+        Direction = 0,
+        DurationSeconds = duration
     };
 
     public static StatusLabConfig LoadOrCreate()
@@ -164,7 +123,7 @@ internal sealed class StatusLabConfig
         {
             var fallback = CreateDefault();
             fallback.LoadWarning =
-                $"RGB config invalid: {ex.Message}. Existing config.toml was preserved unchanged; defaults are active for this run.";
+                $"RGB config invalid: {ex.Message}. Existing config.toml was preserved unchanged; safe defaults are active for this run.";
             return fallback;
         }
     }
@@ -174,9 +133,7 @@ internal sealed class StatusLabConfig
         Directory.CreateDirectory(EventJournal.DirectoryPath);
         if (File.Exists(FilePath))
             return;
-
-        var config = CreateDefault();
-        File.WriteAllText(FilePath, ConfigToml.Serialize(config), new UTF8Encoding(false));
+        File.WriteAllText(FilePath, ConfigToml.Serialize(CreateDefault()), new UTF8Encoding(false));
     }
 
     public ProfileLightingConfig GetProfile(byte onboardSlot) => onboardSlot switch
@@ -199,8 +156,7 @@ internal sealed class StatusLabConfig
     {
         var rendered = source.Clone();
         rendered.Colors = [GetProfile(onboardSlot).Color];
-        if (rendered.Colors.Length > MaxNotifierColors)
-            throw new InvalidDataException($"Notifier palettes are limited to {MaxNotifierColors} colors.");
+        rendered.PaletteMask = null;
         return rendered;
     }
 
@@ -222,13 +178,18 @@ internal sealed class StatusLabConfig
             throw new InvalidDataException("effect_lab.test_duration_seconds must be 0.5..30.");
     }
 
-    public static bool IsControlledPaletteMode(K15LightingMode mode) => ControlledPaletteModes.Contains(mode);
+    internal static bool IsControlledPaletteMode(K15LightingMode mode) => mode is
+        K15LightingMode.Constant or
+        K15LightingMode.FlowingWater or
+        K15LightingMode.SingleColorBreathing or
+        K15LightingMode.Off;
 
     private static void ValidateEffect(LightingEffectConfig effect, string path)
     {
         if (!IsControlledPaletteMode(effect.Mode))
             throw new InvalidDataException(
-                $"{path}.effect '{ModeName(effect.Mode)}' is not allowed for notifier use: only controlled 1-2 color effects are permitted.");
+                $"{path}.effect '{ModeName(effect.Mode)}' is not allowed for Status Lab notifier. " +
+                "Use constant, flowing_water, single_color_breathing or off; research other native modes in Lighting Lab.");
         if (effect.Brightness is < 1 or > 6)
             throw new InvalidDataException($"{path}.brightness must be 1..6.");
         if (effect.Speed is < 1 or > 7)
@@ -243,7 +204,7 @@ internal sealed class StatusLabConfig
     {
         K15LightingMode.Constant => "constant",
         K15LightingMode.FlowingWater => "flowing_water",
-        K15LightingMode.MonoWater => "mono_water",
+        K15LightingMode.MonoWater => "horse_race",
         K15LightingMode.SingleColorBreathing => "single_color_breathing",
         K15LightingMode.CycleBreathing => "cycle_breathing",
         K15LightingMode.TetrisBlocks => "tetris_blocks",
@@ -257,7 +218,7 @@ internal sealed class StatusLabConfig
     {
         "constant" => K15LightingMode.Constant,
         "flowing_water" => K15LightingMode.FlowingWater,
-        "mono_water" => K15LightingMode.MonoWater,
+        "horse_race" or "mono_water" => K15LightingMode.MonoWater,
         "single_color_breathing" => K15LightingMode.SingleColorBreathing,
         "cycle_breathing" => K15LightingMode.CycleBreathing,
         "tetris_blocks" => K15LightingMode.TetrisBlocks,
@@ -293,7 +254,6 @@ internal sealed class StatusLabConfig
             text = text[1..];
         if (text.Length != 6 || !uint.TryParse(text, System.Globalization.NumberStyles.HexNumber, null, out var rgb))
             throw new InvalidDataException($"Invalid color '{value}'. Use a named color or #RRGGBB.");
-
         return ((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
     }
 }

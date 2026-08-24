@@ -13,7 +13,8 @@ internal static class K15HidProtocol
 
     public const byte ConstantMode = 0x81;
     public const byte FlowingWaterMode = 0x82;
-    public const byte MonoWaterMode = 0x83;
+    public const byte HorseRaceMode = 0x83;
+    public const byte MonoWaterMode = HorseRaceMode; // historical Status Lab name
     public const byte SingleColorBreathingMode = 0x84;
     public const byte CycleBreathingMode = 0x85;
     public const byte TetrisMode = 0x86;
@@ -23,12 +24,8 @@ internal static class K15HidProtocol
 
     public const int LightingRecordSize = 25;
 
-    public static byte[] FrameReport(
-        byte command,
-        byte sequence,
-        byte selector = 0,
-        ushort address = 0,
-        ReadOnlySpan<byte> data = default)
+    public static byte[] FrameReport(byte command, byte sequence, byte selector = 0,
+        ushort address = 0, ReadOnlySpan<byte> data = default)
     {
         if (data.Length > MaxData)
             throw new ArgumentOutOfRangeException(nameof(data), "Payload exceeds 32 bytes.");
@@ -47,18 +44,13 @@ internal static class K15HidProtocol
         return report;
     }
 
-    public static byte[] ReadRequest(
-        byte command,
-        byte sequence,
-        byte selector = 0,
-        ushort address = 0,
-        byte length = 0)
+    public static byte[] ReadRequest(byte command, byte sequence, byte selector = 0,
+        ushort address = 0, byte length = 0)
     {
         if ((command & 0x80) == 0)
             throw new ArgumentOutOfRangeException(nameof(command), "Read command must have bit 7 set.");
         if (length > MaxData)
             throw new ArgumentOutOfRangeException(nameof(length));
-
         Span<byte> placeholder = stackalloc byte[length];
         return FrameReport(command, sequence, selector, address, placeholder);
     }
@@ -67,7 +59,7 @@ internal static class K15HidProtocol
     {
         K15LightingMode.Constant => ConstantMode,
         K15LightingMode.FlowingWater => FlowingWaterMode,
-        K15LightingMode.MonoWater => MonoWaterMode,
+        K15LightingMode.MonoWater => HorseRaceMode,
         K15LightingMode.SingleColorBreathing => SingleColorBreathingMode,
         K15LightingMode.CycleBreathing => CycleBreathingMode,
         K15LightingMode.TetrisBlocks => TetrisMode,
@@ -79,19 +71,14 @@ internal static class K15HidProtocol
 
     public static ushort ModeRecordAddress(K15LightingMode mode)
     {
-        var modeCode = ModeCode(mode);
-        var recordIndex = modeCode & 0x3f;
+        var recordIndex = ModeCode(mode) & 0x3f;
         return checked((ushort)(recordIndex * LightingRecordSize));
     }
 
-    public static byte[] CreateEffectHeader(
-        ReadOnlySpan<byte> originalHeader,
-        LightingEffectConfig effect) =>
+    public static byte[] CreateEffectHeader(ReadOnlySpan<byte> originalHeader, LightingEffectConfig effect) =>
         CreateModeHeader(originalHeader, ModeCode(effect.Mode));
 
-    public static byte[] CreateEffectRecord(
-        LightingEffectConfig effect,
-        WireColorOrder wireColorOrder)
+    public static byte[] CreateEffectRecord(LightingEffectConfig effect, WireColorOrder wireColorOrder)
     {
         if (effect.Brightness is < 1 or > 6)
             throw new ArgumentOutOfRangeException(nameof(effect.Brightness));
@@ -101,32 +88,24 @@ internal static class K15HidProtocol
             throw new ArgumentOutOfRangeException(nameof(effect.Direction));
         if (effect.Colors.Length > 7)
             throw new ArgumentOutOfRangeException(nameof(effect.Colors));
+        if (effect.PaletteMask is byte explicitMask && explicitMask > 0x7f)
+            throw new ArgumentOutOfRangeException(nameof(effect.PaletteMask));
 
         var record = new byte[LightingRecordSize];
         record[0] = (byte)effect.Speed;
         record[1] = (byte)effect.Direction;
         record[2] = (byte)(6 - effect.Brightness);
 
-        var colors = effect.Colors
-            .Take(7)
-            .Select(StatusLabConfig.ParseColor)
-            .ToArray();
-
+        var colors = effect.Colors.Take(7).Select(StatusLabConfig.ParseColor).ToArray();
         if (effect.Mode != K15LightingMode.Off && colors.Length == 0)
-            throw new InvalidDataException("Lighting effect requires at least one color.");
+            throw new InvalidDataException("Lighting effect requires at least one color/seed record.");
 
-        record[3] = colors.Length == 0
-            ? (byte)0
-            : (byte)((1 << colors.Length) - 1);
+        record[3] = effect.PaletteMask ?? (colors.Length == 0 ? (byte)0 : (byte)((1 << colors.Length) - 1));
 
         for (var index = 0; index < colors.Length; index++)
         {
             var offset = 4 + index * 3;
             var color = colors[index];
-
-            // Physical K15 canaries proved that the native W910 GRB assumption is not correct for
-            // this VOROTEX variant: semantic red written as GRB showed green. Default config is RGB,
-            // while GRB remains available as an explicit compatibility/calibration option.
             if (wireColorOrder == WireColorOrder.RGB)
             {
                 record[offset] = color.R;
@@ -140,7 +119,6 @@ internal static class K15HidProtocol
                 record[offset + 2] = color.B;
             }
         }
-
         return record;
     }
 
@@ -148,7 +126,6 @@ internal static class K15HidProtocol
     {
         if (originalHeader.Length != LightingRecordSize)
             throw new ArgumentException("Lighting header must be 25 bytes.", nameof(originalHeader));
-
         var header = originalHeader.ToArray();
         header[0] = mode;
         return header;
@@ -158,9 +135,8 @@ internal static class K15HidProtocol
         CreateModeHeader(originalHeader, ConstantMode);
 
     public static bool IsNotifierMode(byte mode) =>
-        mode is FlowingWaterMode or SingleColorBreathingMode or TetrisMode;
+        mode is ConstantMode or FlowingWaterMode or SingleColorBreathingMode or OffMode;
 
     public static bool IsSupportedDevice(ushort vendorId, ushort productId) =>
-        (vendorId is 0x36A4 or 0xB6A4) &&
-        (productId is 0x4100 or 0x4101);
+        (vendorId is 0x36A4 or 0xB6A4) && (productId is 0x4100 or 0x4101);
 }

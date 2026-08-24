@@ -1,23 +1,16 @@
 # VOROTEX K15 Status Lab
 #
-# Цвет задаёт аппаратный профиль. Состояния меняют только эффект.
-# NORMAL всегда восстанавливает точный baseline, считанный с клавиатуры.
+# Цвет задаёт аппаратный профиль. NORMAL восстанавливает exact baseline.
+# В notifier разрешены только режимы с явно управляемым цветом/палитрой:
+# constant, flowing_water, single_color_breathing, off.
 #
-# Allowed notifier effects:
-#   constant
-#   flowing_water
-#   mono_water
-#   single_color_breathing
-#   off
-#
-# Только эффекты с контролируемой палитрой 1-2 цвета разрешены.
-# cycle_breathing, tetris_blocks, neon и ambilight не допускаются notifier-валидатором.
-# Low-level HID mapping для них остаётся только для research/forensics.
+# Native mode 0x83 в OEM UI называется Horse race. Старое имя Status Lab: mono_water.
+# Он, cycle_breathing, tetris_blocks, neon и ambilight исследуются только через K15 Lighting Lab.
+# Status Lab НИКОГДА программно не переключает hardware Profile A/B.
 
 schema_version = 2
 
 [device]
-# rgb доказан на текущей физической K15; grb оставлен для совместимости.
 wire_color_order = "rgb"
 
 [profiles.A]
@@ -29,16 +22,14 @@ color = "#FF0000"
 color = "#0000FF"
 
 [states.running]
-# RUNNING: спокойное движение в цвете активного профиля.
 enabled = true
-effect = "mono_water"
+effect = "single_color_breathing"
 brightness = 4
 speed = 3
 direction = 0
 duration_seconds = 0
 
 [states.waiting]
-# WAITING: заметное ожидание в том же цвете.
 enabled = true
 effect = "single_color_breathing"
 brightness = 6
@@ -47,7 +38,6 @@ direction = 0
 duration_seconds = 0
 
 [states.done]
-# DONE: ограниченный attention-effect; затем exact baseline.
 enabled = true
 effect = "single_color_breathing"
 brightness = 6
@@ -56,7 +46,6 @@ direction = 0
 duration_seconds = 10
 
 [states.error]
-# ERROR: только high-confidence semantic error.
 enabled = true
 effect = "single_color_breathing"
 brightness = 6
@@ -65,23 +54,21 @@ direction = 0
 duration_seconds = 15
 
 [profile_switch]
-# Короткий ОДНОЦВЕТНЫЙ overlay в цвете НОВОГО профиля, затем resume state.
+# Применяется напрямую к уже физически выбранному новому профилю.
 enabled = true
-effect = "flowing_water"
+effect = "single_color_breathing"
 brightness = 6
 speed = 5
 direction = 0
 duration_seconds = 2
 
 [activation]
-# Выключено по умолчанию: никакой красно-синей дискотеки при старте notifier.
 enabled = false
-effect = "mono_water"
+effect = "single_color_breathing"
 brightness = 4
 speed = 4
 direction = 0
 duration_seconds = 2
 
 [effect_lab]
-# Время одного теста перед автоматическим exact restore.
 test_duration_seconds = 4
