@@ -9,12 +9,14 @@ $rgbCanary = Join-Path $projectRoot 'K15RgbCanary.cs'
 $trayIconFactory = Join-Path $projectRoot 'TrayIconFactory.cs'
 $stateReducer = Join-Path $projectRoot 'StateReducer.cs'
 $normalizer = Join-Path $projectRoot 'JournalStateNormalizer.cs'
+$eventJournal = Join-Path $projectRoot 'EventJournal.cs'
+$appContext = Join-Path $projectRoot 'StatusLabApplicationContext.cs'
 $lightingLabProject = Join-Path $projectRoot 'lighting-lab\Vorotex.K15.LightingLab.csproj'
 $lightingLabForm = Join-Path $projectRoot 'lighting-lab\LightingLabForm.cs'
 $lightingLabSession = Join-Path $projectRoot 'lighting-lab\LightingLabSession.cs'
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('vorotex-k15-status-lab-' + [Guid]::NewGuid().ToString('N'))
 
-foreach ($required in @($configExample, $configurator, $rgbCanary, $trayIconFactory, $stateReducer, $normalizer, $lightingLabProject, $lightingLabForm, $lightingLabSession)) {
+foreach ($required in @($configExample, $configurator, $rgbCanary, $trayIconFactory, $stateReducer, $normalizer, $eventJournal, $appContext, $lightingLabProject, $lightingLabForm, $lightingLabSession)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Required Status Lab file missing: $required" }
 }
 
@@ -23,16 +25,25 @@ if ($html -match 'https?://') { throw 'HTML configurator must not depend on netw
 if ($html -notmatch 'fileInput' -or $html -notmatch 'downloadBtn') {
     throw 'HTML configurator must support local File API load and TOML download.'
 }
+if ($html -notmatch 'backupBtn' -or $html -notmatch 'restoreBtn' -or $html -notmatch 'configPath' -or $html -notmatch 'configData') {
+    throw 'Configurator must auto-load current config and expose backup/restore workflow.'
+}
 if ($html -match "\['mono_water'" -or $html -match "\['tetris_blocks'" -or $html -match "\['neon'") {
     throw 'Main notifier configurator must not offer research-only native modes.'
 }
 if ($html -notmatch 'cycle_breathing' -or $html -notmatch 'profile_pair' -or $html -notmatch 'stop_signal') {
     throw 'Configurator must expose accepted Cycle breathing and profile-pair STOP/activation signals.'
 }
+if ($html -notmatch 'doneTimeout' -or $html -notmatch 'done_attention_timeout_seconds') {
+    throw 'Configurator must expose independent DONE fallback timeout.'
+}
 
 $toml = Get-Content -LiteralPath $configExample -Raw -Encoding UTF8
 if ($toml -notmatch 'schema_version\s*=\s*3' -or $toml -notmatch '\[stop_signal\]' -or $toml -notmatch 'profile_pair') {
     throw 'TOML example must use schema v3 and include profile-pair STOP signal.'
+}
+if ($toml -notmatch '\[behavior\]' -or $toml -notmatch 'done_attention_timeout_seconds\s*=\s*15') {
+    throw 'TOML example must expose bounded DONE fallback behavior.'
 }
 if ($toml -notmatch '\[profiles\.A\]' -or $toml -notmatch '\[states\.running\]' -or $toml -notmatch '#') {
     throw 'TOML example must be annotated and include profile/state sections.'
@@ -65,8 +76,27 @@ $normalizerSource = Get-Content -LiteralPath $normalizer -Raw -Encoding UTF8
 if ($stateSource -notmatch 'FocusedSessionId' -or $stateSource -notmatch 'IsInternalCwd' -or $stateSource -notmatch 'Rehydrate') {
     throw 'State reducer must be session-aware and support restart rehydration.'
 }
+if ($stateSource -notmatch 'BindRecentNotificationToDone' -or $stateSource -notmatch 'done_attention_timeout') {
+    throw 'State reducer must correlate pre-Stop completion notifications and provide DONE timeout.'
+}
 if ($normalizerSource -notmatch 'StartupReplayWindow' -or $normalizerSource -notmatch 'state_rehydrated') {
     throw 'Journal normalizer must replay recent Codex hooks and log rehydrated state.'
+}
+if ($normalizerSource -notmatch '_readOffset' -or $normalizerSource -match 'File\.ReadAllLines\(EventJournal\.FilePath\)') {
+    throw 'Runtime normalizer must tail appended journal bytes instead of re-reading the whole file.'
+}
+
+$journalSource = Get-Content -LiteralPath $eventJournal -Raw -Encoding UTF8
+$hookLoggerSource = Get-Content -LiteralPath $logger -Raw -Encoding UTF8
+$appSource = Get-Content -LiteralPath $appContext -Raw -Encoding UTF8
+if ($journalSource -notmatch 'MaxFileBytes' -or $journalSource -notmatch 'MaxArchives' -or $journalSource -notmatch 'DetailedLoggingEnabled') {
+    throw 'Event journal must be bounded and expose detailed logging toggle.'
+}
+if ($hookLoggerSource -notmatch 'Rotate-JournalIfNeeded') {
+    throw 'Codex hook transport must rotate the shared journal independently of the tray process.'
+}
+if ($appSource -notmatch 'Подробный журнал' -or $appSource -notmatch 'RGB-индикация') {
+    throw 'Tray must expose detailed-log switch and production RGB-indication naming.'
 }
 
 $labSource = (Get-Content -LiteralPath $lightingLabForm -Raw -Encoding UTF8) + (Get-Content -LiteralPath $lightingLabSession -Raw -Encoding UTF8)
@@ -171,7 +201,7 @@ try {
         if (@($agentLoopInstalled.hooks.$eventName).Count -lt 1) { throw "Missing $eventName in .codex-agentloop hooks.json." }
     }
 
-    Write-Output 'Status Lab session-aware + RGB profile-pair + Lighting Lab smoke tests: PASS'
+    Write-Output 'Status Lab bounded-log + DONE correlation + configurator backup + Lighting Lab smoke tests: PASS'
 }
 finally {
     $env:LOCALAPPDATA = $oldLocalAppData
