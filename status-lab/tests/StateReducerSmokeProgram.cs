@@ -27,6 +27,24 @@ Require(reducer.State == K15NormalizedState.DonePendingAttention, "Toast keyword
 reducer.Apply(Notification(t.AddSeconds(5), "windows_notification_removed", 101));
 Require(reducer.State == K15NormalizedState.Normal, "Removing tracked completion notification must restore NORMAL.");
 
+var preStop = new StateReducer(15);
+preStop.Apply(Hook(t, "UserPromptSubmit", "pre-stop"));
+preStop.Apply(Notification(t.AddSeconds(5), "windows_notification_added", 202));
+preStop.Apply(Hook(t.AddSeconds(5.1), "Stop", "pre-stop"));
+Require(preStop.State == K15NormalizedState.DonePendingAttention,
+    "Completion toast arriving immediately before Stop must still correlate to DONE.");
+preStop.Apply(Notification(t.AddSeconds(8), "windows_notification_removed", 202));
+Require(preStop.State == K15NormalizedState.Normal,
+    "Removing a pre-Stop completion toast must resolve DONE to NORMAL.");
+
+var timeout = new StateReducer(15);
+timeout.Apply(Hook(t, "UserPromptSubmit", "timeout-main"));
+timeout.Apply(Hook(t.AddSeconds(1), "Stop", "timeout-main"));
+Require(timeout.Tick(t.AddSeconds(15.9)) is null, "DONE fallback must not fire before 15 seconds.");
+var timeoutTransition = timeout.Tick(t.AddSeconds(16.1));
+Require(timeoutTransition?.Current == K15NormalizedState.Normal && timeoutTransition.Reason == "done_attention_timeout",
+    "DONE must fall back to NORMAL after configured timeout.");
+
 var parallel = new StateReducer();
 parallel.Apply(Hook(t, "UserPromptSubmit", "main-A", @"D:\AI_AGENT_PROJECTS\agentloop-exchange-manual-win-001"));
 Require(parallel.State == K15NormalizedState.Running, "Main A must be RUNNING.");
@@ -61,6 +79,7 @@ var config = StatusLabConfig.CreateDefault();
 config.Validate();
 Require(config.SchemaVersion == 3, "Canonical TOML schema must be v3.");
 Require(config.WireColorOrder == WireColorOrder.RGB, "Physical K15 default must use RGB.");
+Require(config.DoneAttentionTimeoutSeconds == 15, "DONE fallback timeout default must be 15 seconds.");
 Require(config.Profiles.A.Color == "#FF0000" && config.Profiles.B.Color == "#0000FF", "Profile identity colors changed.");
 Require(config.States.Running.Mode == K15LightingMode.FlowingWater, "RUNNING default must use Flowing Water.");
 Require(config.States.Running.Palette == PaletteSource.Profile, "RUNNING must use active profile color.");
@@ -74,8 +93,8 @@ Require(config.StopSignal.Mode == K15LightingMode.CycleBreathing &&
 Require(config.ActivationSignal.Enabled && config.ActivationSignal.Mode == K15LightingMode.FlowingWater &&
         config.ActivationSignal.Palette == PaletteSource.ProfilePair,
     "RGB activation must use two-color Flowing Water.");
-Require(config.ProfileSwitch.Palette == PaletteSource.Profile,
-    "Profile switch must remain single active-profile color.");
+Require(config.ProfileSwitch.Palette == PaletteSource.Profile && config.ProfileSwitch.DurationSeconds == 4,
+    "Profile switch must remain one active-profile color and account for native K15 flashes.");
 Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.CycleBreathing),
     "Physically accepted Cycle breathing must be notifier-safe.");
 Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.MonoWater), "Native 0x83/Horse race must remain research-only.");
@@ -100,6 +119,9 @@ Require(pairRecord[7] == 0 && pairRecord[8] == 0 && pairRecord[9] == 0xFF,
 
 var toml = ConfigToml.Serialize(config);
 Require(toml.Contains("schema_version = 3", StringComparison.Ordinal), "Canonical TOML must use schema v3.");
+Require(toml.Contains("[behavior]", StringComparison.Ordinal) &&
+        toml.Contains("done_attention_timeout_seconds = 15", StringComparison.Ordinal),
+    "Canonical TOML must expose DONE fallback behavior.");
 Require(toml.Contains("[stop_signal]", StringComparison.Ordinal), "Canonical TOML must include STOP overlay section.");
 Require(toml.Contains("palette = \"profile_pair\"", StringComparison.Ordinal),
     "Canonical TOML must expose profile_pair palette source.");
@@ -110,6 +132,11 @@ Require(toml.Contains("НИКОГДА программно не переключ
 Require(!toml.Contains("[states.running]\ncolor", StringComparison.Ordinal), "State TOML must not own colors.");
 var roundTrip = ConfigToml.Parse(toml);
 Require(roundTrip.StopSignal.Palette == PaletteSource.ProfilePair, "TOML round-trip lost STOP palette source.");
+Require(roundTrip.DoneAttentionTimeoutSeconds == 15, "TOML round-trip lost DONE timeout.");
+
+var existingV3WithoutBehavior = ConfigToml.Parse("schema_version = 3\n[states.done]\neffect = \"single_color_breathing\"\npalette = \"profile\"\n");
+Require(existingV3WithoutBehavior.DoneAttentionTimeoutSeconds == 15,
+    "Existing schema-v3 config without [behavior] must inherit safe 15s fallback without file rewrite.");
 
 var legacyV2 = ConfigToml.Parse("schema_version = 2\n[states.running]\neffect = \"flowing_water\"\n");
 Require(legacyV2.SchemaVersion == 3, "Legacy schema v2 must migrate in memory without rewriting the file.");
@@ -151,4 +178,4 @@ Require(framed.Length == 41 && framed[0] == 0x06, "HID report framing changed.")
 Require(K15HidProtocol.IsSupportedDevice(0xB6A4, 0x4100), "Physical K15 VID/PID must be accepted.");
 Require(!K15HidProtocol.IsSupportedDevice(0x1234, 0x4100), "Unrelated VID must be rejected.");
 
-Console.WriteLine("Session-aware reducer + profile-pair RGB policy + HID protocol tests: PASS");
+Console.WriteLine("Session-aware reducer + bounded DONE + profile-pair RGB policy + HID tests: PASS");
