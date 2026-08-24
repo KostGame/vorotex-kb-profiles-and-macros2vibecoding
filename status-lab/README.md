@@ -248,13 +248,42 @@ wire color order = G,R,B
 Every RGB action is logged as `source=k15_rgb`.
 ## Следующий gate
 
-После физического канареечного прогона на Windows:
+Source capture and dry-run normalization are accepted. The next owner canary is the first **physical RGB automation** test.
+
+Expected visual sequence:
 
 ```text
-CODEX_HOOK_EVENTS = PASS/FAIL
-WINDOWS_NOTIFICATION_POLL = PASS/FAIL
-CODEX_NOTIFICATION_IDENTITY = <AppUserModelId / PFN>
-CHATGPT_NOTIFICATION_IDENTITY = <AppUserModelId / PFN>
+NORMAL
+  -> original lighting restored
+
+UserPromptSubmit
+  -> blue breathing
+
+PermissionRequest
+  -> amber breathing
+
+permission notification resolved
+  -> blue breathing
+
+Stop
+  -> green breathing
+
+tracked completion notification removed
+  -> exact original lighting restored
 ```
 
-Second owner canary passed the source-layer gate for `UserPromptSubmit`, `PermissionRequest`, `Stop` and Windows notification correlation. `SessionEnd` remains unexercised. The next stage is a dry-run normalizer (`NORMAL / RUNNING / WAITING / DONE_PENDING_ATTENTION / ERROR`) before enabling K15 RGB writes.
+A rejected permission may legitimately go from amber directly to green if Codex stops the turn without resuming work.
+
+Record after the canary:
+
+```text
+RGB_ENABLE = PASS/FAIL
+RGB_RUNNING_BLUE = PASS/FAIL
+RGB_WAITING_AMBER = PASS/FAIL
+RGB_DONE_GREEN = PASS/FAIL
+RGB_RESTORE_EXACT = PASS/FAIL
+RGB_READBACK_VERIFY = PASS/FAIL
+PROFILE_SWITCH_SAFETY = NOT_TESTED/REFUSED_AS_EXPECTED
+```
+
+`SessionEnd` remains configured but is not required for this gate.
