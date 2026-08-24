@@ -41,13 +41,23 @@ Require(reducer.State == K15NormalizedState.DonePendingAttention, "Post-Stop com
 reducer.Apply(Notification(t.AddSeconds(8), "windows_notification_removed", 101));
 Require(reducer.State == K15NormalizedState.Normal, "Removing tracked completion notification must acknowledge DONE.");
 
-reducer.Apply(Hook(t.AddSeconds(10), "UserPromptSubmit"));
-reducer.Apply(Hook(t.AddSeconds(11), "Stop"));
-reducer.Apply(Notification(t.AddSeconds(12), "windows_notification_added", 102, error: true));
-Require(reducer.State == K15NormalizedState.Error, "Post-Stop error hint must enter ERROR.");
+var postToolReducer = new StateReducer();
+postToolReducer.Apply(Hook(t.AddSeconds(10), "UserPromptSubmit"));
+postToolReducer.Apply(Hook(t.AddSeconds(11), "PermissionRequest"));
+Require(postToolReducer.State == K15NormalizedState.Waiting, "PermissionRequest must enter WAITING before PostToolUse.");
+postToolReducer.Apply(Hook(t.AddSeconds(12), "PostToolUse"));
+Require(postToolReducer.State == K15NormalizedState.Running,
+    "PostToolUse after an approval must resume RUNNING even when the Windows toast remains.");
 
-reducer.Apply(Notification(t.AddSeconds(13), "windows_notification_removed", 102, error: true));
-Require(reducer.State == K15NormalizedState.Normal, "Removing tracked error notification must return to NORMAL.");
+var errorHintReducer = new StateReducer();
+errorHintReducer.Apply(Hook(t.AddSeconds(14), "UserPromptSubmit"));
+errorHintReducer.Apply(Hook(t.AddSeconds(15), "Stop"));
+errorHintReducer.Apply(Notification(t.AddSeconds(16), "windows_notification_added", 102, error: true));
+Require(errorHintReducer.State == K15NormalizedState.DonePendingAttention,
+    "Toast error keywords must not create semantic ERROR without a high-confidence source.");
+errorHintReducer.Apply(Notification(t.AddSeconds(17), "windows_notification_removed", 102, error: true));
+Require(errorHintReducer.State == K15NormalizedState.Normal,
+    "Removing the tracked post-Stop notification must still return to NORMAL.");
 
 reducer.Apply(Hook(t.AddSeconds(20), "UserPromptSubmit"));
 reducer.Apply(new StatusInputEvent(
@@ -85,21 +95,28 @@ Require(timeoutTransition is not null &&
         timeoutTransition.Reason == "done_attention_timeout",
     "DONE must auto-restore to NORMAL after the attention timeout.");
 
-
 var report = K15HidProtocol.FrameReport(0x09, 0x12, 0, 0x0064, new byte[] { 1, 2, 3 });
 Require(report.Length == 41, "HID report must be 41 bytes.");
 Require(report[0] == 0x06 && report[3] == 0x09 && report[4] == 0x12, "HID report header mismatch.");
 Require(report[6] == 0x64 && report[7] == 0x00 && report[8] == 3, "HID report address/length mismatch.");
 
-var runningRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Running);
-Require(runningRecord[4] == 0x20 && runningRecord[5] == 0xA0 && runningRecord[6] == 0xF0,
-    "Running color must encode violet in G,R,B wire order.");
+var runningRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Running, speed: 2);
+Require(runningRecord[4] == 0xFF && runningRecord[5] == 0xFF && runningRecord[6] == 0xFF,
+    "RUNNING must encode white in G,R,B wire order.");
 
-var waitingRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Waiting);
+var waitingRecord = K15HidProtocol.CreateAlertLightingRecord(K15NormalizedState.Waiting, speed: 6);
 Require(waitingRecord.Length == 25, "Lighting detail must be 25 bytes.");
 Require(waitingRecord[3] == 0x01, "Single-color breathing should enable one palette slot.");
-Require(waitingRecord[4] == 0xA5 && waitingRecord[5] == 0xFF && waitingRecord[6] == 0x00,
-    "Waiting color must encode amber in G,R,B wire order.");
+Require(waitingRecord[4] == 0xFF && waitingRecord[5] == 0xFF && waitingRecord[6] == 0xFF,
+    "WAITING must also use white; speed distinguishes it from RUNNING.");
+Require(waitingRecord[0] > runningRecord[0], "WAITING white breathing must be faster than RUNNING.");
+
+var profileA = K15HidProtocol.CreateProfileFlashLightingRecord(0);
+Require(profileA[4] == 0x00 && profileA[5] == 0xFF && profileA[6] == 0x00,
+    "Profile A flash must encode red in G,R,B wire order.");
+var profileB = K15HidProtocol.CreateProfileFlashLightingRecord(1);
+Require(profileB[4] == 0x00 && profileB[5] == 0x00 && profileB[6] == 0xFF,
+    "Profile B flash must encode blue in G,R,B wire order.");
 
 var originalHeader = Enumerable.Range(0, 25).Select(value => (byte)value).ToArray();
 var alertHeader = K15HidProtocol.CreateAlertHeader(originalHeader);
