@@ -2,10 +2,20 @@ namespace Vorotex.K15.StatusLab;
 
 internal sealed class K15RgbCanary : IAsyncDisposable
 {
+    private static readonly TimeSpan ProfilePollInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan ProfileFlashDuration = TimeSpan.FromSeconds(5);
+
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Dictionary<byte, K15HidLightingController.LightingSnapshot> _snapshots = new();
+
     private K15HidLightingController? _controller;
     private K15HidLightingController.LightingSnapshot? _snapshot;
-    private K15NormalizedState _state = K15NormalizedState.Normal;
+    private CancellationTokenSource? _monitorCts;
+    private Task? _monitorTask;
+    private K15NormalizedState _desiredState = K15NormalizedState.Normal;
+    private K15NormalizedState _appliedState = K15NormalizedState.Normal;
+    private DateTimeOffset _profileFlashUntilUtc = DateTimeOffset.MinValue;
+    private int _transportFailures;
 
     public bool Enabled { get; private set; }
 
@@ -21,29 +31,32 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
             _controller = K15HidLightingController.Open();
             _snapshot = _controller.CaptureLightingSnapshot();
+            _snapshots[_snapshot.OnboardSlot] = _snapshot;
+            _desiredState = currentState;
+            _appliedState = K15NormalizedState.Normal;
+            _transportFailures = 0;
+            _profileFlashUntilUtc = DateTimeOffset.MinValue;
             Enabled = true;
-            _state = K15NormalizedState.Normal;
 
             Log("rgb_canary_enabled", new
             {
                 onboardSlot = _snapshot.OnboardSlot,
+                profile = ProfileName(_snapshot.OnboardSlot),
                 originalMode = _snapshot.Header[0]
             });
 
-            StatusChanged?.Invoke($"RGB: CANARY ON · slot {_snapshot.OnboardSlot + 1}");
+            StatusChanged?.Invoke($"RGB: ON · profile {ProfileName(_snapshot.OnboardSlot)}");
+            StartMonitorLocked();
 
             if (currentState != K15NormalizedState.Normal)
-            {
-                _controller.ApplyState(_snapshot, currentState);
-                _state = currentState;
-                Log("rgb_state_applied", new { state = JournalStateNormalizer.ToWireName(currentState) });
-            }
+                ApplyDesiredLocked();
         }
         catch
         {
             _controller?.Dispose();
             _controller = null;
             _snapshot = null;
+            _snapshots.Clear();
             Enabled = false;
             throw;
         }
@@ -58,34 +71,33 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         await _gate.WaitAsync();
         try
         {
+            _desiredState = state;
             if (!Enabled || _controller is null || _snapshot is null)
                 return;
 
-            if (_state == state)
-                return;
+            try
+            {
+                var currentSlot = _controller.ReadActiveSlot();
+                if (currentSlot != _snapshot.OnboardSlot)
+                {
+                    BeginProfileFlashLocked(currentSlot);
+                    return;
+                }
 
-            if (state == K15NormalizedState.Normal)
-            {
-                _controller.Restore(_snapshot);
-                Log("rgb_restored", new { reason = "normalized_state_normal" });
-            }
-            else
-            {
-                _controller.ApplyState(_snapshot, state);
-                Log("rgb_state_applied", new { state = JournalStateNormalizer.ToWireName(state) });
-            }
+                if (IsProfileFlashActive())
+                    return;
 
-            _state = state;
-        }
-        catch (Exception ex)
-        {
-            Log("rgb_canary_error", new
+                ApplyDesiredLocked();
+                _transportFailures = 0;
+            }
+            catch (K15HidLightingController.K15ProfileChangedException ex)
             {
-                exception = ex.GetType().FullName,
-                hresult = ex.HResult,
-                message = ex.Message
-            });
-            StatusChanged?.Invoke($"RGB: ERROR · {ex.Message}");
+                BeginProfileFlashLocked(ex.CurrentSlot);
+            }
+            catch (Exception ex) when (IsTransportFault(ex))
+            {
+                HandleTransportFaultLocked(ex);
+            }
         }
         finally
         {
@@ -93,8 +105,226 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         }
     }
 
+    private void StartMonitorLocked()
+    {
+        _monitorCts?.Cancel();
+        _monitorCts?.Dispose();
+        _monitorCts = new CancellationTokenSource();
+        var token = _monitorCts.Token;
+        _monitorTask = Task.Run(() => MonitorLoopAsync(token), token);
+    }
+
+    private async Task MonitorLoopAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(ProfilePollInterval, token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            await _gate.WaitAsync(token);
+            try
+            {
+                if (!Enabled || _controller is null || _snapshot is null)
+                    continue;
+
+                try
+                {
+                    var currentSlot = _controller.ReadActiveSlot();
+                    if (currentSlot != _snapshot.OnboardSlot)
+                    {
+                        BeginProfileFlashLocked(currentSlot);
+                        continue;
+                    }
+
+                    _transportFailures = 0;
+
+                    if (_profileFlashUntilUtc != DateTimeOffset.MinValue &&
+                        DateTimeOffset.UtcNow >= _profileFlashUntilUtc)
+                    {
+                        _profileFlashUntilUtc = DateTimeOffset.MinValue;
+                        Log("rgb_profile_flash_completed", new
+                        {
+                            onboardSlot = _snapshot.OnboardSlot,
+                            profile = ProfileName(_snapshot.OnboardSlot),
+                            resumeState = JournalStateNormalizer.ToWireName(_desiredState)
+                        });
+                        ApplyDesiredLocked();
+                    }
+                }
+                catch (K15HidLightingController.K15ProfileChangedException ex)
+                {
+                    BeginProfileFlashLocked(ex.CurrentSlot);
+                }
+                catch (Exception ex) when (IsTransportFault(ex))
+                {
+                    HandleTransportFaultLocked(ex);
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+    }
+
+    private void BeginProfileFlashLocked(byte newSlot)
+    {
+        if (_controller is null)
+            return;
+
+        // Let the keyboard finish loading the newly selected onboard profile before reading it.
+        Thread.Sleep(180);
+        var stableSlot = _controller.ReadActiveSlot();
+        if (stableSlot != newSlot)
+            newSlot = stableSlot;
+
+        if (!_snapshots.TryGetValue(newSlot, out var newSnapshot))
+        {
+            newSnapshot = _controller.CaptureLightingSnapshot();
+            if (newSnapshot.OnboardSlot != newSlot)
+                throw new InvalidOperationException("K15 profile did not remain stable while capturing its lighting baseline.");
+            _snapshots[newSlot] = newSnapshot;
+        }
+
+        _snapshot = newSnapshot;
+        _appliedState = K15NormalizedState.Normal;
+        _profileFlashUntilUtc = DateTimeOffset.UtcNow + ProfileFlashDuration;
+        _controller.ApplyProfileFlash(newSnapshot);
+        _transportFailures = 0;
+
+        Log("rgb_profile_flash_started", new
+        {
+            onboardSlot = newSlot,
+            profile = ProfileName(newSlot),
+            durationSeconds = ProfileFlashDuration.TotalSeconds,
+            resumeState = JournalStateNormalizer.ToWireName(_desiredState)
+        });
+
+        StatusChanged?.Invoke(
+            $"RGB: PROFILE {ProfileName(newSlot)} · {ProfileFlashDuration.TotalSeconds:0}s → {JournalStateNormalizer.ToWireName(_desiredState)}");
+    }
+
+    private void ApplyDesiredLocked()
+    {
+        if (_controller is null || _snapshot is null)
+            return;
+
+        if (_desiredState == K15NormalizedState.Normal)
+        {
+            _controller.Restore(_snapshot);
+            if (_appliedState != K15NormalizedState.Normal)
+            {
+                Log("rgb_restored", new
+                {
+                    reason = "normalized_state_normal",
+                    onboardSlot = _snapshot.OnboardSlot,
+                    profile = ProfileName(_snapshot.OnboardSlot)
+                });
+            }
+        }
+        else
+        {
+            _controller.ApplyState(_snapshot, _desiredState);
+            Log("rgb_state_applied", new
+            {
+                state = JournalStateNormalizer.ToWireName(_desiredState),
+                onboardSlot = _snapshot.OnboardSlot,
+                profile = ProfileName(_snapshot.OnboardSlot)
+            });
+        }
+
+        _appliedState = _desiredState;
+        StatusChanged?.Invoke(
+            $"RGB: {JournalStateNormalizer.ToWireName(_desiredState)} · profile {ProfileName(_snapshot.OnboardSlot)}");
+    }
+
+    private void HandleTransportFaultLocked(Exception ex)
+    {
+        _transportFailures++;
+        Log("rgb_transport_retry", new
+        {
+            attempt = _transportFailures,
+            exception = ex.GetType().FullName,
+            hresult = ex.HResult,
+            message = ex.Message,
+            desiredState = JournalStateNormalizer.ToWireName(_desiredState),
+            onboardSlot = _snapshot?.OnboardSlot
+        });
+
+        // Transport problems are not semantic ERROR states. Do not turn the keyboard red and do
+        // not leave a sticky "RGB: ERROR" label. Retry and reconnect independently of Codex state.
+        StatusChanged?.Invoke($"RGB: RETRYING · {ShortTransportMessage(ex)}");
+
+        if (_transportFailures < 2)
+            return;
+
+        try
+        {
+            _controller?.Dispose();
+            _controller = K15HidLightingController.Open();
+            var currentSlot = _controller.ReadActiveSlot();
+            _transportFailures = 0;
+
+            if (_snapshot is null || currentSlot != _snapshot.OnboardSlot)
+            {
+                BeginProfileFlashLocked(currentSlot);
+                return;
+            }
+
+            Log("rgb_transport_reconnected", new
+            {
+                onboardSlot = currentSlot,
+                profile = ProfileName(currentSlot)
+            });
+            StatusChanged?.Invoke($"RGB: RECONNECTED · profile {ProfileName(currentSlot)}");
+
+            if (!IsProfileFlashActive())
+                ApplyDesiredLocked();
+        }
+        catch (Exception retryEx) when (IsTransportFault(retryEx))
+        {
+            Log("rgb_transport_reconnect_pending", new
+            {
+                exception = retryEx.GetType().FullName,
+                hresult = retryEx.HResult,
+                message = retryEx.Message
+            });
+            StatusChanged?.Invoke($"RGB: RETRYING · {ShortTransportMessage(retryEx)}");
+        }
+    }
+
+    private bool IsProfileFlashActive() =>
+        _profileFlashUntilUtc != DateTimeOffset.MinValue &&
+        DateTimeOffset.UtcNow < _profileFlashUntilUtc;
+
+    private static bool IsTransportFault(Exception ex) =>
+        ex is TimeoutException or IOException or System.ComponentModel.Win32Exception;
+
+    private static string ShortTransportMessage(Exception ex) => ex switch
+    {
+        TimeoutException => "HID timeout",
+        _ => $"0x{ex.HResult:X8}"
+    };
+
+    private static string ProfileName(byte slot) => slot switch
+    {
+        0 => "A",
+        1 => "B",
+        _ => $"{slot + 1}"
+    };
+
     public async Task DisableAsync(string reason = "manual_disable")
     {
+        var monitorCts = _monitorCts;
+        var monitorTask = _monitorTask;
+        monitorCts?.Cancel();
+
         await _gate.WaitAsync();
         try
         {
@@ -103,18 +333,38 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
             try
             {
-                if (_controller is not null && _snapshot is not null && _state != K15NormalizedState.Normal)
+                if (_controller is not null && _snapshot is not null &&
+                    (_appliedState != K15NormalizedState.Normal || IsProfileFlashActive()))
                 {
                     _controller.Restore(_snapshot);
-                    Log("rgb_restored", new { reason });
+                    Log("rgb_restored", new
+                    {
+                        reason,
+                        onboardSlot = _snapshot.OnboardSlot,
+                        profile = ProfileName(_snapshot.OnboardSlot)
+                    });
                 }
+            }
+            catch (Exception ex) when (IsTransportFault(ex))
+            {
+                Log("rgb_restore_transport_failure", new
+                {
+                    reason,
+                    exception = ex.GetType().FullName,
+                    hresult = ex.HResult,
+                    message = ex.Message
+                });
             }
             finally
             {
                 _controller?.Dispose();
                 _controller = null;
                 _snapshot = null;
-                _state = K15NormalizedState.Normal;
+                _snapshots.Clear();
+                _desiredState = K15NormalizedState.Normal;
+                _appliedState = K15NormalizedState.Normal;
+                _profileFlashUntilUtc = DateTimeOffset.MinValue;
+                _transportFailures = 0;
                 Enabled = false;
                 StatusChanged?.Invoke("RGB: OFF");
                 Log("rgb_canary_disabled", new { reason });
@@ -124,6 +374,21 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         {
             _gate.Release();
         }
+
+        if (monitorTask is not null)
+        {
+            try
+            {
+                await monitorTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        monitorCts?.Dispose();
+        _monitorCts = null;
+        _monitorTask = null;
     }
 
     private static void Log(string eventName, object? details = null)
