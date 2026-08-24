@@ -67,7 +67,7 @@ internal static class K15HidProtocol
 
         var rgb = state switch
         {
-            K15NormalizedState.Running => (R: (byte)0x00, G: (byte)0x66, B: (byte)0xFF),
+            K15NormalizedState.Running => (R: (byte)0xA0, G: (byte)0x20, B: (byte)0xF0),
             K15NormalizedState.Waiting => (R: (byte)0xFF, G: (byte)0xA5, B: (byte)0x00),
             K15NormalizedState.DonePendingAttention => (R: (byte)0x00, G: (byte)0xFF, B: (byte)0x40),
             K15NormalizedState.Error => (R: (byte)0xFF, G: (byte)0x00, B: (byte)0x00),
