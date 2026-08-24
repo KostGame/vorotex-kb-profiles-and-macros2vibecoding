@@ -27,8 +27,8 @@ internal sealed class StateReducer
 {
     private static readonly TimeSpan NotificationCorrelationWindow = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan PreHookNotificationWindow = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan DoneAttentionTimeout = TimeSpan.FromSeconds(15);
 
+    private readonly TimeSpan? _doneAttentionTimeout;
     private readonly HashSet<uint> _waitingNotificationIds = new();
     private readonly HashSet<uint> _doneNotificationIds = new();
     private readonly Dictionary<uint, DateTimeOffset> _recentOpenAiAdds = new();
@@ -36,6 +36,16 @@ internal sealed class StateReducer
     private DateTimeOffset? _lastPermissionUtc;
     private DateTimeOffset? _lastStopUtc;
     private DateTimeOffset? _doneEnteredUtc;
+
+    public StateReducer(double doneAttentionTimeoutSeconds = 15)
+    {
+        if (doneAttentionTimeoutSeconds < 0 || doneAttentionTimeoutSeconds > 3600)
+            throw new ArgumentOutOfRangeException(nameof(doneAttentionTimeoutSeconds));
+
+        _doneAttentionTimeout = doneAttentionTimeoutSeconds == 0
+            ? null
+            : TimeSpan.FromSeconds(doneAttentionTimeoutSeconds);
+    }
 
     public K15NormalizedState State { get; private set; } = K15NormalizedState.Normal;
 
@@ -56,9 +66,10 @@ internal sealed class StateReducer
     {
         PruneRecentNotifications(nowUtc);
 
-        if ((State == K15NormalizedState.DonePendingAttention || State == K15NormalizedState.Error) &&
+        if (_doneAttentionTimeout is TimeSpan timeout &&
+            (State == K15NormalizedState.DonePendingAttention || State == K15NormalizedState.Error) &&
             _doneEnteredUtc is DateTimeOffset entered &&
-            nowUtc - entered >= DoneAttentionTimeout)
+            nowUtc - entered >= timeout)
         {
             _doneNotificationIds.Clear();
             _lastStopUtc = null;
@@ -89,8 +100,6 @@ internal sealed class StateReducer
                 return SetState(K15NormalizedState.Waiting, "codex_permission_request", input.TimestampUtc);
 
             case "PostToolUse":
-                // Approving inside Codex does not always remove the Windows toast. A successful
-                // PostToolUse is a much stronger signal that the requested tool actually ran.
                 if (State == K15NormalizedState.Waiting)
                 {
                     _waitingNotificationIds.Clear();
@@ -137,9 +146,6 @@ internal sealed class StateReducer
                 WithinWindow(stopUtc, input.TimestampUtc))
             {
                 _doneNotificationIds.Add(notificationId);
-                // Toast keyword classification is deliberately not allowed to create semantic ERROR.
-                // It produced false positives in the physical canary. ERROR stays reserved for a
-                // future high-confidence Codex/AgentLoop failure source.
                 return null;
             }
 
