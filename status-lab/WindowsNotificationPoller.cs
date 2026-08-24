@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Windows.UI.Notifications;
 using Windows.UI.Notifications.Management;
 
@@ -141,7 +143,14 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
             notificationCreatedUtc = snapshot.CreationTime.ToUniversalTime(),
             appName = snapshot.AppName,
             appUserModelId = snapshot.AppUserModelId,
-            packageFamilyName = snapshot.PackageFamilyName
+            packageFamilyName = snapshot.PackageFamilyName,
+            textFingerprint = snapshot.TextFingerprint,
+            textElementCount = snapshot.TextElementCount,
+            textLengths = snapshot.TextLengths,
+            textClass = snapshot.TextClass,
+            permissionHint = snapshot.PermissionHint,
+            completionHint = snapshot.CompletionHint,
+            errorHint = snapshot.ErrorHint
         });
     }
 
@@ -168,7 +177,14 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
         DateTimeOffset CreationTime,
         string AppName,
         string AppUserModelId,
-        string PackageFamilyName)
+        string PackageFamilyName,
+        string TextFingerprint,
+        int TextElementCount,
+        int[] TextLengths,
+        string TextClass,
+        bool PermissionHint,
+        bool CompletionHint,
+        bool ErrorHint)
     {
         public static NotificationSnapshot From(UserNotification notification)
         {
@@ -177,6 +193,7 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
             var aumid = Safe(() => appInfo.AppUserModelId);
             var pfn = Safe(() => appInfo.PackageFamilyName);
             var key = $"{aumid}|{pfn}|{notification.Id}";
+            var text = ReadTextMetadata(notification);
 
             return new NotificationSnapshot(
                 key,
@@ -184,8 +201,75 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
                 notification.CreationTime,
                 appName,
                 aumid,
-                pfn);
+                pfn,
+                text.Fingerprint,
+                text.ElementCount,
+                text.Lengths,
+                text.Classification,
+                text.PermissionHint,
+                text.CompletionHint,
+                text.ErrorHint);
         }
+
+        private static NotificationTextMetadata ReadTextMetadata(UserNotification notification)
+        {
+            try
+            {
+                var binding = notification.Notification?.Visual?.GetBinding(KnownNotificationBindings.ToastGeneric);
+                if (binding is null)
+                    return NotificationTextMetadata.Empty;
+
+                var elements = binding.GetTextElements()
+                    .Select(element => element.Text ?? string.Empty)
+                    .Where(text => !string.IsNullOrWhiteSpace(text))
+                    .ToArray();
+
+                if (elements.Length == 0)
+                    return NotificationTextMetadata.Empty;
+
+                var normalized = string.Join("\n", elements)
+                    .Trim()
+                    .ToLowerInvariant();
+
+                var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+                var fingerprint = Convert.ToHexString(bytes).ToLowerInvariant();
+
+                var permission = ContainsAny(normalized,
+                    "permission", "approve", "approval", "allow", "confirm", "waiting",
+                    "needs your", "requires attention", "input",
+                    "разреш", "подтверд", "ожида", "ввод", "требует");
+                var completion = ContainsAny(normalized,
+                    "done", "complete", "completed", "finished", "ready",
+                    "готов", "заверш");
+                var error = ContainsAny(normalized,
+                    "error", "failed", "failure",
+                    "ошиб", "не удалось");
+
+                var classification = error
+                    ? "error_hint"
+                    : permission
+                        ? "permission_hint"
+                        : completion
+                            ? "completion_hint"
+                            : "generic";
+
+                return new NotificationTextMetadata(
+                    fingerprint,
+                    elements.Length,
+                    elements.Select(value => value.Length).ToArray(),
+                    classification,
+                    permission,
+                    completion,
+                    error);
+            }
+            catch
+            {
+                return NotificationTextMetadata.Empty;
+            }
+        }
+
+        private static bool ContainsAny(string value, params string[] needles) =>
+            needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
 
         private static string Safe(Func<string> getter)
         {
@@ -198,5 +282,18 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
                 return string.Empty;
             }
         }
+    }
+
+    private sealed record NotificationTextMetadata(
+        string Fingerprint,
+        int ElementCount,
+        int[] Lengths,
+        string Classification,
+        bool PermissionHint,
+        bool CompletionHint,
+        bool ErrorHint)
+    {
+        public static NotificationTextMetadata Empty { get; } =
+            new(string.Empty, 0, Array.Empty<int>(), "unknown", false, false, false);
     }
 }
