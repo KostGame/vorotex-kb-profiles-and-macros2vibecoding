@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "status": "physically-accepted-v1-layout-baseline",
+  "device": "VOROTEX K15 Pro",
+  "timing": {
+    "eventDelayMs": 5,
+    "textCommandSuffix": " ",
+    "autoPunctuation": false
+  },
+  "languageSelectors": {
+    "configurable": true,
+    "acceptedHostConfiguration": {
+      "en": "Ctrl+Shift+1",
+      "ru": "Ctrl+Shift+2"
+    },
+    "canonicalChordOrder": [
+      "CtrlDown",
+      "ShiftDown",
+      "DigitDown",
+      "DigitUp",
+      "ShiftUp",
+      "CtrlUp"
+    ]
+  },
+  "physicalStorage": {
+    "1": "btn_KBKey_KeyPad1",
+    "2": "btn_KBKey_KeyPad2",
+    "3": "btn_KBKey_KeyPad3",
+    "4": "btn_KBKey_KeyPad4",
+    "5": "btn_KBKey_KeyPad5",
+    "6": "btn_KBKey_KeyPad6",
+    "7": "btn_KBKey_KeyPad7",
+    "8": "btn_KBKey_KeyPad8",
+    "9": "btn_KBKey_KeyPad9",
+    "0": "btn_KBKey_KeyPad0",
+    ".": "btn_KBKey_KeyPadPoint",
+    "Enter": "btn_KBKey_KeyPadEnter",
+    "-": "btn_KBKey_KeyPadSub",
+    "+": "btn_KBKey_KeyPadAdd",
+    "Space": "btn_KBKey_Space",
+    "JoystickClick": "btn_KBKey_Enter"
+  },
+  "observedMemMacIdAllocation": {
+    "0": 0,
+    "2": 1,
+    "1": 2,
+    "3": 3,
+    "4": 4,
+    "5": 5,
+    "6": 6,
+    "7": 7,
+    "8": 8,
+    "9": 9,
+    ".": 10,
+    "Enter": 11,
+    "Space": 12,
+    "-": 13,
+    "+": 14
+  },
+  "sharedControls": {
+    "Enter": {
+      "semantic": "NEW_LINE",
+      "sequence": ["ShiftDown", "EnterDown", "EnterUp", "ShiftUp"],
+      "autoSubmit": false
+    },
+    "JoystickClick": {
+      "semantic": "SEND",
+      "nativeKbKey": 40,
+      "macroBound": false
+    },
+    ".": {
+      "semantic": "STATUS",
+      "text": "Дай статус",
+      "language": "ru",
+      "ordinaryTextCommand": true
+    },
+    "-": {
+      "semantic": "STOP",
+      "text": "Стоп",
+      "language": "ru",
+      "ordinaryTextCommand": true
+    },
+    "+": {
+      "semantic": "NEXT_CHAT_REPORT",
+      "text": "Подготовь отчет для следующего чата",
+      "language": "ru",
+      "ordinaryTextCommand": true
+    }
+  },
+  "profiles": {
+    "A": {
+      "id": "TOOLS_AUTH",
+      "keys": {
+        "1": {"semantic": "COPY", "sequence": ["Ctrl+C"]},
+        "2": {"semantic": "PASTE_SAFE_NEWLINE", "sequence": ["Ctrl+V", "Shift+Enter"]},
+        "3": {"semantic": "CUT", "sequence": ["Ctrl+X"]},
+        "4": {"semantic": "UNDO", "sequence": ["Ctrl+Z"]},
+        "5": {"semantic": "REDO", "sequence": ["Ctrl+Shift+Z"]},
+        "6": {"semantic": "SELECT_ALL", "sequence": ["Ctrl+A"]},
+        "7": {"semantic": "REPORT", "text": "Отчет", "language": "ru", "ordinaryTextCommand": true},
+        "8": {"semantic": "HERE_IS_REPORT", "text": "Вот отчет", "language": "ru", "ordinaryTextCommand": true},
+        "9": {"semantic": "CODE_FENCE", "text": "```", "language": "en", "ordinaryTextCommand": false},
+        "0": {
+          "semantic": "REPORT_FROM_CLIPBOARD",
+          "sequence": [
+            "SELECT_RU",
+            "TEXT:Вот отчет",
+            "SHIFT_ENTER",
+            "SELECT_EN",
+            "TEXT:```",
+            "SHIFT_ENTER",
+            "CTRL_V",
+            "SHIFT_ENTER",
+            "SELECT_RU"
+          ],
+          "closingFence": false,
+          "autoSubmit": false
+        },
+        "Space": {"semantic": "CONFIRM", "text": "Подтверждаю", "language": "ru", "ordinaryTextCommand": true}
+      },
+      "encoder": {
+        "rotationUp": {"field": "btn_KB_Scr_Up0", "value": 304, "semantic": "SCROLL_UP"},
+        "rotationDown": {"field": "btn_KB_Scr_Dn0", "value": 305, "semantic": "SCROLL_DOWN"},
+        "click": "preserve-accepted-profile-switch-behavior"
+      },
+      "lighting": {
+        "policy": "preserve-native-profile-bank",
+        "channelMapping": "unresolved"
+      }
+    },
+    "B": {
+      "id": "MAIN_VIBECODING",
+      "keys": {
+        "1": {"semantic": "CHECK", "text": "Проверь", "language": "ru", "ordinaryTextCommand": true},
+        "2": {"semantic": "NEXT", "text": "Следующий шаг", "language": "ru", "ordinaryTextCommand": true},
+        "3": {"semantic": "AGENT_PROMPT", "text": "Пиши следующий промпт для агента", "language": "ru", "ordinaryTextCommand": true},
+        "4": {"semantic": "FIX", "text": "Исправляй", "language": "ru", "ordinaryTextCommand": true},
+        "5": {"semantic": "PUBLISH", "text": "Публикуй", "language": "ru", "ordinaryTextCommand": true},
+        "6": {"semantic": "MERGE", "text": "Мержи", "language": "ru", "ordinaryTextCommand": true},
+        "7": {"semantic": "CREATE", "text": "Создавай", "language": "ru", "ordinaryTextCommand": true},
+        "8": {"semantic": "CONTINUE", "text": "Продолжай", "language": "ru", "ordinaryTextCommand": true},
+        "9": {"semantic": "REVIEW", "text": "Проведи ревью", "language": "ru", "ordinaryTextCommand": true},
+        "0": {"semantic": "DONE", "text": "Готово", "language": "ru", "ordinaryTextCommand": true},
+        "Space": {"semantic": "SAFE_CONTINUE", "text": "Давай дальше, без push/merge", "language": "ru", "ordinaryTextCommand": true}
+      },
+      "encoder": {
+        "policy": "preserve-physically-accepted-behavior-unless-explicitly-changed"
+      },
+      "lighting": {
+        "policy": "preserve-native-profile-bank",
+        "channelMapping": "unresolved"
+      }
+    }
+  },
+  "nativeFacts": {
+    "cycle1": {"macRpt": 1, "rptType": 0},
+    "macroArrays": "fixed-capacity-with-num-active-prefix",
+    "kbConfigImportContainsEmbeddedMacros": true,
+    "kbConfigImportContainsBindings": true,
+    "kbConfigImportContainsLighting": true,
+    "importNonPruning": true,
+    "importDeterminism": "not-proven"
+  },
+  "knownLayoutCorrections": {
+    "ruCyrillicGe": {"physicalKey": "U", "hidUsage": 24}
+  },
+  "unresolved": [
+    "RGB/device channel ordering",
+    "best future joystick-direction semantics",
+    "1 ms release reliability",
+    "deterministic cause of state-dependent VOROTEX import crashes",
+    "whether a combined multi-profile package should be published",
+    "IME-heavy language backends"
+  ]
+}
