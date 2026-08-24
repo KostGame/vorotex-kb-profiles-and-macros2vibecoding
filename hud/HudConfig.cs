@@ -91,18 +91,53 @@ internal sealed class OverlayOptions
 
     public static OverlayOptions CreateDefault() => new();
 
-    public float GetSizeScale() => Size.Trim().ToLowerInvariant() switch
+    public OverlayOptions CloneNormalized() => new()
     {
+        Size = NormalizeSize(Size),
+        Position = NormalizePosition(Position)
+    };
+
+    public static string NormalizeSize(string? value, string fallback = "medium")
+    {
+        var normalized = value?.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "extrasmall" or "extra-small" or "extra_small" or "xs" => "extraSmall",
+            "small" => "small",
+            "medium" => "medium",
+            "large" => "large",
+            _ => fallback
+        };
+    }
+
+    public static string NormalizePosition(string? value, string fallback = "aboveCursor")
+    {
+        var normalized = value?.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "abovecursor" or "above-cursor" or "above_cursor" => "aboveCursor",
+            "topleft" or "top-left" or "top_left" => "topLeft",
+            "topright" or "top-right" or "top_right" => "topRight",
+            "bottomleft" or "bottom-left" or "bottom_left" => "bottomLeft",
+            "bottomright" or "bottom-right" or "bottom_right" => "bottomRight",
+            _ => fallback
+        };
+    }
+
+    public float GetSizeScale() => NormalizeSize(Size) switch
+    {
+        "extraSmall" => 0.62f,
         "small" => 0.78f,
         "large" => 1.25f,
         _ => 1.0f
     };
 
-    public OverlayPosition GetPosition() => Position.Trim().ToLowerInvariant() switch
+    public OverlayPosition GetPosition() => NormalizePosition(Position) switch
     {
-        "bottomright" => OverlayPosition.BottomRight,
-        "bottom-right" => OverlayPosition.BottomRight,
-        "bottom_right" => OverlayPosition.BottomRight,
+        "topLeft" => OverlayPosition.TopLeft,
+        "topRight" => OverlayPosition.TopRight,
+        "bottomLeft" => OverlayPosition.BottomLeft,
+        "bottomRight" => OverlayPosition.BottomRight,
         _ => OverlayPosition.AboveCursor
     };
 }
@@ -110,6 +145,9 @@ internal sealed class OverlayOptions
 internal enum OverlayPosition
 {
     AboveCursor,
+    TopLeft,
+    TopRight,
+    BottomLeft,
     BottomRight
 }
 
