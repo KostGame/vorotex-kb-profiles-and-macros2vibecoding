@@ -6,9 +6,10 @@ namespace Vorotex.K15.StatusLab;
 
 internal sealed class StatusLabApplicationContext : ApplicationContext
 {
+    private readonly StatusLabConfig _config;
     private readonly WindowsNotificationPoller _notificationPoller = new();
     private readonly JournalStateNormalizer _stateNormalizer = new();
-    private readonly K15RgbCanary _rgbCanary = new();
+    private readonly K15RgbCanary _rgbCanary;
     private readonly NotifyIcon _trayIcon;
     private readonly ToolStripMenuItem _stateStatusItem;
     private readonly ToolStripMenuItem _rgbStatusItem;
@@ -20,12 +21,18 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     public StatusLabApplicationContext()
     {
         EventJournal.EnsureExists();
+        _config = StatusLabConfig.LoadOrCreate();
+        _rgbCanary = new K15RgbCanary(_config);
+
         EventJournal.Append(new
         {
             timestampUtc = DateTimeOffset.UtcNow,
             source = "status_lab",
             @event = "started",
-            version = typeof(StatusLabApplicationContext).Assembly.GetName().Version?.ToString()
+            version = typeof(StatusLabApplicationContext).Assembly.GetName().Version?.ToString(),
+            rgbConfigPath = StatusLabConfig.FilePath,
+            wireColorOrder = _config.WireColorOrder.ToString(),
+            configWarning = _config.LoadWarning
         });
 
         _stateStatusItem = new ToolStripMenuItem("Состояние: NORMAL")
@@ -79,6 +86,9 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         _rgbCanary.StatusChanged += UpdateRgbStatus;
         _stateNormalizer.Start();
         _ = StartNotificationPollingAsync();
+
+        if (!string.IsNullOrWhiteSpace(_config.LoadWarning))
+            ShowBalloon(_config.LoadWarning);
     }
 
     private ContextMenuStrip BuildMenu()
@@ -90,6 +100,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         menu.Items.Add("Сбросить состояние в NORMAL", null, (_, _) => _stateNormalizer.Acknowledge());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_rgbCanaryItem);
+        menu.Items.Add("Открыть RGB config", null, (_, _) => OpenPath(StatusLabConfig.FilePath));
         menu.Items.Add(_codexHookItem);
         menu.Items.Add("Открыть журнал событий", null, (_, _) => OpenPath(EventJournal.FilePath));
         menu.Items.Add("Открыть папку журнала", null, (_, _) => OpenPath(EventJournal.DirectoryPath));
@@ -140,9 +151,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 
         var result = MessageBox.Show(
             "Включить физическую RGB-индикацию K15?\n\n" +
-            "Canary меняет только lighting state через доказанный HID-протокол и сохраняет исходные байты для восстановления. " +
-            "Закрой VOROTEX и W910 WebDriver перед тестом. " +
-            "Переключать Profile A/B во время canary можно: новый профиль показывается своим цветом 5 секунд, затем возвращается текущее notification-состояние.\n\nПродолжить?",
+            "Режимы, цвета, яркость, скорость и длительности читаются из локального config.json при запуске Status Lab. " +
+            "После изменения config перезапусти приложение. " +
+            "При включении сначала показывается activationSignal, затем текущее notification-состояние. " +
+            "Переключать Profile A/B во время работы можно: profile switch signal временно имеет приоритет, затем возвращается текущее состояние. " +
+            "Закрой VOROTEX и W910 WebDriver перед тестом.\n\nПродолжить?",
             "VOROTEX K15 RGB canary",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning);
@@ -317,7 +330,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 
     private static void OpenPath(string path)
     {
-        EventJournal.EnsureExists();
+        if (path == StatusLabConfig.FilePath && !File.Exists(path))
+            StatusLabConfig.Save(StatusLabConfig.CreateDefault());
+        else
+            EventJournal.EnsureExists();
+
         Process.Start(new ProcessStartInfo
         {
             FileName = path,
