@@ -211,30 +211,37 @@ internal sealed class OverlayForm : Form
 
         g.DrawString(DisplayKey(key), keyFont, labelBrush, rect.Left + 7 * scale, rect.Top + 6 * scale);
 
-        var actionRect = new RectangleF(rect.Left + 5 * scale, rect.Top + 30 * scale, rect.Width - 10 * scale, rect.Height - 34 * scale);
+        var actionRect = new RectangleF(rect.Left + 7 * scale, rect.Top + 30 * scale, rect.Width - 14 * scale, rect.Height - 38 * scale);
+        using var format = CreateActionStringFormat();
         using var actionFont = CreateActionFont(g, definition.Action, actionRect.Width, scale);
-        using var format = new StringFormat
-        {
-            Alignment = StringAlignment.Center,
-            LineAlignment = StringAlignment.Center,
-            FormatFlags = StringFormatFlags.NoWrap,
-            Trimming = StringTrimming.EllipsisCharacter
-        };
+
+        var state = g.Save();
+        g.SetClip(Rectangle.Round(actionRect));
         g.DrawString(definition.Action, actionFont, actionBrush, actionRect, format);
+        g.Restore(state);
     }
+
+    private static StringFormat CreateActionStringFormat() => new()
+    {
+        Alignment = StringAlignment.Center,
+        LineAlignment = StringAlignment.Center,
+        FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.LineLimit,
+        Trimming = StringTrimming.EllipsisCharacter
+    };
 
     private static Font CreateActionFont(Graphics g, string action, float availableWidth, float scale)
     {
         var size = ActionFontSize(action);
-        const float minimumSize = 8.8f;
+        const float minimumSize = 6.2f;
+        var targetWidth = Math.Max(1f, availableWidth - 2f * scale);
 
         while (size > minimumSize)
         {
             using var probe = new Font("Segoe UI Semibold", size * scale, FontStyle.Bold, GraphicsUnit.Pixel);
             var measuredWidth = g.MeasureString(action, probe, int.MaxValue, StringFormat.GenericTypographic).Width;
-            if (measuredWidth <= availableWidth)
+            if (measuredWidth <= targetWidth)
                 return new Font("Segoe UI Semibold", size * scale, FontStyle.Bold, GraphicsUnit.Pixel);
-            size -= 0.4f;
+            size -= 0.35f;
         }
 
         return new Font("Segoe UI Semibold", minimumSize * scale, FontStyle.Bold, GraphicsUnit.Pixel);
