@@ -9,6 +9,7 @@ These documents contain the latest physically validated layout facts and should 
 - [`layout-development-baseline.md`](layout-development-baseline.md) — consolidated hardware/UX/serialization baseline.
 - [`profile-a-tools-auth.md`](profile-a-tools-auth.md) — accepted Profile A map and clipboard/report semantics.
 - [`profile-b-main-vibecoding.md`](profile-b-main-vibecoding.md) — accepted Profile B map and safety separation.
+- [`layout-design-decisions.md`](layout-design-decisions.md) — rationale behind the current two-profile UX and safety choices.
 - [`native-vorotex-findings.md`](native-vorotex-findings.md) — import/export, macro, timing, lighting, encoder and statefulness findings.
 - [`layout-change-protocol.md`](layout-change-protocol.md) — safe procedure for changing a layout and validating it.
 - [`research-backlog.md`](research-backlog.md) — intentionally unresolved/deferred research.
