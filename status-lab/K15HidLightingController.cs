@@ -46,7 +46,7 @@ internal sealed class K15HidLightingController : IDisposable
                 if (!SetupDiEnumDeviceInterfaces(set, IntPtr.Zero, ref hidGuid, index, ref iface))
                 {
                     var error = Marshal.GetLastWin32Error();
-                    if (error == 259) // ERROR_NO_MORE_ITEMS
+                    if (error == 259)
                         break;
                     continue;
                 }
@@ -168,19 +168,45 @@ internal sealed class K15HidLightingController : IDisposable
 
         RequireSameActiveSlot(snapshot);
 
+        var speed = state switch
+        {
+            K15NormalizedState.Running => 2,
+            K15NormalizedState.Waiting => 6,
+            K15NormalizedState.DonePendingAttention => 3,
+            K15NormalizedState.Error => 6,
+            _ => 3
+        };
+
         var header = K15HidProtocol.CreateAlertHeader(snapshot.Header);
         var detail = K15HidProtocol.CreateAlertLightingRecord(
             state,
             brightness: state == K15NormalizedState.Error ? 6 : 5,
-            speed: state == K15NormalizedState.Waiting ? 4 : 3);
+            speed: speed);
 
+        ApplyBreathingRecord(snapshot, header, detail, "alert");
+    }
+
+    public void ApplyProfileFlash(LightingSnapshot snapshot)
+    {
+        RequireSameActiveSlot(snapshot);
+        var header = K15HidProtocol.CreateAlertHeader(snapshot.Header);
+        var detail = K15HidProtocol.CreateProfileFlashLightingRecord(snapshot.OnboardSlot);
+        ApplyBreathingRecord(snapshot, header, detail, "profile flash");
+    }
+
+    private void ApplyBreathingRecord(
+        LightingSnapshot snapshot,
+        ReadOnlySpan<byte> header,
+        ReadOnlySpan<byte> detail,
+        string label)
+    {
         WriteAndVerify(
             K15HidProtocol.LightingWriteCommand,
             K15HidProtocol.LightingReadCommand,
             0,
             0,
             header,
-            "alert lighting header");
+            $"{label} lighting header");
 
         WriteAndVerify(
             K15HidProtocol.LightingWriteCommand,
@@ -188,7 +214,7 @@ internal sealed class K15HidLightingController : IDisposable
             0,
             K15HidProtocol.SingleColorBreathingAddress,
             detail,
-            "alert breathing record");
+            $"{label} breathing record");
     }
 
     public void Restore(LightingSnapshot snapshot)
@@ -216,10 +242,7 @@ internal sealed class K15HidLightingController : IDisposable
     {
         var current = ReadActiveSlot();
         if (current != snapshot.OnboardSlot)
-        {
-            throw new InvalidOperationException(
-                $"K15 active profile changed from slot {snapshot.OnboardSlot} to {current}; RGB canary refuses to write across profile switches.");
-        }
+            throw new K15ProfileChangedException(snapshot.OnboardSlot, current);
     }
 
     private void WriteAndVerify(
@@ -246,29 +269,46 @@ internal sealed class K15HidLightingController : IDisposable
 
     private byte[] Query(byte command, byte selector, ushort address, byte length)
     {
-        var sequence = NextSequence();
-        var request = K15HidProtocol.ReadRequest(command, sequence, selector, address, length);
-        if (!HidD_SetFeature(_handle, request, request.Length))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), $"HID read request 0x{command:X2} failed.");
-
-        for (var attempt = 0; attempt < 5; attempt++)
+        // Profile changes can briefly make the vendor collection return stale/no feature data.
+        // Retry the complete request with a fresh sequence before surfacing a transport fault.
+        for (var requestAttempt = 0; requestAttempt < 3; requestAttempt++)
         {
-            Thread.Sleep(20);
-            var response = new byte[K15HidProtocol.ReportSize];
-            response[0] = K15HidProtocol.ReportId;
-            if (!HidD_GetFeature(_handle, response, response.Length))
-                throw new Win32Exception(Marshal.GetLastWin32Error(), $"HidD_GetFeature 0x{command:X2} failed.");
-
-            var responseLength = response[8];
-            if (responseLength is > 0 and <= K15HidProtocol.MaxData &&
-                response[3] == command &&
-                response[4] == sequence)
+            var sequence = NextSequence();
+            var request = K15HidProtocol.ReadRequest(command, sequence, selector, address, length);
+            if (!HidD_SetFeature(_handle, request, request.Length))
             {
-                return response.AsSpan(9, responseLength).ToArray();
+                if (requestAttempt == 2)
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"HID read request 0x{command:X2} failed.");
+
+                Thread.Sleep(35);
+                continue;
             }
+
+            for (var pollAttempt = 0; pollAttempt < 6; pollAttempt++)
+            {
+                Thread.Sleep(20);
+                var response = new byte[K15HidProtocol.ReportSize];
+                response[0] = K15HidProtocol.ReportId;
+                if (!HidD_GetFeature(_handle, response, response.Length))
+                {
+                    if (requestAttempt == 2 && pollAttempt == 5)
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), $"HidD_GetFeature 0x{command:X2} failed.");
+                    continue;
+                }
+
+                var responseLength = response[8];
+                if (responseLength is > 0 and <= K15HidProtocol.MaxData &&
+                    response[3] == command &&
+                    response[4] == sequence)
+                {
+                    return response.AsSpan(9, responseLength).ToArray();
+                }
+            }
+
+            Thread.Sleep(35);
         }
 
-        throw new TimeoutException($"No matching K15 HID response for command 0x{command:X2}.");
+        throw new TimeoutException($"No matching K15 HID response for command 0x{command:X2} after retries.");
     }
 
     private byte NextSequence()
@@ -315,6 +355,19 @@ internal sealed class K15HidLightingController : IDisposable
         byte OnboardSlot,
         byte[] Header,
         byte[] SingleColorBreathingRecord);
+
+    internal sealed class K15ProfileChangedException : InvalidOperationException
+    {
+        public byte PreviousSlot { get; }
+        public byte CurrentSlot { get; }
+
+        public K15ProfileChangedException(byte previousSlot, byte currentSlot)
+            : base($"K15 active profile changed from slot {previousSlot} to {currentSlot}.")
+        {
+            PreviousSlot = previousSlot;
+            CurrentSlot = currentSlot;
+        }
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SpDeviceInterfaceData
