@@ -51,7 +51,7 @@ internal sealed class StateReducer
     private readonly Dictionary<uint, DateTimeOffset> _recentOpenAiAdds = new();
     private readonly Dictionary<string, SessionRuntime> _sessions = new(StringComparer.Ordinal);
 
-    public StateReducer(double doneAttentionTimeoutSeconds = 0)
+    public StateReducer(double doneAttentionTimeoutSeconds = 15)
     {
         if (doneAttentionTimeoutSeconds < 0 || doneAttentionTimeoutSeconds > 3600)
             throw new ArgumentOutOfRangeException(nameof(doneAttentionTimeoutSeconds));
@@ -92,7 +92,6 @@ internal sealed class StateReducer
             ApplyCodex(input);
         }
 
-        // Notifications are intentionally not replayed. They are ephemeral supplemental signals.
         ResetNotificationTracking();
     }
 
@@ -185,7 +184,9 @@ internal sealed class StateReducer
                 session.LastStopUtc = input.TimestampUtc;
                 session.DoneEnteredUtc = input.TimestampUtc;
                 _waitingNotificationIds.Clear();
-                return FocusSession(session, "codex_stop", input.TimestampUtc);
+                var doneTransition = FocusSession(session, "codex_stop", input.TimestampUtc);
+                BindRecentNotificationToDone(input.TimestampUtc);
+                return doneTransition;
 
             default:
                 return null;
@@ -320,19 +321,28 @@ internal sealed class StateReducer
 
     private void BindRecentNotificationToWaiting(DateTimeOffset permissionUtc)
     {
-        var candidateId = _recentOpenAiAdds
-            .Where(pair =>
-                !_waitingNotificationIds.Contains(pair.Key) &&
-                !_doneNotificationIds.Contains(pair.Key) &&
-                pair.Value <= permissionUtc &&
-                permissionUtc - pair.Value <= PreHookNotificationWindow)
-            .OrderByDescending(pair => pair.Value)
-            .Select(pair => (uint?)pair.Key)
-            .FirstOrDefault();
-
+        var candidateId = FindRecentUnboundNotification(permissionUtc);
         if (candidateId is uint id)
             _waitingNotificationIds.Add(id);
     }
+
+    private void BindRecentNotificationToDone(DateTimeOffset stopUtc)
+    {
+        var candidateId = FindRecentUnboundNotification(stopUtc);
+        if (candidateId is uint id)
+            _doneNotificationIds.Add(id);
+    }
+
+    private uint? FindRecentUnboundNotification(DateTimeOffset hookUtc) =>
+        _recentOpenAiAdds
+            .Where(pair =>
+                !_waitingNotificationIds.Contains(pair.Key) &&
+                !_doneNotificationIds.Contains(pair.Key) &&
+                pair.Value <= hookUtc &&
+                hookUtc - pair.Value <= PreHookNotificationWindow)
+            .OrderByDescending(pair => pair.Value)
+            .Select(pair => (uint?)pair.Key)
+            .FirstOrDefault();
 
     private void PruneRecentNotifications(DateTimeOffset nowUtc)
     {
