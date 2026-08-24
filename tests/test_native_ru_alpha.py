@@ -145,8 +145,36 @@ class SerializerTests(unittest.TestCase):
 
     def test_profile_b_exact_map_and_safe_space(self):
         self.assertEqual(gen.PROFILE_SPECS["B"]["bindings"][-1], ("Space", "SAFE_CONTINUE"))
+        self.assertEqual(gen.PROFILE_SPECS["B"]["bindings"][-2], ("+", "ACCEPTED"))
         self.assertNotIn("ACCEPT_OR_APPROVE", [a for _, a in gen.PROFILE_SPECS["B"]["bindings"]])
         self.assertEqual(gen.RU_OUTPUTS["SAFE_CONTINUE"], "Давай дальше, без push/merge")
+        self.assertEqual(gen.RU_OUTPUTS["ACCEPTED"], "Принимается")
+
+    def test_profile_b_plus_accepted_preserves_binding_slot_and_guid(self):
+        package, _ = gen.serialize_kb("B", self.native_template(), event_delay_ms=5)
+        binding = package["KBconfig"]["KBKeyMacro"]["btn_KBKey_KeyPadAdd"]
+        self.assertEqual(binding["MemMacId"], 14)
+        self.assertEqual(binding["macGuid"], "B4A6DEAB-4CCD-4761-8E19-E4D984005A76")
+        macro = next(item for item in package["MacroGrpInfo"][0]["MacroInfo"]
+                     if bytes(item["MacroName"]).decode("ascii") == "VIBE_14_ACCEPTED_RU")
+        self.assertEqual(macro["MacroGuid"], binding["macGuid"])
+        values = macro["macData"]["macVal"][:macro["macData"]["num"]]
+        states = macro["macData"]["macSta"][:macro["macData"]["num"]]
+        expected_values, expected_states = gen.concat_events(
+            gen.selector_events("RU"), gen.hid_events("Принимается ", "RU"))
+        self.assertEqual(values, expected_values)
+        self.assertEqual(states, expected_states)
+        self.assertEqual(values[-2:], [44, 44])
+        self.assertNotIn(40, values)
+
+    def test_profile_b_other_bindings_and_profile_a_plus_are_isolated(self):
+        expected_b = [("1", "CHECK"), ("2", "NEXT"), ("3", "AGENT_PROMPT"), ("4", "FIX"),
+                      ("5", "PUBLISH"), ("6", "MERGE"), ("7", "CREATE"), ("8", "CONTINUE"),
+                      ("9", "REVIEW"), ("0", "DONE"), (".", "STATUS"), ("Enter", "NEW_LINE"),
+                      ("-", "STOP"), ("+", "ACCEPTED"), ("Space", "SAFE_CONTINUE")]
+        self.assertEqual(gen.PROFILE_SPECS["B"]["bindings"], expected_b)
+        self.assertIn(("+", "REPORT_NEXT_CHAT"), gen.PROFILE_SPECS["A"]["bindings"])
+        self.assertEqual(gen.MACROS_A[13][0], "TOOLS_14_REPORT_NEXT_CHAT_RU")
 
     def test_ordinary_text_commands_append_exactly_one_ascii_space(self):
         self.assertEqual(gen.TEXT_COMMAND_SUFFIX, " ")

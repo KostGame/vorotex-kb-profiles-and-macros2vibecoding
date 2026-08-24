@@ -1,0 +1,30 @@
+{
+  "release": "V1.1 RC1",
+  "generatorBaseCommit": "0354ac84f7ddfc9b716d40865650b7d71d6ffa2b",
+  "profile": "B",
+  "updateOnly": "Profile B + semantic replacement",
+  "oldMacro": "VIBE_14_REPORT_RU",
+  "newMacro": "VIBE_14_ACCEPTED_RU",
+  "visibleText": "Принимается ",
+  "physicalBinding": "btn_KBKey_KeyPadAdd",
+  "memMacId": 14,
+  "macroGuid": "B4A6DEAB-4CCD-4761-8E19-E4D984005A76",
+  "eventDelayMs": 5,
+  "textCommandSuffix": " ",
+  "profileA": "V1 unchanged",
+  "structuralTemplateSha256": "fb2fa09936c726ac4b8d02f9550bfd3f7c2f1b7a468def00e7cfa814e84deb0c",
+  "profileLightingFixtureSha256": "b2df93221d95566416420dff0ad9fb23d61fffe5ff93a98ecefb244f700e1f30",
+  "packages": {
+    "kb": {
+      "path": "K15_VIBECODING_PROFILE_B_MAIN_V1_1_RC1.KB.Config",
+      "sha256": "a89450786fea220c773bc475198d0bc7055dade35c28671157f36e8a8bac516c"
+    },
+    "macro": {
+      "path": "K15_VIBECODING_PROFILE_B_MAIN_V1_1_RC1.Macro.Config",
+      "sha256": "a3fa5c61c61e71e274539d27672d27176d49a4682ee5511c2a2e9f866b39e53a"
+    }
+  },
+  "oldV1ReleaseUntouched": true,
+  "physicalImport": "NOT RUN",
+  "liveDeviceChanged": false
+}

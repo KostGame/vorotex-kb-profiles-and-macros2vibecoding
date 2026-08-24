@@ -57,6 +57,7 @@ Rollback likewise has two parts: restore the backed-up files, then reassign the 
 - [`docs/physical-layout.md`](docs/physical-layout.md) — human-readable control map.
 - [`docs/vibecoding-v1.md`](docs/vibecoding-v1.md) — first vibecoding UX draft.
 - [`docs/two-profile-v1-rc1.md`](docs/two-profile-v1-rc1.md) — Profile A/Profile B V1 RC semantics and package boundary.
+- V1.1 RC1 changes Profile B `+` to `Принимается ` while preserving its proven slot, MemMacId, and macro GUID.
 - [`schema/physical-layout.json`](schema/physical-layout.json) — machine-readable confirmed mappings.
 
 ## Safety
