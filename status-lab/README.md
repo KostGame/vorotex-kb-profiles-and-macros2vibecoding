@@ -7,13 +7,22 @@ Status Lab объединяет:
 1. lifecycle hooks Codex;
 2. Windows notifications через `UserNotificationListener`;
 3. normalized state machine;
-4. opt-in RGB output через доказанный W909/W910-family HID protocol.
+4. opt-in RGB output через доказанный W909/W910-family HID protocol;
+5. пользовательский RGB policy config без перекомпиляции приложения.
 
 Локальный журнал:
 
 ```text
 %LOCALAPPDATA%\VOROTEX\K15 Status Lab\events.jsonl
 ```
+
+Локальный RGB config:
+
+```text
+%LOCALAPPDATA%\VOROTEX\K15 Status Lab\config.json
+```
+
+В tray есть пункт `Открыть RGB config`. Изменения config применяются после полного перезапуска Status Lab.
 
 ## Privacy boundary
 
@@ -64,7 +73,7 @@ ERROR
 - correlated permission toast removed -> `RUNNING` как дополнительный путь;
 - `Stop` -> `DONE_PENDING_ATTENTION`;
 - post-Stop toast removed -> `NORMAL`;
-- если completion toast остаётся, DONE автоматически истекает через 15 секунд -> `NORMAL`;
+- если completion toast остаётся, semantic DONE сейчас также ограничен защитным 15-second timeout -> `NORMAL`;
 - `SessionEnd` -> `NORMAL`.
 
 Toast keyword heuristic не имеет права самостоятельно создавать semantic `ERROR`. `ERROR` зарезервирован для будущего high-confidence failure source от Codex/AgentLoop.
@@ -84,9 +93,21 @@ active-slot read  82 selector 2
 slot select       02 selector 2
 ```
 
-Lighting record использует физически подтверждённый порядок `G,R,B` на проводе. Каждая lighting write проверяется readback через `0x89`.
+Каждая lighting write проверяется readback через `0x89`.
 
 Status Lab не пишет key mappings, macros, power settings или firmware.
+
+### Physical channel calibration
+
+Open W910 research предполагает `G,R,B`, но физическая VOROTEX K15 canary показала обратное для нашего экземпляра: semantic red при старой GRB-записи физически становился зелёным.
+
+Поэтому default:
+
+```json
+"wireColorOrder": "rgb"
+```
+
+Это даёт ожидаемые физические primary colors на тестируемой K15. Для совместимости/повторной калибровки config допускает `"grb"`.
 
 ### Transport faults are not semantic ERROR
 
@@ -94,72 +115,139 @@ Status Lab не пишет key mappings, macros, power settings или firmware.
 
 Отключение RGB не должно ронять приложение: restore failure журналируется, HID handle всё равно освобождается.
 
-## Profile-aware baseline
+## Editable RGB config
 
-Принятые owner baselines:
+Status Lab создаёт `config.json` автоматически при первом запуске. В artifact также публикуется `status-lab-config.example.json`.
+
+Поддерживаемые `mode`:
 
 ```text
-Profile A = red Constant
-Profile B = blue Constant
+constant
+flowingWater
+monoWater
+singleColorBreathing
+cycleBreathing
+tetrisBlocks
+neon
+ambilight
+off
 ```
 
-`NORMAL` не синтезируется цветом: Status Lab восстанавливает exact baseline bytes текущего профиля.
+Для каждого effect можно задавать:
 
-После canary, где Profile B остался в breathing, добавлена self-heal защита. Если впервые увиденный A/B profile содержит известный notifier-mode `0x84` (Single-color breathing) или `0x86` (Tetris), Status Lab возвращает только lighting header в `Constant 0x81`. Constant-mode data никогда не изменяется Status Lab, поэтому исходный red/blue baseline сохраняется.
+```json
+{
+  "enabled": true,
+  "mode": "singleColorBreathing",
+  "brightness": 6,
+  "speed": 7,
+  "direction": 0,
+  "durationSeconds": 5,
+  "colors": ["red"]
+}
+```
 
-## Notification lighting policy
+Диапазоны:
+
+```text
+brightness       1..6
+speed            1..7
+direction        0..1
+durationSeconds  0..3600
+colors           максимум 7
+```
+
+`durationSeconds = 0` у state effect означает: показывать его до следующего normalized-state transition. Для временных overlays (`activationSignal`, profile `switchSignal`) default duration > 0.
+
+Цвета можно задавать именами или `#RRGGBB`:
+
+```text
+red green blue white black cyan magenta purple yellow
+#RRGGBB
+```
+
+## Accepted profile baseline defaults
+
+Owner baseline зафиксирован прямо в editable config:
+
+```text
+Profile A normal = red Constant
+Profile B normal = blue Constant
+```
+
+При первом обнаружении профиля во время RGB session Status Lab применяет его configured `normal`, а затем сохраняет точный snapshot header + всех mode records, которые может затронуть notifier. Это одновременно чинит старый persisted breathing residue и даёт exact in-process restore после временных эффектов.
+
+Default config можно менять. Например, если позже базовая подсветка Profile B должна быть не синей, достаточно изменить `profiles.b.normal` и перезапустить Status Lab.
+
+## Default notification policy
 
 Жёлтый/янтарный исключены как недостаточно различимые на физической K15.
 
+Default:
+
 ```text
-NORMAL A                exact red Constant baseline
-NORMAL B                exact blue Constant baseline
-RUNNING                 built-in Tetris blocks effect
+NORMAL A                configured red Constant
+NORMAL B                configured blue Constant
+RUNNING                 Tetris blocks
 WAITING                 white fast breathing
-DONE_PENDING_ATTENTION  green breathing
+DONE_PENDING_ATTENTION  green breathing, 15s max visual duration
 ERROR                    red fast breathing, reserved high-confidence error
 ```
 
-White slow vs white fast был физически отвергнут как слишком похожий, поэтому RUNNING теперь использует встроенный `Tetris blocks` (`0x86`). Status Lab переключает только mode header и не переписывает onboard Tetris detail record.
+Все эти параметры теперь являются config, а не hardcoded policy.
+
+## Activation signal
+
+При каждом ручном включении RGB canary сначала один раз показывается `activationSignal`, чтобы периферическим зрением было понятно, что клавиатура перешла в режим индикации уведомлений.
+
+Default согласно owner request:
+
+```text
+mode        Flowing Water
+speed       7 (max)
+brightness  4
+colors      red + blue
+duration    3 seconds
+```
+
+После activation overlay автоматически возвращается текущее notification state. Если состояние `NORMAL`, возвращается normal текущего профиля.
 
 ## Profile switch overlay
 
-При ручном переключении:
+Profile switch signal полностью задаётся в config отдельно для A и B.
+
+Default:
 
 ```text
-switch to A -> red fast breathing for 5 seconds
-switch to B -> blue fast breathing for 5 seconds
+switch to A -> red fast breathing 5s
+switch to B -> blue fast breathing 5s
 ```
 
-Через 5 секунд возвращается актуальное notification state. Если state = NORMAL, возвращается exact baseline нового профиля.
-
-Важная коррекция после физической канарейки: если пользователь переключился B -> A до завершения пятисекундного B-overlay, старый build оставлял breathing header в Profile B. Теперь Status Lab под gate:
-
-1. видит новый active slot;
-2. временно выбирает предыдущий slot через доказанный `0x02 / selector 2`;
-3. восстанавливает exact cached baseline предыдущего профиля;
-4. сразу возвращает выбранный пользователем новый slot;
-5. запускает 5-second overlay нового профиля.
-
-Так notifier не должен оставлять скрытый профиль в мигающем состоянии даже при быстром A/B switching.
-
-## Avoiding visible wrong-color transients
-
-Single-color breathing хранит mode header и detail palette отдельно. Старый порядок сначала включал breathing header, а потом писал новую palette. На несколько миллисекунд могла стать видна старая palette, что воспринималось как красный/зелёный неправильный flash.
-
-Теперь:
+Profile switch overlay имеет временный приоритет над notification state. Через `durationSeconds` возвращается актуальное состояние. Пример:
 
 ```text
-apply breathing:
-  detail first
-  header second
-
-restore NORMAL:
-  Constant baseline header first
-  hidden breathing detail second
+WAITING
+-> switch A -> B
+-> blue profile signal 5s
+-> WAITING effect again
 ```
 
-Это также убирает наблюдавшийся красный flash непосредственно перед NORMAL.
+Если state = NORMAL, после overlay возвращается configured normal нового профиля.
+
+При быстром A/B switching Status Lab временно выбирает предыдущий slot через доказанный `0x02 / selector 2`, восстанавливает cached baseline предыдущего профиля и сразу возвращается на выбранный пользователем slot. Это не должно оставлять скрытый профиль в notifier mode.
+
+## Effect record writes
+
+Для любого config-driven effect Status Lab:
+
+1. пишет detail record конкретного mode по адресу `(mode & 0x3F) * 25`;
+2. проверяет exact readback;
+3. только после этого переключает lighting header на выбранный mode;
+4. снова проверяет readback.
+
+Так новый palette/speed уже записан до визуального включения эффекта, что уменьшает wrong-color transients.
+
+При restore сначала восстанавливается baseline mode record, затем baseline header, затем скрытые records остальных затронутых режимов.
 
 ## RGB canary
 
@@ -169,41 +257,47 @@ Tray:
 
 ```text
 Включить K15 RGB canary
+Открыть RGB config
 ```
 
 Profile A/B можно переключать во время canary.
 
 ## Next owner gate
 
-### A. Profile switching / cleanup
+После изменения policy/config layer нужен один короткий physical canary:
 
 ```text
-A red constant
-A -> B
-blue profile flash 5s
--> blue constant
+enable RGB
+-> Flowing Water red+blue, speed 7, brightness 4
+-> current profile baseline / current state
 
-rapid B -> A before B flash finishes
-red profile flash
--> red constant
+UserPromptSubmit
+-> Tetris (default RUNNING)
 
-turn RGB OFF
-switch A/B manually
-both profiles remain constant
-no .NET exception
+PermissionRequest
+-> white fast breathing
+
+approve
+-> PostToolUse -> Tetris
+
+Stop
+-> physical green breathing
+
+completion removed OR visual duration expires
+-> configured current-profile normal
 ```
 
-### B. Codex states
+Отдельно:
 
 ```text
-UserPromptSubmit -> Tetris
-PermissionRequest -> white fast breathing
-approve -> PostToolUse -> Tetris
-Stop -> green breathing
-completion removed OR 15s -> current profile Constant baseline
-```
+A -> B during state
+-> blue profile overlay 5s
+-> resume state
 
-Switching A/B during a notification state must show profile color for 5 seconds, then resume that state.
+B -> A
+-> physical RED profile overlay, not green
+-> resume state / red Constant baseline
+```
 
 ## Build
 
@@ -229,4 +323,4 @@ dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
 - [`docs/owner-canary-4-2026-08-24.md`](docs/owner-canary-4-2026-08-24.md)
 - [`docs/owner-canary-5-2026-08-24.md`](docs/owner-canary-5-2026-08-24.md)
 
-PR #20 remains intentionally unmerged until the corrected profile-aware RGB canary is physically accepted.
+PR #20 remains intentionally unmerged until the config-driven RGB canary is physically accepted.
