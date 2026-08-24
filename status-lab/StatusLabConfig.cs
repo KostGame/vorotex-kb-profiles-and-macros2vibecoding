@@ -37,7 +37,6 @@ internal sealed class LightingEffectConfig
     public int Direction { get; set; }
     public double DurationSeconds { get; set; }
 
-    // Runtime-only data. Canonical notifier TOML uses palette = profile/profile_pair instead.
     public string[] Colors { get; set; } = [];
     public byte? PaletteMask { get; set; }
 
@@ -83,6 +82,7 @@ internal sealed class StatusLabConfig
     public string? LoadWarning { get; private set; }
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public WireColorOrder WireColorOrder { get; set; } = WireColorOrder.RGB;
+    public double DoneAttentionTimeoutSeconds { get; set; } = 15;
     public ProfileSetConfig Profiles { get; set; } = new();
     public StateLightingConfig States { get; set; } = new();
     public LightingEffectConfig ProfileSwitch { get; set; } = new();
@@ -94,6 +94,7 @@ internal sealed class StatusLabConfig
     {
         SchemaVersion = CurrentSchemaVersion,
         WireColorOrder = WireColorOrder.RGB,
+        DoneAttentionTimeoutSeconds = 15,
         Profiles = new ProfileSetConfig
         {
             A = new ProfileLightingConfig { Color = "#FF0000" },
@@ -106,7 +107,7 @@ internal sealed class StatusLabConfig
             Done = Effect(K15LightingMode.SingleColorBreathing, PaletteSource.Profile, 6, 5, 0, 0),
             Error = Effect(K15LightingMode.SingleColorBreathing, PaletteSource.Profile, 6, 7, 0, 0, enabled: false)
         },
-        ProfileSwitch = Effect(K15LightingMode.FlowingWater, PaletteSource.Profile, 5, 5, 0, 2),
+        ProfileSwitch = Effect(K15LightingMode.FlowingWater, PaletteSource.Profile, 5, 5, 0, 4),
         StopSignal = Effect(K15LightingMode.CycleBreathing, PaletteSource.ProfilePair, 6, 7, 0, 3),
         ActivationSignal = Effect(K15LightingMode.FlowingWater, PaletteSource.ProfilePair, 5, 5, 0, 3),
         EffectLabDurationSeconds = 4
@@ -195,6 +196,8 @@ internal sealed class StatusLabConfig
         ValidateEffect(StopSignal, "stop_signal");
         ValidateEffect(ActivationSignal, "activation");
 
+        if (DoneAttentionTimeoutSeconds is < 0 or > 3600)
+            throw new InvalidDataException("behavior.done_attention_timeout_seconds must be 0..3600.");
         if (EffectLabDurationSeconds is < 0.5 or > 30)
             throw new InvalidDataException("effect_lab.test_duration_seconds must be 0.5..30.");
     }
