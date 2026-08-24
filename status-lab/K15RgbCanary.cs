@@ -180,20 +180,26 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         if (_controller is null)
             return;
 
+        var previousSnapshot = _snapshot;
+
         // Let the keyboard finish loading the newly selected onboard profile before reading it.
         Thread.Sleep(180);
         var stableSlot = _controller.ReadActiveSlot();
         if (stableSlot != newSlot)
             newSlot = stableSlot;
 
+        if (previousSnapshot is not null && previousSnapshot.OnboardSlot != newSlot)
+        {
+            RestorePreviousProfileAndReturnLocked(previousSnapshot, newSlot);
+        }
+
         K15HidLightingController.LightingSnapshot newSnapshot;
         if (_snapshots.TryGetValue(newSlot, out var knownSnapshot))
         {
             newSnapshot = knownSnapshot;
 
-            // If the user switched away before an earlier five-second overlay finished, that
-            // profile's persisted header can still contain the overlay. Heal the cached exact
-            // baseline immediately when the profile becomes active again, before flashing it.
+            // A cached profile may have been left mid-overlay by an older Status Lab build.
+            // Restore its exact accepted baseline before starting this switch indication.
             _controller.Restore(newSnapshot);
         }
         else
@@ -221,6 +227,50 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
         StatusChanged?.Invoke(
             $"RGB: PROFILE {ProfileName(newSlot)} · {ProfileFlashDuration.TotalSeconds:0}s → {JournalStateNormalizer.ToWireName(_desiredState)}");
+    }
+
+    private void RestorePreviousProfileAndReturnLocked(
+        K15HidLightingController.LightingSnapshot previousSnapshot,
+        byte returnSlot)
+    {
+        if (_controller is null || previousSnapshot.OnboardSlot == returnSlot)
+            return;
+
+        Exception? restoreFailure = null;
+        try
+        {
+            _controller.SelectActiveSlot(previousSnapshot.OnboardSlot);
+            _controller.Restore(previousSnapshot);
+            Log("rgb_previous_profile_restored", new
+            {
+                onboardSlot = previousSnapshot.OnboardSlot,
+                profile = ProfileName(previousSnapshot.OnboardSlot),
+                returnSlot,
+                returnProfile = ProfileName(returnSlot)
+            });
+        }
+        catch (Exception ex)
+        {
+            restoreFailure = ex;
+            Log("rgb_previous_profile_restore_failed", new
+            {
+                onboardSlot = previousSnapshot.OnboardSlot,
+                profile = ProfileName(previousSnapshot.OnboardSlot),
+                returnSlot,
+                exception = ex.GetType().FullName,
+                hresult = ex.HResult,
+                message = ex.Message
+            });
+        }
+        finally
+        {
+            // Never leave the user's keyboard on the temporary cleanup slot.
+            _controller.SelectActiveSlot(returnSlot);
+            Thread.Sleep(90);
+        }
+
+        if (restoreFailure is not null)
+            throw new IOException("Could not restore the previous K15 profile overlay before switching.", restoreFailure);
     }
 
     private void ApplyDesiredLocked()
