@@ -33,9 +33,9 @@ internal sealed class OemIdentityGateTraceForm : Form
     private readonly Label _status = new()
     {
         AutoSize = false,
-        Size = new Size(810, 90),
+        Size = new Size(810, 105),
         ForeColor = Color.FromArgb(190, 210, 235),
-        Location = new Point(24, 260)
+        Location = new Point(24, 304)
     };
     private string? _lastOutput;
 
@@ -43,7 +43,7 @@ internal sealed class OemIdentityGateTraceForm : Form
     {
         Text = "VOROTEX K15 · OEM Identity Gate Trace";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(860, 390);
+        ClientSize = new Size(860, 430);
         BackColor = Color.FromArgb(13, 17, 23);
         ForeColor = Color.Gainsboro;
         Font = new Font("Segoe UI", 9.5f);
@@ -58,7 +58,7 @@ internal sealed class OemIdentityGateTraceForm : Form
         });
         Controls.Add(new Label
         {
-            Text = "Read-only: Ndevice.json + HidD_GetProductString + direct static xref candidates. Никаких HID запросов.",
+            Text = "Read-only: Ndevice.json + ProductString + static xrefs + bounded x86 compare/branch trace. Никаких HID запросов.",
             AutoSize = false,
             Size = new Size(810, 44),
             ForeColor = Color.FromArgb(145, 175, 225),
@@ -81,50 +81,58 @@ internal sealed class OemIdentityGateTraceForm : Form
         browseB.Click += (_, _) => Browse(_exeB, "Выберите SXS-W909.exe");
         Controls.Add(browseB);
 
-        var run = ActionButton("Run identity gate trace", 24, 230, 220);
-        run.Click += async (_, _) => await RunAsync(run);
+        var run = ActionButton("Run identity gate trace", 24, 230, 210);
+        run.Click += async (_, _) => await RunIdentityAsync(run);
         Controls.Add(run);
 
-        var open = ActionButton("Открыть результат", 258, 230, 180);
+        var compare = ActionButton("Run compare branch trace", 246, 230, 220);
+        compare.BackColor = Color.FromArgb(34, 84, 160);
+        compare.FlatAppearance.BorderColor = Color.FromArgb(70, 120, 205);
+        compare.Click += async (_, _) => await RunCompareAsync(compare);
+        Controls.Add(compare);
+
+        var open = ActionButton("Открыть результат", 478, 230, 170);
         open.Click += (_, _) => OpenOutput();
         Controls.Add(open);
 
         Controls.Add(new Label
         {
-            Text = "Safety: no HID handle · no Set/GetFeature · no process attach · no patching/spoofing.",
+            Text = "Safety: static read-only · no HID handle · no process launch/attach/debug · no patching/spoofing.",
             AutoSize = true,
             ForeColor = Color.FromArgb(145, 158, 180),
-            Location = new Point(460, 238)
+            Location = new Point(24, 274)
         });
 
-        _status.Text = "Готово. Проверь два EXE и запускай trace.";
+        _status.Text = "Готово. Identity trace уже подтверждает likely-gate; compare branch trace ищет точный helper/Jcc.";
         Controls.Add(_status);
     }
 
-    private async Task RunAsync(Button button)
+    private bool ValidateInputs(string title)
     {
         if (!File.Exists(_exeA.Text))
         {
-            MessageBox.Show("EXE A не найден.", "OEM Identity Gate Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
+            MessageBox.Show("EXE A не найден.", title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
         }
         if (!File.Exists(_exeB.Text))
         {
-            MessageBox.Show("EXE B не найден.", "OEM Identity Gate Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
+            MessageBox.Show("EXE B не найден.", title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
         }
+        return true;
+    }
+
+    private async Task RunIdentityAsync(Button button)
+    {
+        if (!ValidateInputs("OEM Identity Gate Trace"))
+            return;
 
         button.Enabled = false;
         _status.Text = "Строю model/product identity trace…";
         try
         {
             var report = await Task.Run(() => OemIdentityGateTraceAnalyzer.Analyze(_exeA.Text, _exeB.Text));
-            var root = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Vorotex.K15.StatusLab",
-                "research",
-                "oem-identity-gate-trace-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
-            Directory.CreateDirectory(root);
+            var root = ResearchRoot("oem-identity-gate-trace");
             File.WriteAllText(
                 Path.Combine(root, "oem-identity-gate-trace.json"),
                 JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
@@ -134,18 +142,63 @@ internal sealed class OemIdentityGateTraceForm : Form
                 OemIdentityGateTraceAnalyzer.ToText(report),
                 new UTF8Encoding(false));
             _lastOutput = root;
-            _status.Text = $"VERDICT: {report.Verdict} · score={report.EvidenceScore}\n{root}";
+            _status.Text = $"IDENTITY VERDICT: {report.Verdict} · score={report.EvidenceScore}\n{root}";
             OpenOutput();
         }
         catch (Exception ex)
         {
-            _status.Text = "Trace не завершён: " + ex.Message;
+            _status.Text = "Identity trace не завершён: " + ex.Message;
             MessageBox.Show(ex.Message, "OEM Identity Gate Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         finally
         {
             button.Enabled = true;
         }
+    }
+
+    private async Task RunCompareAsync(Button button)
+    {
+        if (!ValidateInputs("OEM Product Compare Branch Trace"))
+            return;
+
+        button.Enabled = false;
+        _status.Text = "Декодирую bounded x86 region и связываю ProductString → compare/helper → Jcc…";
+        try
+        {
+            var report = await Task.Run(() => OemProductCompareBranchAnalyzer.Analyze(_exeA.Text, _exeB.Text));
+            var root = ResearchRoot("oem-product-compare-branch");
+            File.WriteAllText(
+                Path.Combine(root, "oem-product-compare-branch.json"),
+                JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+            File.WriteAllText(
+                Path.Combine(root, "oem-product-compare-branch.txt"),
+                OemProductCompareBranchAnalyzer.ToText(report),
+                new UTF8Encoding(false));
+            _lastOutput = root;
+            _status.Text = $"COMPARE VERDICT: {report.Verdict}\n{root}";
+            OpenOutput();
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Compare branch trace не завершён: " + ex.Message;
+            MessageBox.Show(ex.Message, "OEM Product Compare Branch Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            button.Enabled = true;
+        }
+    }
+
+    private static string ResearchRoot(string prefix)
+    {
+        var root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Vorotex.K15.StatusLab",
+            "research",
+            prefix + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+        Directory.CreateDirectory(root);
+        return root;
     }
 
     private void OpenOutput()
