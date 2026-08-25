@@ -59,6 +59,10 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/oem-identity-gate-trace-smoke.ps1
 
+      - name: OEM Product Compare Branch Trace read-only safety tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/oem-product-compare-branch-smoke.ps1
+
       - name: State reducer and RGB protocol smoke tests
         run: dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
 
