@@ -1,6 +1,8 @@
-# VOROTEX K15 Status Lab RC1
+# VOROTEX K15 Status Lab RC2
 #
-# Цвета принадлежат аппаратным профилям A/B. NORMAL восстанавливает exact baseline.
+# Цвета принадлежат аппаратным профилям A/B.
+# managed_normal=true делает NORMAL детерминированным: Constant в цвете профиля.
+# Exact hardware snapshot остаётся rollback-данными, но не является единственным источником NORMAL.
 # palette = "profile"      -> цвет физически активного профиля
 # palette = "profile_pair" -> два основных цвета: A затем B
 #
@@ -16,16 +18,22 @@ wire_color_order = "rgb"
 
 [behavior]
 # Safety fallback: DONE_PENDING_ATTENTION не должен мигать бесконечно.
-# 0 = отключить fallback; RC1 default = 30 секунд.
+# 0 = отключить fallback; RC2 default = 30 секунд.
 done_attention_timeout_seconds = 30
 
 [profiles.A]
 # RED / TOOLS-AUTH
 color = "#FF0000"
+# NORMAL/repair этого физического профиля = Constant RED.
+managed_normal = true
+normal_brightness = 6
 
 [profiles.B]
 # BLUE / MAIN-VIBECODING
 color = "#0000FF"
+# NORMAL/repair этого физического профиля = Constant BLUE.
+managed_normal = true
+normal_brightness = 6
 
 [states.running]
 # Работа Codex: спокойный Flowing Water в цвете активного профиля.
@@ -68,7 +76,7 @@ direction = 0
 duration_seconds = 0
 
 [profile_switch]
-# RC1: дополнительная Status Lab анимация выключена.
+# RC2: дополнительная Status Lab анимация выключена.
 # K15 уже показывает собственную native A/B flash-анимацию.
 enabled = false
 effect = "flowing_water"

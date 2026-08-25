@@ -13,9 +13,16 @@ internal sealed class K15HidLightingController : IDisposable
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareWrite = 0x00000002;
     private const uint OpenExisting = 3;
+    private static readonly TimeSpan LightingHealthInterval = TimeSpan.FromSeconds(5);
 
     private readonly SafeFileHandle _handle;
     private byte _sequence;
+    private byte? _expectedSlot;
+    private byte[]? _expectedHeader;
+    private K15LightingMode? _expectedMode;
+    private byte[]? _expectedModeRecord;
+    private DateTimeOffset _nextLightingHealthUtc = DateTimeOffset.MinValue;
+    private bool _healthCheckInProgress;
 
     private K15HidLightingController(SafeFileHandle handle)
     {
@@ -98,7 +105,10 @@ internal sealed class K15HidLightingController : IDisposable
         {
             var data = Query(K15HidProtocol.DeviceReadCommand, K15HidProtocol.ActiveSlotSelector, 0, 1);
             if (data.Length == 1 && data[0] <= 1)
+            {
+                MaybeSelfHealLighting(data[0]);
                 return data[0];
+            }
             if (data.Length == 1)
                 invalidValues.Add(data[0]);
             Thread.Sleep(60);
@@ -124,7 +134,7 @@ internal sealed class K15HidLightingController : IDisposable
 
     public LightingSnapshot PrepareProfileSnapshot(StatusLabConfig config)
     {
-        // Snapshot is rollback authority. Nothing is written before header + touched records are captured.
+        // Exact bytes remain rollback evidence, while managed NORMAL is a separate config-backed authority.
         var slot = ReadActiveSlot();
         var baselineHeader = ReadLightingHeader();
         var modes = EnumerateModesTouchedByNotifier(config).ToHashSet();
@@ -144,7 +154,12 @@ internal sealed class K15HidLightingController : IDisposable
             records[code] = record;
         }
 
-        return new LightingSnapshot(slot, baselineHeader, records);
+        return new LightingSnapshot(
+            slot,
+            baselineHeader,
+            records,
+            config.GetCanonicalNormal(slot),
+            config.WireColorOrder);
     }
 
     public void ApplyEffect(LightingSnapshot snapshot, LightingEffectConfig effect,
@@ -157,6 +172,23 @@ internal sealed class K15HidLightingController : IDisposable
     public void Restore(LightingSnapshot snapshot)
     {
         RequireSameActiveSlot(snapshot);
+        if (snapshot.CanonicalNormal.Enabled)
+        {
+            ApplyEffectCore(
+                snapshot.OnboardSlot,
+                snapshot.Header,
+                snapshot.CanonicalNormal,
+                snapshot.WireColorOrder,
+                "restore canonical NORMAL");
+            return;
+        }
+
+        RestoreExact(snapshot);
+    }
+
+    public void RestoreExact(LightingSnapshot snapshot)
+    {
+        RequireSameActiveSlot(snapshot);
         var baselineMode = snapshot.Header[0];
 
         if (snapshot.ModeRecords.TryGetValue(baselineMode, out var baselineRecord) &&
@@ -164,19 +196,29 @@ internal sealed class K15HidLightingController : IDisposable
         {
             WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0,
                 K15HidProtocol.ModeRecordAddress(baselineModeEnum), baselineRecord,
-                "restore baseline mode record");
+                "restore exact baseline mode record");
         }
 
         WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, 0,
-            snapshot.Header, "restore lighting header");
+            snapshot.Header, "restore exact lighting header");
 
         foreach (var pair in snapshot.ModeRecords)
         {
             if (pair.Key == baselineMode || !TryModeFromCode(pair.Key, out var mode))
                 continue;
             WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0,
-                K15HidProtocol.ModeRecordAddress(mode), pair.Value, $"restore {mode} record");
+                K15HidProtocol.ModeRecordAddress(mode), pair.Value, $"restore exact {mode} record");
         }
+
+        byte[]? expectedRecord = null;
+        K15LightingMode? expectedMode = null;
+        if (TryModeFromCode(baselineMode, out var exactMode))
+        {
+            expectedMode = exactMode;
+            if (snapshot.ModeRecords.TryGetValue(baselineMode, out var exactRecord))
+                expectedRecord = exactRecord;
+        }
+        SetExpectedLighting(snapshot.OnboardSlot, snapshot.Header, expectedMode, expectedRecord);
     }
 
     private void ApplyEffectCore(byte expectedSlot, ReadOnlySpan<byte> headerTemplate,
@@ -187,15 +229,102 @@ internal sealed class K15HidLightingController : IDisposable
             throw new K15ProfileChangedException(expectedSlot, current);
 
         var header = K15HidProtocol.CreateEffectHeader(headerTemplate, effect);
+        byte[]? detail = null;
         if (effect.Mode != K15LightingMode.Off)
         {
-            var detail = K15HidProtocol.CreateEffectRecord(effect, wireColorOrder);
+            detail = K15HidProtocol.CreateEffectRecord(effect, wireColorOrder);
             WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0,
                 K15HidProtocol.ModeRecordAddress(effect.Mode), detail, $"{label} {effect.Mode} record");
         }
 
         WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, 0,
             header, $"{label} lighting header");
+        SetExpectedLighting(expectedSlot, header, effect.Mode, detail);
+    }
+
+    private void SetExpectedLighting(byte slot, ReadOnlySpan<byte> header,
+        K15LightingMode? mode, byte[]? modeRecord)
+    {
+        _expectedSlot = slot;
+        _expectedHeader = header.ToArray();
+        _expectedMode = mode;
+        _expectedModeRecord = modeRecord?.ToArray();
+        _nextLightingHealthUtc = DateTimeOffset.UtcNow + LightingHealthInterval;
+    }
+
+    private void MaybeSelfHealLighting(byte activeSlot)
+    {
+        if (_healthCheckInProgress ||
+            _expectedSlot is not byte expectedSlot || expectedSlot != activeSlot ||
+            _expectedHeader is null ||
+            DateTimeOffset.UtcNow < _nextLightingHealthUtc)
+        {
+            return;
+        }
+
+        _healthCheckInProgress = true;
+        _nextLightingHealthUtc = DateTimeOffset.UtcNow + LightingHealthInterval;
+        try
+        {
+            var actualHeader = ReadLightingHeader();
+            var modeMismatch = actualHeader[0] != _expectedHeader[0];
+            var recordMismatch = false;
+            byte observedMode = actualHeader[0];
+
+            if (_expectedMode is K15LightingMode expectedMode && _expectedModeRecord is not null)
+            {
+                var actualRecord = Query(
+                    K15HidProtocol.LightingReadCommand,
+                    0,
+                    K15HidProtocol.ModeRecordAddress(expectedMode),
+                    K15HidProtocol.LightingRecordSize);
+                RequireLength(actualRecord, K15HidProtocol.LightingRecordSize, "lighting health record");
+                recordMismatch = !actualRecord.AsSpan().SequenceEqual(_expectedModeRecord);
+            }
+
+            if (!modeMismatch && !recordMismatch)
+                return;
+
+            if (_expectedMode is K15LightingMode mode && _expectedModeRecord is not null)
+            {
+                WriteAndVerify(
+                    K15HidProtocol.LightingWriteCommand,
+                    K15HidProtocol.LightingReadCommand,
+                    0,
+                    K15HidProtocol.ModeRecordAddress(mode),
+                    _expectedModeRecord,
+                    "self-heal expected lighting record");
+            }
+
+            WriteAndVerify(
+                K15HidProtocol.LightingWriteCommand,
+                K15HidProtocol.LightingReadCommand,
+                0,
+                0,
+                _expectedHeader,
+                "self-heal expected lighting header");
+
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "k15_rgb",
+                @event = "lighting_drift_repaired",
+                details = new
+                {
+                    onboardSlot = activeSlot,
+                    expectedMode = _expectedHeader[0],
+                    observedMode,
+                    modeMismatch,
+                    recordMismatch,
+                    trigger = "periodic_same_slot_health_check",
+                    intervalSeconds = LightingHealthInterval.TotalSeconds
+                }
+            });
+        }
+        finally
+        {
+            _healthCheckInProgress = false;
+        }
     }
 
     private byte[] ReadLightingHeader()
@@ -214,7 +343,7 @@ internal sealed class K15HidLightingController : IDisposable
         yield return config.States.Waiting.Mode;
         yield return config.States.Done.Mode;
         yield return config.States.Error.Mode;
-        yield return K15LightingMode.Constant; // Quick Effect Test control.
+        yield return K15LightingMode.Constant; // Quick Effect Test + canonical NORMAL.
         yield return K15LightingMode.SingleColorBreathing;
         yield return K15LightingMode.FlowingWater;
         yield return K15LightingMode.CycleBreathing;
@@ -333,8 +462,12 @@ internal sealed class K15HidLightingController : IDisposable
 
     public void Dispose() => _handle.Dispose();
 
-    internal sealed record LightingSnapshot(byte OnboardSlot, byte[] Header,
-        IReadOnlyDictionary<byte, byte[]> ModeRecords);
+    internal sealed record LightingSnapshot(
+        byte OnboardSlot,
+        byte[] Header,
+        IReadOnlyDictionary<byte, byte[]> ModeRecords,
+        LightingEffectConfig CanonicalNormal,
+        WireColorOrder WireColorOrder);
 
     internal sealed class K15ProfileChangedException : InvalidOperationException
     {
