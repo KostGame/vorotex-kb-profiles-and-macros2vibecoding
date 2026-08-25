@@ -1,4 +1,4 @@
-# Windows Notification Engine M1 + Learning Lab M2
+# Windows Notification Engine M1 + Learning Lab M2 + Scheduler M3a
 
 Parallel-safe foundation for using Windows toast notifications as temporary K15 display signals.
 
@@ -8,8 +8,8 @@ This subsystem is deliberately separate from the Codex semantic state machine:
 
 - Codex hooks remain authoritative for `NORMAL / RUNNING / WAITING / DONE`.
 - Arbitrary Windows notifications never create semantic `ERROR` or replace Codex state.
-- M1/M2 perform no K15/HID writes.
-- Display arbitration and RGB rendering are later milestones.
+- M1/M2/M3a perform no K15/HID writes.
+- Final display arbitration against Codex state and RGB rendering are later milestones.
 
 ## Pipeline
 
@@ -34,7 +34,11 @@ NotificationRuleEngine
         v
 NotificationOverlayIntent
         |
-        X  no display write yet
+        v
+NotificationOverlayScheduler
+  active=1, pending<=1
+        |
+        X  no keyboard rendering yet
 ```
 
 `Updated` is detected when the same Windows notification key has a different text fingerprint.
@@ -63,6 +67,25 @@ Title/body are not persisted by default. An explicit checkbox may include the se
 
 The generated block is copied to the clipboard for owner review. M2 does not silently modify `notifications.toml`.
 
+## Bounded notification scheduler M3a
+
+M3a adds pure scheduling logic before any display renderer exists.
+
+Rules:
+
+- exactly one active notification overlay;
+- at most one pending overlay;
+- a higher-priority overlay preempts the active overlay;
+- the best still-valid interrupted/pending overlay may resume after the preempting overlay expires;
+- same-notification `Updated` replaces the active overlay in place;
+- removal/acknowledgement dismisses that notification and may promote pending work;
+- equal-priority pending items coalesce to the newest one;
+- pending items never grow into an unbounded historical queue;
+- `pulse` lifetime uses `duration_seconds`;
+- `while_present` and `until_acknowledged` remain bounded by `max_duration_seconds` as a safety fallback.
+
+M3a still knows nothing about Codex semantic state. The later Display Arbiter will decide whether a scheduled notification overlay may visually interrupt `RUNNING`, `WAITING` or `DONE`.
+
 ## Privacy
 
 The poller exposes toast `Title` and `Body` only to in-process observers for Learning Mode and rule matching. The existing event journal continues to persist metadata/fingerprint/lengths/classification only, not raw notification text.
@@ -80,11 +103,7 @@ Rules may specify a notification-owned color independent from the Profile A/B se
 - `custom`: notification color only
 - `custom_plus_profile`: notification color plus the active profile color, intended for a future two-color overlay renderer
 
-M1/M2 only produce and inspect intents. They do not write lighting state.
-
-## Busy/priority model for later Display Arbiter
-
-Priority levels are already modeled as `low / normal / high / critical`. The later arbiter will decide whether a notification can interrupt a Codex visual and will keep the queue bounded.
+M1/M2/M3a only produce, inspect and schedule intents. They do not write lighting state.
 
 ## Config
 
