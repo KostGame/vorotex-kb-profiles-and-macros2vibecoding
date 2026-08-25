@@ -268,7 +268,9 @@ internal static class OemIdentityGateTraceAnalyzer
             foreach (var fileOffset in FindAll(pe.Bytes, pattern).Take(24))
             {
                 var rva = pe.FileOffsetToRva(fileOffset);
-                var xrefs = rva is null ? [] : pe.FindAbsoluteTextXrefs(rva.Value).Take(24).ToList();
+                List<uint> xrefs = rva is null
+                    ? new List<uint>()
+                    : pe.FindAbsoluteTextXrefs(rva.Value).Take(24).ToList();
                 long? nearest = null;
                 if (xrefs.Count > 0 && productCalls.Count > 0)
                     nearest = xrefs.SelectMany(x => productCalls.Select(p => Math.Abs((long)x - p))).Min();
@@ -413,7 +415,7 @@ internal static class OemIdentityGateTraceAnalyzer
         public IEnumerable<uint> FindAbsoluteTextXrefs(uint targetRva)
         {
             var targetVa = ImageBase + targetRva;
-            Span<byte> needle = stackalloc byte[4];
+            var needle = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(needle, targetVa);
             foreach (var section in Sections.Where(s => s.Name.Equals(".text", StringComparison.OrdinalIgnoreCase)))
             {
