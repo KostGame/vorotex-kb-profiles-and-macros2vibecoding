@@ -35,7 +35,7 @@ internal sealed class OemIdentityGateTraceForm : Form
         AutoSize = false,
         Size = new Size(810, 105),
         ForeColor = Color.FromArgb(190, 210, 235),
-        Location = new Point(24, 342)
+        Location = new Point(24, 382)
     };
     private string? _lastOutput;
 
@@ -43,7 +43,7 @@ internal sealed class OemIdentityGateTraceForm : Form
     {
         Text = "VOROTEX K15 · OEM Identity Gate Trace";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(860, 470);
+        ClientSize = new Size(860, 510);
         BackColor = Color.FromArgb(13, 17, 23);
         ForeColor = Color.Gainsboro;
         Font = new Font("Segoe UI", 9.5f);
@@ -97,7 +97,13 @@ internal sealed class OemIdentityGateTraceForm : Form
         guarded.Click += async (_, _) => await RunGuardedAsync(guarded);
         Controls.Add(guarded);
 
-        var open = ActionButton("Открыть результат", 246, 270, 170);
+        var semantic = ActionButton("Run semantic bridge trace", 24, 310, 210);
+        semantic.BackColor = Color.FromArgb(62, 67, 138);
+        semantic.FlatAppearance.BorderColor = Color.FromArgb(94, 102, 184);
+        semantic.Click += async (_, _) => await RunSemanticBridgeAsync(semantic);
+        Controls.Add(semantic);
+
+        var open = ActionButton("Открыть результат", 246, 310, 170);
         open.Click += (_, _) => OpenOutput();
         Controls.Add(open);
 
@@ -106,10 +112,10 @@ internal sealed class OemIdentityGateTraceForm : Form
             Text = "Safety: static read-only · no HID handle · no process launch/attach/debug · no patching/spoofing.",
             AutoSize = true,
             ForeColor = Color.FromArgb(145, 158, 180),
-            Location = new Point(24, 314)
+            Location = new Point(24, 354)
         });
 
-        _status.Text = "Готово. Guarded block trace раскрывает DevCmpStr==1 path, loop +0x84 и runtime-member mapping DevName.";
+        _status.Text = "Готово. Semantic bridge исправляет raw-byte xrefs, разрешает IAT/helper calls и связывает их с guarded selection.";
         Controls.Add(_status);
     }
 
@@ -223,6 +229,40 @@ internal sealed class OemIdentityGateTraceForm : Form
         {
             _status.Text = "Guarded block trace не завершён: " + ex.Message;
             MessageBox.Show(ex.Message, "OEM DevCmpStr Guarded Block Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            button.Enabled = true;
+        }
+    }
+
+    private async Task RunSemanticBridgeAsync(Button button)
+    {
+        if (!ValidateInputs("OEM Identity Semantic Bridge Trace"))
+            return;
+
+        button.Enabled = false;
+        _status.Text = "Выравниваю field xrefs по инструкциям, разрешаю IAT/helper calls и трассирую boolean compare…";
+        try
+        {
+            var report = await Task.Run(() => OemIdentitySemanticBridgeAnalyzer.Analyze(_exeA.Text, _exeB.Text));
+            var root = ResearchRoot("oem-identity-semantic-bridge");
+            File.WriteAllText(
+                Path.Combine(root, "oem-identity-semantic-bridge.json"),
+                JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+            File.WriteAllText(
+                Path.Combine(root, "oem-identity-semantic-bridge.txt"),
+                OemIdentitySemanticBridgeAnalyzer.ToText(report),
+                new UTF8Encoding(false));
+            _lastOutput = root;
+            _status.Text = $"SEMANTIC BRIDGE VERDICT: {report.Verdict}\n{root}";
+            OpenOutput();
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Semantic bridge trace не завершён: " + ex.Message;
+            MessageBox.Show(ex.Message, "OEM Identity Semantic Bridge Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         finally
         {
