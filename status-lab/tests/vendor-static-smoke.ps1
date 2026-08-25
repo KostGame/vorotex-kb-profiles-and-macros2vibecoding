@@ -39,7 +39,8 @@ foreach ($required in @(
     'direct_iat_call',
     'call_via_import_thunk',
     'KeywordMatches',
-    'Время сна'
+    'SleepTime',
+    'SleepTimeout'
 )) {
     if ($text -notmatch [regex]::Escape($required)) { throw "Vendor Static Lab missing required evidence feature: $required" }
 }
