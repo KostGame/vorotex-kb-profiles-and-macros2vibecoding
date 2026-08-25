@@ -1,4 +1,4 @@
-name: Status Lab Notification Engine M1
+name: Status Lab Notification Engine
 
 on:
   pull_request:
@@ -8,13 +8,16 @@ on:
       - 'status-lab/NotificationRuleEngine.cs'
       - 'status-lab/NotificationLearningBuffer.cs'
       - 'status-lab/NotificationRulesConfig.cs'
+      - 'status-lab/NotificationRuleDraftBuilder.cs'
+      - 'status-lab/notification-learning-lab/**'
       - 'status-lab/notifications/**'
       - 'status-lab/tests/NotificationRulesSmoke*'
+      - 'status-lab/AssemblyInfo.cs'
       - '.github/workflows/status-lab-notifications-m1.yml'
   workflow_dispatch:
 
 jobs:
-  notification-engine-m1:
+  notification-engine:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,26 +25,60 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Notification rule engine tests
+      - name: Notification rule engine and learning tests
         run: dotnet run --project status-lab/tests/NotificationRulesSmoke.csproj -c Release
 
       - name: Build Status Lab with notification observation model
         run: dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release
 
-      - name: Verify M1 has no keyboard write path
+      - name: Build Notification Learning Lab
+        run: dotnet build status-lab/notification-learning-lab/Vorotex.K15.NotificationLearningLab.csproj -c Release
+
+      - name: Verify notification subsystem isolation
         shell: powershell
         run: |
           $paths = @(
             'status-lab/WindowsNotificationModels.cs',
             'status-lab/NotificationRuleEngine.cs',
             'status-lab/NotificationLearningBuffer.cs',
-            'status-lab/NotificationRulesConfig.cs'
+            'status-lab/NotificationRulesConfig.cs',
+            'status-lab/NotificationRuleDraftBuilder.cs'
           )
+          $paths += Get-ChildItem -LiteralPath 'status-lab/notification-learning-lab' -Filter '*.cs' -File | ForEach-Object FullName
           $text = ($paths | ForEach-Object { Get-Content -LiteralPath $_ -Raw -Encoding UTF8 }) -join "`n"
           if ($text -match 'HidD_SetFeature|DeviceWriteCommand|LightingWriteCommand|SelectActiveSlot|ApplyEffect') {
-            throw 'Notification Engine M1 must remain read-only with respect to K15.'
+            throw 'Notification Engine / Learning Lab must remain read-only with respect to K15.'
           }
           if ($text -match 'K15NormalizedState|StateReducer') {
-            throw 'Notification Engine M1 must not mutate or depend on Codex semantic state.'
+            throw 'Notification Engine / Learning Lab must not mutate or depend on Codex semantic state.'
           }
-          Write-Output 'Notification Engine M1 isolation gates: PASS'
+          Write-Output 'Notification Engine isolation gates: PASS'
+
+      - name: Verify Learning Lab privacy boundary
+        shell: powershell
+        run: |
+          $lab = (Get-ChildItem -LiteralPath 'status-lab/notification-learning-lab' -Filter '*.cs' -File |
+            ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join "`n"
+          if ($lab -match 'File\.WriteAllText|File\.AppendAllText|StreamWriter|EventJournal\.Append') {
+            throw 'Learning Lab must not persist raw learning samples.'
+          }
+          if ($lab -notmatch 'NotificationLearningBuffer' -or $lab -notmatch 'RAM only|RAM-only') {
+            throw 'Learning Lab must keep its bounded in-memory learning boundary explicit.'
+          }
+          Write-Output 'Notification Learning Lab privacy gate: PASS'
+
+      - name: Publish Notification Learning Lab
+        run: dotnet publish status-lab/notification-learning-lab/Vorotex.K15.NotificationLearningLab.csproj -c Release -r win-x64 --self-contained true -o publish-notification-learning-lab
+
+      - name: Verify Learning Lab executable
+        shell: powershell
+        run: |
+          $exe = 'publish-notification-learning-lab/Vorotex.K15.NotificationLearningLab.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "Missing $exe" }
+          Write-Output 'Notification Learning Lab publish: PASS'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vorotex-k15-notification-learning-lab-win-x64
+          path: publish-notification-learning-lab/
+          if-no-files-found: error
