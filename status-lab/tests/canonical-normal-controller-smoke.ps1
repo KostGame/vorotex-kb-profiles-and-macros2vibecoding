@@ -3,8 +3,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $controllerPath = Join-Path $root 'K15HidLightingController.cs'
 $configPath = Join-Path $root 'StatusLabConfig.cs'
+$canaryPath = Join-Path $root 'K15RgbCanary.cs'
 $controller = Get-Content -LiteralPath $controllerPath -Raw
 $config = Get-Content -LiteralPath $configPath -Raw
+$canary = Get-Content -LiteralPath $canaryPath -Raw
 
 function Require-Text {
     param([string]$Text, [string]$Needle, [string]$Message)
@@ -21,6 +23,10 @@ Require-Text $controller 'TimeSpan.FromSeconds(5)' 'Self-heal health interval mu
 Require-Text $controller '@event = "lighting_drift_repaired"' 'Self-heal metadata event is missing.'
 Require-Text $controller 'trigger = "periodic_same_slot_health_check"' 'Self-heal trigger metadata is missing.'
 Require-Text $controller 'WriteAndVerify(' 'Repair path must retain readback verification.'
+Require-Text $canary 'var captured = controller.PrepareProfileSnapshot(_config);' 'RGB OFF repair must derive canonical policy for the active slot.'
+Require-Text $canary 'if (captured.CanonicalNormal.Enabled)' 'RGB OFF repair must prefer managed canonical NORMAL.'
+Require-Text $canary 'trigger = "manual_repair_while_disabled"' 'RGB OFF canonical repair evidence is missing.'
+Require-Text $canary 'controller.Restore(captured);' 'RGB OFF canonical repair must use verified controller restore path.'
 
 $selectCount = ([regex]::Matches($controller, 'SelectActiveSlot\(')).Count
 if ($selectCount -ne 1) {
@@ -31,4 +37,4 @@ if ($controller.Contains('Firmware') -or $controller.Contains('ResetDevice')) {
     throw 'Canonical NORMAL change introduced an unexpected firmware/reset surface.'
 }
 
-Write-Host 'Canonical NORMAL controller safety/self-heal smoke: PASS'
+Write-Host 'Canonical NORMAL controller safety/self-heal/manual-off repair smoke: PASS'
