@@ -14,6 +14,13 @@ internal static class DeviceSettingsResearch
 
     private sealed record Candidate(string Name, string RelativeVendorPath, bool Volatile);
     private sealed record FileMeta(string Name, bool Exists, long Size, DateTimeOffset? LastWriteUtc, string Sha256, bool Volatile);
+    private sealed record LineChange(int Line, string? Before, string? After);
+    private sealed record FileChange(string File, bool Changed, string Classification, string BeforeSha256, string AfterSha256,
+        string[] JsonPaths, LineChange[] LineChanges);
+    private sealed record SafetyInfo(bool VendorWritesPerformedByStatusLab, bool HidPowerWritesPerformed,
+        bool RawCopiesRemainLocal, bool AutomaticPublication);
+    private sealed record ResearchReport(int Schema, string Session, DateTimeOffset CreatedUtc, string Purpose,
+        SafetyInfo Safety, List<FileChange> Files);
 
     private static readonly Candidate[] Candidates =
     [
@@ -30,7 +37,6 @@ internal static class DeviceSettingsResearch
             Directory.CreateDirectory(RootDirectory);
             var sessionName = DateTimeOffset.Now.ToString("yyyyMMdd-HHmmss");
             var session = Path.Combine(RootDirectory, sessionName);
-            Directory.CreateDirectory(session);
             Directory.CreateDirectory(Path.Combine(session, "before"));
             CaptureSide(session, "before");
             File.WriteAllText(ActiveSessionFile, sessionName, new UTF8Encoding(false));
@@ -72,7 +78,8 @@ internal static class DeviceSettingsResearch
             Directory.CreateDirectory(Path.Combine(session, "after"));
             CaptureSide(session, "after");
             var report = BuildReport(session, sessionName);
-            File.WriteAllText(Path.Combine(session, "report.json"),
+            var jsonPath = Path.Combine(session, "report.json");
+            File.WriteAllText(jsonPath,
                 JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
             var textPath = Path.Combine(session, "report.txt");
             File.WriteAllText(textPath, BuildTextReport(report), new UTF8Encoding(false));
@@ -84,11 +91,12 @@ internal static class DeviceSettingsResearch
                 source = "device_settings_research",
                 @event = "capture_after_report_ready",
                 session = sessionName,
-                changedFiles = ((IEnumerable<object>)report.files).Count()
+                changedFiles = report.Files.Count(file => file.Changed),
+                reportJson = Path.GetFileName(jsonPath)
             });
 
             return new(true,
-                "AFTER снят. Локальный diff готов. Он не отправляется и не коммитится автоматически.",
+                $"AFTER снят. Изменено файлов: {report.Files.Count(file => file.Changed)}. Локальный diff готов и не публикуется автоматически.",
                 session, textPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -107,7 +115,7 @@ internal static class DeviceSettingsResearch
     private static void CaptureSide(string session, string side)
     {
         var targetRoot = Path.Combine(session, side);
-        var vendorRoot = VendorConfigRoot();
+        var vendorRoot = VendorResourceRoot();
         var manifest = new List<FileMeta>();
 
         foreach (var candidate in Candidates)
@@ -122,7 +130,7 @@ internal static class DeviceSettingsResearch
             var target = Path.Combine(targetRoot, candidate.Name);
             File.Copy(source, target, overwrite: true);
             var info = new FileInfo(source);
-            manifest.Add(new(candidate.Name, true, info.Length, info.LastWriteTimeUtc,
+            manifest.Add(new(candidate.Name, true, info.Length, new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
                 Sha256(target), candidate.Volatile));
         }
 
@@ -130,11 +138,11 @@ internal static class DeviceSettingsResearch
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
     }
 
-    private static object BuildReport(string session, string sessionName)
+    private static ResearchReport BuildReport(string session, string sessionName)
     {
         var beforeRoot = Path.Combine(session, "before");
         var afterRoot = Path.Combine(session, "after");
-        var changes = new List<object>();
+        var changes = new List<FileChange>();
 
         foreach (var candidate in Candidates)
         {
@@ -147,54 +155,48 @@ internal static class DeviceSettingsResearch
             var changed = beforeExists != afterExists || !string.Equals(beforeHash, afterHash, StringComparison.OrdinalIgnoreCase);
 
             string[] jsonPaths = [];
-            object[] lineChanges = [];
+            LineChange[] lineChanges = [];
             if (changed && beforeExists && afterExists)
             {
                 if (candidate.Name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                     jsonPaths = JsonDiffPaths(before, after).Take(250).ToArray();
                 else
-                    lineChanges = LineDiff(before, after).Take(250).Cast<object>().ToArray();
+                    lineChanges = LineDiff(before, after).Take(250).ToArray();
             }
 
-            changes.Add(new
-            {
-                file = candidate.Name,
-                changed,
-                classification = candidate.Volatile ? "volatile_candidate" : "stable_candidate",
-                beforeSha256 = beforeHash,
-                afterSha256 = afterHash,
-                jsonPaths,
-                lineChanges
-            });
+            changes.Add(new FileChange(candidate.Name, changed,
+                candidate.Volatile ? "volatile_candidate" : "stable_candidate",
+                beforeHash, afterHash, jsonPaths, lineChanges));
         }
 
-        return new
-        {
-            schema = 1,
-            session = sessionName,
-            createdUtc = DateTimeOffset.UtcNow,
-            purpose = "controlled sleep/standby diff",
-            safety = new
-            {
-                vendorWritesPerformedByStatusLab = false,
-                hidPowerWritesPerformed = false,
-                rawCopiesRemainLocal = true,
-                automaticPublication = false
-            },
-            files = changes
-        };
+        return new ResearchReport(
+            1,
+            sessionName,
+            DateTimeOffset.UtcNow,
+            "controlled sleep/standby diff",
+            new SafetyInfo(false, false, true, false),
+            changes);
     }
 
-    private static string BuildTextReport(dynamic report)
+    private static string BuildTextReport(ResearchReport report)
     {
         var sb = new StringBuilder();
         sb.AppendLine("VOROTEX K15 Device Settings Research");
-        sb.AppendLine($"Session: {report.session}");
+        sb.AppendLine($"Session: {report.Session}");
         sb.AppendLine("Status Lab vendor writes: NONE");
         sb.AppendLine("Unknown HID power writes: NONE");
         sb.AppendLine();
-        sb.AppendLine("Open report.json for machine-readable changed paths/lines.");
+        foreach (var file in report.Files)
+        {
+            sb.AppendLine($"{file.File}: changed={file.Changed}; class={file.Classification}");
+            foreach (var path in file.JsonPaths.Take(40))
+                sb.AppendLine($"  JSON {path}");
+            foreach (var line in file.LineChanges.Take(40))
+                sb.AppendLine($"  line {line.Line}: {line.Before} -> {line.After}");
+        }
+        sb.AppendLine();
         sb.AppendLine("DeviceFeature.ini is intentionally classified as volatile_candidate.");
+        sb.AppendLine("Raw before/after copies stay in this local research folder and are never published automatically.");
         return sb.ToString();
     }
 
@@ -213,8 +215,12 @@ internal static class DeviceSettingsResearch
             return;
         if (before is JsonObject bo && after is JsonObject ao)
         {
-            foreach (var key in bo.Select(p => p.Key).Union(ao.Select(p => p.Key)).OrderBy(k => k, StringComparer.Ordinal))
-                Walk(bo[key], ao[key], path + "." + key, result);
+            foreach (var key in bo.Select(pair => pair.Key).Union(ao.Select(pair => pair.Key)).OrderBy(key => key, StringComparer.Ordinal))
+            {
+                bo.TryGetPropertyValue(key, out var beforeValue);
+                ao.TryGetPropertyValue(key, out var afterValue);
+                Walk(beforeValue, afterValue, path + "." + key, result);
+            }
             return;
         }
         if (before is JsonArray ba && after is JsonArray aa)
@@ -227,7 +233,7 @@ internal static class DeviceSettingsResearch
         result.Add(path);
     }
 
-    private static IEnumerable<object> LineDiff(string beforePath, string afterPath)
+    private static IEnumerable<LineChange> LineDiff(string beforePath, string afterPath)
     {
         var before = File.ReadAllLines(beforePath);
         var after = File.ReadAllLines(afterPath);
@@ -237,13 +243,13 @@ internal static class DeviceSettingsResearch
             var left = index < before.Length ? before[index] : null;
             var right = index < after.Length ? after[index] : null;
             if (!string.Equals(left, right, StringComparison.Ordinal))
-                yield return new { line = index + 1, before = left, after = right };
+                yield return new LineChange(index + 1, left, right);
         }
     }
 
-    private static string VendorConfigRoot() => Path.Combine(
+    private static string VendorResourceRoot() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-        "VOROTEX-K15-PRO", "res", "KeyboardDock", "KeyboardA", "Config");
+        "VOROTEX-K15-PRO", "res");
 
     private static string Sha256(string path)
     {
