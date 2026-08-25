@@ -7,70 +7,33 @@ namespace Vorotex.K15.HidResearchLab;
 internal sealed record OemSemanticInsn(uint Rva, long ProductDelta, string Bytes, string Text, string[] Tags);
 internal sealed record OemRawXref(string Token, uint TokenRva, uint RawRva, bool InstructionStart, string Decision);
 internal sealed record OemAlignedXref(
-    string Token,
-    string Encoding,
-    uint TokenRva,
-    string TokenVa,
-    uint InstructionRva,
-    string Bytes,
-    string Text,
-    int OperandIndex,
-    string OperandKind,
-    string[] CandidateMembers,
-    bool MapsExpectedMember,
-    List<OemSemanticInsn> Neighborhood);
+    string Token, string Encoding, uint TokenRva, string TokenVa,
+    uint InstructionRva, string Bytes, string Text, int OperandIndex, string OperandKind,
+    string[] CandidateMembers, bool MapsExpectedMember, List<OemSemanticInsn> Neighborhood);
 internal sealed record OemSemanticCall(
-    uint CallRva,
-    long ProductDelta,
-    string Kind,
-    uint? DirectTargetRva,
-    string? IatVa,
-    string? Dll,
-    string? Symbol,
-    string Text);
+    uint CallRva, long ProductDelta, string Kind, uint? DirectTargetRva,
+    string? IatVa, string? Dll, string? Symbol, string Text);
 internal sealed record OemSemanticHelper(
-    uint? EntryRva,
-    List<OemSemanticInsn> Instructions,
-    List<OemSemanticCall> Calls,
-    string[] StringConstants,
-    string[] MemberOffsets,
-    string Fingerprint);
+    uint? EntryRva, List<OemSemanticInsn> Instructions, List<OemSemanticCall> Calls,
+    string[] StringConstants, string[] MemberOffsets, string Fingerprint);
 internal sealed record OemSemanticSide(
-    string Executable,
-    string Machine,
-    string ImageBase,
-    uint ProductStringCallRva,
-    string? ProductBufferSignature,
-    uint? GuardRva,
-    uint? MemberAnchorRva,
-    uint? FlagsProducerRva,
-    List<OemAlignedXref> DevCmpStrAlignedXrefs,
-    List<OemAlignedXref> DevNameAlignedXrefs,
+    string Executable, string Machine, string ImageBase,
+    uint ProductStringCallRva, string? ProductBufferSignature,
+    uint? GuardRva, uint? MemberAnchorRva, uint? FlagsProducerRva,
+    List<OemAlignedXref> DevCmpStrAlignedXrefs, List<OemAlignedXref> DevNameAlignedXrefs,
     List<OemRawXref> RawXrefs,
-    bool DevCmpStrMapsTo3Ec,
-    bool DevNameMapsTo20,
+    bool DevCmpStrMapsTo3Ec, bool DevNameMapsTo20,
     List<OemSemanticCall> ProductToGuardCalls,
-    OemSemanticCall? ProductObjectCopyCall,
-    OemSemanticCall? Member20HelperCall,
-    OemSemanticCall? RecordValueCall,
-    OemSemanticCall? BooleanCompareCall,
+    OemSemanticCall? ProductObjectCopyCall, OemSemanticCall? Member20HelperCall,
+    OemSemanticCall? RecordValueCall, OemSemanticCall? BooleanCompareCall,
     OemSemanticHelper Member20Helper,
-    bool BooleanReturnFeedsFlags,
-    bool CompareSymbolLooksSemantic,
-    string StructuralFingerprint,
-    List<string> Notes);
+    bool BooleanReturnFeedsFlags, bool CompareSymbolLooksSemantic,
+    string StructuralFingerprint, List<string> Notes);
 internal sealed record OemIdentitySemanticBridgeReport(
-    int Schema,
-    DateTimeOffset CreatedUtc,
-    string Verdict,
-    string Purpose,
-    object Safety,
-    OemSemanticSide A,
-    OemSemanticSide B,
-    bool StructuralCorrespondence,
-    bool CompareSymbolCorrespondence,
-    List<string> Evidence,
-    List<string> Notes);
+    int Schema, DateTimeOffset CreatedUtc, string Verdict, string Purpose, object Safety,
+    OemSemanticSide A, OemSemanticSide B,
+    bool StructuralCorrespondence, bool CompareSymbolCorrespondence,
+    List<string> Evidence, List<string> Notes);
 
 internal static class OemIdentitySemanticBridgeAnalyzer
 {
@@ -86,18 +49,22 @@ internal static class OemIdentitySemanticBridgeAnalyzer
 
         var structural = guarded.StructuralCorrespondence &&
                          string.Equals(a.StructuralFingerprint, b.StructuralFingerprint, StringComparison.Ordinal);
-        var symbolA = SymbolFamily(a.BooleanCompareCall);
-        var symbolB = SymbolFamily(b.BooleanCompareCall);
-        var symbolCorrespondence = symbolA.Length > 0 && string.Equals(symbolA, symbolB, StringComparison.OrdinalIgnoreCase);
+        var familyA = SymbolFamily(a.BooleanCompareCall);
+        var familyB = SymbolFamily(b.BooleanCompareCall);
+        var symbolCorrespondence = familyA.Length > 0 &&
+                                   string.Equals(familyA, familyB, StringComparison.OrdinalIgnoreCase);
 
         var proven = structural && symbolCorrespondence &&
                      a.DevCmpStrMapsTo3Ec && b.DevCmpStrMapsTo3Ec &&
                      a.DevNameMapsTo20 && b.DevNameMapsTo20 &&
                      a.BooleanReturnFeedsFlags && b.BooleanReturnFeedsFlags &&
                      a.CompareSymbolLooksSemantic && b.CompareSymbolLooksSemantic;
+
         var helperResolved = structural && symbolCorrespondence &&
                              a.Member20Helper.EntryRva is not null && b.Member20Helper.EntryRva is not null &&
+                             a.BooleanCompareCall?.Symbol is not null && b.BooleanCompareCall?.Symbol is not null &&
                              a.BooleanReturnFeedsFlags && b.BooleanReturnFeedsFlags;
+
         var alignedRecovered = a.DevCmpStrAlignedXrefs.Count > 0 && b.DevCmpStrAlignedXrefs.Count > 0 &&
                                a.DevNameAlignedXrefs.Count > 0 && b.DevNameAlignedXrefs.Count > 0;
 
@@ -107,18 +74,23 @@ internal static class OemIdentitySemanticBridgeAnalyzer
                       "SEMANTIC_BRIDGE_UNRESOLVED";
 
         var evidence = new List<string>();
-        if (alignedRecovered) evidence.Add("Instruction-aligned DevCmpStr and DevName operand references were recovered on both OEM sides; raw byte hits inside instructions are excluded.");
-        if (a.DevCmpStrMapsTo3Ec && b.DevCmpStrMapsTo3Ec) evidence.Add("Aligned DevCmpStr neighborhoods reference runtime member +0x3EC on both sides.");
-        if (a.DevNameMapsTo20 && b.DevNameMapsTo20) evidence.Add("Aligned DevName neighborhoods reference runtime member +0x20 on both sides.");
-        if (a.Member20Helper.EntryRva is not null && b.Member20Helper.EntryRva is not null) evidence.Add($"The direct helper receiving member +0x20 was decoded on both sides (A=0x{a.Member20Helper.EntryRva:X8}, B=0x{b.Member20Helper.EntryRva:X8}).");
-        if (a.BooleanReturnFeedsFlags && b.BooleanReturnFeedsFlags) evidence.Add("The call immediately feeding `test al,al` was recovered on both sides.");
-        if (symbolCorrespondence) evidence.Add($"The boolean call resolves to the same normalized import family on both sides: {symbolA}.");
-        if (a.CompareSymbolLooksSemantic && b.CompareSymbolLooksSemantic) evidence.Add("Resolved boolean-call symbols contain explicit compare/equality semantics on both sides.");
+        if (alignedRecovered)
+            evidence.Add("Instruction-aligned DevCmpStr and DevName operand references were recovered on both OEM sides; raw byte hits inside instructions are excluded.");
+        if (a.DevCmpStrMapsTo3Ec && b.DevCmpStrMapsTo3Ec)
+            evidence.Add("Aligned DevCmpStr neighborhoods reference runtime member +0x3EC on both sides.");
+        if (a.DevNameMapsTo20 && b.DevNameMapsTo20)
+            evidence.Add("Aligned DevName neighborhoods reference runtime member +0x20 on both sides.");
+        if (a.Member20Helper.EntryRva is not null && b.Member20Helper.EntryRva is not null)
+            evidence.Add($"The direct helper receiving member +0x20 was decoded on both sides (A=0x{a.Member20Helper.EntryRva:X8}, B=0x{b.Member20Helper.EntryRva:X8}).");
+        if (a.BooleanReturnFeedsFlags && b.BooleanReturnFeedsFlags)
+            evidence.Add("The call immediately feeding `test al,al` was recovered on both sides.");
+        if (symbolCorrespondence)
+            evidence.Add($"The boolean call resolves to the same normalized import family on both sides: {familyA}.");
+        if (a.CompareSymbolLooksSemantic && b.CompareSymbolLooksSemantic)
+            evidence.Add("Resolved boolean-call symbols contain explicit compare/equality semantics on both sides.");
 
         return new OemIdentitySemanticBridgeReport(
-            1,
-            DateTimeOffset.UtcNow,
-            verdict,
+            1, DateTimeOffset.UtcNow, verdict,
             "static read-only instruction-aligned semantic bridge from Ndevice identity fields through ProductString to the DevCmpStr guarded comparison",
             new
             {
@@ -142,11 +114,7 @@ internal static class OemIdentitySemanticBridgeAnalyzer
                 sleepSettingChanged = false,
                 firmwareModified = false
             },
-            a,
-            b,
-            structural,
-            symbolCorrespondence,
-            evidence,
+            a, b, structural, symbolCorrespondence, evidence,
             [
                 "Instruction-aligned xrefs are accepted only when a decoded operand equals the exact token VA/RVA; raw byte matches inside instructions are never code anchors.",
                 "COMPARE_HELPER_SEMANTICS_RESOLVED does not prove which Ndevice field populated a runtime member unless the aligned parser trace establishes that mapping.",
@@ -184,7 +152,8 @@ internal static class OemIdentitySemanticBridgeAnalyzer
         AppendXrefs(sb, side.DevCmpStrAlignedXrefs);
         AppendXrefs(sb, side.DevNameAlignedXrefs);
         sb.AppendLine("  Raw token-VA byte hits:");
-        foreach (var raw in side.RawXrefs.Take(40)) sb.AppendLine($"    {raw.Token} raw=0x{raw.RawRva:X8} instructionStart={raw.InstructionStart}: {raw.Decision}");
+        foreach (var raw in side.RawXrefs.Take(40))
+            sb.AppendLine($"    {raw.Token} raw=0x{raw.RawRva:X8} instructionStart={raw.InstructionStart}: {raw.Decision}");
         sb.AppendLine("  ProductString -> guard calls:");
         foreach (var call in side.ProductToGuardCalls) sb.AppendLine("    " + CallText(call));
         sb.AppendLine($"  product-copy: {(side.ProductObjectCopyCall is null ? "unresolved" : CallText(side.ProductObjectCopyCall))}");
@@ -232,68 +201,59 @@ internal static class OemIdentitySemanticBridgeAnalyzer
             .Concat(BuildRawXrefs(pe, starts, gate, "DevName"))
             .OrderBy(x => x.RawRva).ToList();
 
-        var productWindow = DecodeForward(pe, guarded.ProductStringCallRva, 0x260, guarded.ProductStringCallRva);
-        var calls = productWindow.Where(x => x.Instruction.Mnemonic == Mnemonic.Call)
-            .Select(x => ResolveCall(pe, x, guarded.ProductStringCallRva)).ToList();
+        var productWindow = DecodeForward(pe, guarded.ProductStringCallRva, 0x260);
+        var calls = productWindow
+            .Where(x => x.Instruction.Mnemonic == Mnemonic.Call)
+            .Select(x => ResolveCall(pe, x, guarded.ProductStringCallRva))
+            .ToList();
         OemSemanticCall? AtDelta(long delta) => calls.FirstOrDefault(x => x.ProductDelta == delta);
 
         var productCopy = AtDelta(73);
         var memberHelperCall = AtDelta(93);
         var recordValue = AtDelta(120);
         var booleanCall = AtDelta(133);
-        var helper = memberHelperCall?.DirectTargetRva is null ? EmptyHelper() :
-            TraceHelper(pe, memberHelperCall.DirectTargetRva.Value, guarded.ProductStringCallRva);
+        var helper = memberHelperCall?.DirectTargetRva is null
+            ? EmptyHelper()
+            : TraceHelper(pe, memberHelperCall.DirectTargetRva.Value, guarded.ProductStringCallRva);
 
-        var flagsIndex = guarded.FlagsProducerRva is null ? -1 : productWindow.FindIndex(x => x.Rva == guarded.FlagsProducerRva.Value);
+        var flagsIndex = guarded.FlagsProducerRva is null
+            ? -1
+            : productWindow.FindIndex(x => x.Rva == guarded.FlagsProducerRva.Value);
         var booleanFeeds = false;
-        if (flagsIndex > 0)
+        if (flagsIndex > 0 && booleanCall is not null)
         {
             for (var i = flagsIndex - 1; i >= Math.Max(0, flagsIndex - 4); i--)
             {
                 if (productWindow[i].Instruction.Mnemonic != Mnemonic.Call) continue;
-                booleanFeeds = productWindow[i].Rva == booleanCall?.CallRva;
+                booleanFeeds = productWindow[i].Rva == booleanCall.CallRva;
                 break;
             }
         }
 
-        if (cmpRefs.Count == 0) notes.Add("No instruction-aligned DevCmpStr operand reference was recovered; old raw-byte xrefs are not valid code anchors.");
-        if (nameRefs.Count == 0) notes.Add("No instruction-aligned DevName operand reference was recovered; old raw-byte xrefs are not valid code anchors.");
-        if (booleanCall?.Symbol is null) notes.Add("The call feeding `test al,al` did not resolve to a named PE import; comparison semantics remain structural.");
-        if (helper.EntryRva is null) notes.Add("The direct helper receiving member +0x20 was not recovered at ProductString-relative +93.");
+        if (cmpRefs.Count == 0)
+            notes.Add("No instruction-aligned DevCmpStr operand reference was recovered; old raw-byte xrefs are not valid code anchors.");
+        if (nameRefs.Count == 0)
+            notes.Add("No instruction-aligned DevName operand reference was recovered; old raw-byte xrefs are not valid code anchors.");
+        if (booleanCall?.Symbol is null)
+            notes.Add("The call feeding `test al,al` did not resolve to a named PE import; comparison semantics remain structural.");
+        if (helper.EntryRva is null)
+            notes.Add("The direct helper receiving member +0x20 was not recovered at ProductString-relative +93.");
 
         return new OemSemanticSide(
-            Path.GetFileName(exe),
-            $"0x{pe.Machine:X4}",
-            $"0x{pe.ImageBase:X}",
-            guarded.ProductStringCallRva,
-            guarded.ProductBufferSignature,
-            guarded.GuardRva,
-            guarded.MemberAnchorRva,
-            guarded.FlagsProducerRva,
-            cmpRefs,
-            nameRefs,
-            raw,
-            cmpRefs.Any(x => x.MapsExpectedMember),
-            nameRefs.Any(x => x.MapsExpectedMember),
+            Path.GetFileName(exe), $"0x{pe.Machine:X4}", $"0x{pe.ImageBase:X}",
+            guarded.ProductStringCallRva, guarded.ProductBufferSignature,
+            guarded.GuardRva, guarded.MemberAnchorRva, guarded.FlagsProducerRva,
+            cmpRefs, nameRefs, raw,
+            cmpRefs.Any(x => x.MapsExpectedMember), nameRefs.Any(x => x.MapsExpectedMember),
             calls.Where(x => x.ProductDelta >= 0 && (guarded.GuardRva is null || x.CallRva < guarded.GuardRva.Value)).ToList(),
-            productCopy,
-            memberHelperCall,
-            recordValue,
-            booleanCall,
-            helper,
-            booleanFeeds,
-            LooksCompareSymbol(booleanCall?.Symbol),
-            Fingerprint(productWindow, guarded.GuardRva, guarded.FlagsProducerRva),
-            notes);
+            productCopy, memberHelperCall, recordValue, booleanCall, helper,
+            booleanFeeds, LooksCompareSymbol(booleanCall?.Symbol),
+            Fingerprint(productWindow, guarded.GuardRva, guarded.FlagsProducerRva), notes);
     }
 
     private static List<OemAlignedXref> FindAlignedTokenXrefs(
-        SemanticPe pe,
-        List<SemanticDecoded> text,
-        OemIdentityGateSide gate,
-        string token,
-        uint product,
-        ulong expectedMember)
+        SemanticPe pe, List<SemanticDecoded> text, OemIdentityGateSide gate,
+        string token, uint product, ulong expectedMember)
     {
         var result = new List<OemAlignedXref>();
         foreach (var tokenRef in gate.TokenRefs.Where(x => x.Token.Equals(token, StringComparison.OrdinalIgnoreCase) && x.Rva is not null))
@@ -308,33 +268,41 @@ internal static class OemIdentitySemanticBridgeAnalyzer
                     if (!OperandReferences(item.Instruction, op, tokenVa, tokenRva, out var kind)) continue;
                     var members = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     var neighborhood = new List<OemSemanticInsn>();
-                    var end = Math.Min(text.Count, index + 220);
+                    var end = Math.Min(text.Count, index + 180);
                     for (var i = Math.Max(0, index - 8); i < end; i++)
                     {
                         var di = text[i];
                         foreach (var member in MemberOffsets(di.Instruction)) members.Add(member);
-                        if (i < index + 80) neighborhood.Add(ToOutput(di, product, di.Rva == item.Rva ? [token + "_aligned_xref"] : []));
+                        if (i < index + 80)
+                            neighborhood.Add(ToOutput(di, product, di.Rva == item.Rva ? [token + "_aligned_xref"] : []));
                         if (i > index && di.Instruction.Mnemonic == Mnemonic.Ret) break;
                     }
                     var expected = $"+0x{expectedMember:X}";
                     result.Add(new OemAlignedXref(
-                        token, tokenRef.Encoding, tokenRva, $"0x{tokenVa:X}", item.Rva, item.Bytes, item.Text,
-                        op, kind, members.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray(), members.Contains(expected), neighborhood));
+                        token, tokenRef.Encoding, tokenRva, $"0x{tokenVa:X}",
+                        item.Rva, item.Bytes, item.Text, op, kind,
+                        members.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray(),
+                        members.Contains(expected), neighborhood));
                 }
             }
         }
-        return result.GroupBy(x => (x.TokenRva, x.InstructionRva, x.OperandIndex)).Select(g => g.First())
-            .OrderBy(x => Math.Abs((long)x.InstructionRva - product)).Take(24).ToList();
+        return result
+            .GroupBy(x => (x.TokenRva, x.InstructionRva, x.OperandIndex))
+            .Select(x => x.First())
+            .OrderBy(x => Math.Abs((long)x.InstructionRva - product))
+            .Take(24)
+            .ToList();
     }
 
-    private static IEnumerable<OemRawXref> BuildRawXrefs(SemanticPe pe, HashSet<uint> starts, OemIdentityGateSide gate, string token)
+    private static IEnumerable<OemRawXref> BuildRawXrefs(
+        SemanticPe pe, HashSet<uint> starts, OemIdentityGateSide gate, string token)
     {
         foreach (var tokenRef in gate.TokenRefs.Where(x => x.Token.Equals(token, StringComparison.OrdinalIgnoreCase) && x.Rva is not null))
         {
             var targetVa = checked((uint)(pe.ImageBase + tokenRef.Rva!.Value));
             var needle = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(needle, targetVa);
-            foreach (var section in pe.Sections.Where(s => s.Name.Equals(".text", StringComparison.OrdinalIgnoreCase)))
+            foreach (var section in pe.Sections.Where(x => x.Name.Equals(".text", StringComparison.OrdinalIgnoreCase)))
             {
                 var start = checked((int)section.RawPointer);
                 var end = Math.Min(pe.Bytes.Length, start + checked((int)section.RawSize));
@@ -343,15 +311,18 @@ internal static class OemIdentitySemanticBridgeAnalyzer
                     if (!pe.Bytes.AsSpan(off, 4).SequenceEqual(needle)) continue;
                     var rva = section.VirtualAddress + checked((uint)off - section.RawPointer);
                     var aligned = starts.Contains(rva);
-                    yield return new OemRawXref(token, tokenRef.Rva.Value, rva, aligned,
-                        aligned ? "raw hit begins at an instruction; operand validation is still required" :
-                                  "REJECTED: raw hit is inside a decoded instruction/data fragment");
+                    yield return new OemRawXref(
+                        token, tokenRef.Rva.Value, rva, aligned,
+                        aligned
+                            ? "raw hit begins at an instruction; operand validation is still required"
+                            : "REJECTED: raw hit is inside a decoded instruction/data fragment");
                 }
             }
         }
     }
 
-    private static bool OperandReferences(in Instruction ins, int op, ulong targetVa, uint targetRva, out string kind)
+    private static bool OperandReferences(
+        Instruction ins, int op, ulong targetVa, uint targetRva, out string kind)
     {
         kind = string.Empty;
         if (ins.GetOpKind(op) == OpKind.Memory)
@@ -361,7 +332,11 @@ internal static class OemIdentitySemanticBridgeAnalyzer
             return false;
         }
         var imm = Immediate(ins, op);
-        if (imm is not null && (imm.Value == targetVa || imm.Value == targetRva)) { kind = "immediate"; return true; }
+        if (imm is not null && (imm.Value == targetVa || imm.Value == targetRva))
+        {
+            kind = "immediate";
+            return true;
+        }
         return false;
     }
 
@@ -369,21 +344,28 @@ internal static class OemIdentitySemanticBridgeAnalyzer
     {
         var ins = item.Instruction;
         if (ins.Op0Kind is OpKind.NearBranch16 or OpKind.NearBranch32 or OpKind.NearBranch64)
-            return new OemSemanticCall(item.Rva, (long)item.Rva - product, "direct", checked((uint)ins.NearBranchTarget), null, null, null, item.Text);
+            return new OemSemanticCall(
+                item.Rva, (long)item.Rva - product, "direct",
+                checked((uint)ins.NearBranchTarget), null, null, null, item.Text);
+
         if (ins.Op0Kind == OpKind.Memory)
         {
             var address = ins.MemoryDisplacement64;
             var import = pe.Imports.FirstOrDefault(x => pe.ImageBase + x.IatRva == address);
-            return new OemSemanticCall(item.Rva, (long)item.Rva - product, "iat", null, $"0x{address:X}", import?.Dll, import?.Name, item.Text);
+            return new OemSemanticCall(
+                item.Rva, (long)item.Rva - product, "iat", null, $"0x{address:X}",
+                import?.Dll, import?.Name, item.Text);
         }
+
         return new OemSemanticCall(item.Rva, (long)item.Rva - product, "indirect", null, null, null, null, item.Text);
     }
 
     private static OemSemanticHelper TraceHelper(SemanticPe pe, uint target, uint product)
     {
         List<SemanticDecoded> decoded;
-        try { decoded = DecodeForward(pe, target, 0x700, product); }
+        try { decoded = DecodeForward(pe, target, 0x700); }
         catch { return EmptyHelper(); }
+
         var instructions = new List<OemSemanticInsn>();
         var calls = new List<OemSemanticCall>();
         var strings = new HashSet<string>(StringComparer.Ordinal);
@@ -401,18 +383,21 @@ internal static class OemIdentitySemanticBridgeAnalyzer
             if (item.Instruction.Mnemonic == Mnemonic.Ret) break;
         }
         var fingerprint = string.Join('>', instructions.Take(120).Select(x => x.Text.Split(' ', 2)[0].ToUpperInvariant()));
-        return new OemSemanticHelper(target, instructions, calls, strings.Take(40).ToArray(), members.OrderBy(x => x).ToArray(), fingerprint);
+        return new OemSemanticHelper(
+            target, instructions, calls, strings.Take(40).ToArray(),
+            members.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray(), fingerprint);
     }
 
     private static OemSemanticHelper EmptyHelper() => new(null, [], [], [], [], string.Empty);
 
-    private static IEnumerable<ulong> AddressOperands(in Instruction ins)
+    private static IEnumerable<ulong> AddressOperands(Instruction ins)
     {
         for (var op = 0; op < ins.OpCount; op++)
         {
             if (ins.GetOpKind(op) == OpKind.Memory)
             {
-                if (ins.MemoryBase == Register.None && ins.MemoryIndex == Register.None && ins.MemoryDisplacement64 != 0) yield return ins.MemoryDisplacement64;
+                if (ins.MemoryBase == Register.None && ins.MemoryIndex == Register.None && ins.MemoryDisplacement64 != 0)
+                    yield return ins.MemoryDisplacement64;
                 continue;
             }
             var imm = Immediate(ins, op);
@@ -420,7 +405,7 @@ internal static class OemIdentitySemanticBridgeAnalyzer
         }
     }
 
-    private static IEnumerable<string> MemberOffsets(in Instruction ins)
+    private static IEnumerable<string> MemberOffsets(Instruction ins)
     {
         for (var op = 0; op < ins.OpCount; op++)
         {
@@ -433,52 +418,59 @@ internal static class OemIdentitySemanticBridgeAnalyzer
     private static bool LooksCompareSymbol(string? symbol)
     {
         if (string.IsNullOrWhiteSpace(symbol)) return false;
-        var v = symbol.ToLowerInvariant();
-        return v.Contains("compare", StringComparison.Ordinal) || v.Contains("strcmp", StringComparison.Ordinal) ||
-               v.Contains("wcscmp", StringComparison.Ordinal) || v.Contains("equal", StringComparison.Ordinal) ||
-               v.Contains("operator==", StringComparison.Ordinal) || v.Contains("??8", StringComparison.Ordinal);
+        var value = symbol.ToLowerInvariant();
+        return value.Contains("compare", StringComparison.Ordinal) ||
+               value.Contains("strcmp", StringComparison.Ordinal) ||
+               value.Contains("wcscmp", StringComparison.Ordinal) ||
+               value.Contains("equal", StringComparison.Ordinal) ||
+               value.Contains("operator==", StringComparison.Ordinal) ||
+               value.Contains("??8", StringComparison.Ordinal);
     }
 
     private static string SymbolFamily(OemSemanticCall? call)
     {
         if (call?.Symbol is null) return string.Empty;
-        var v = call.Symbol.ToLowerInvariant();
-        if (v.Contains("compare", StringComparison.Ordinal)) return "compare";
-        if (v.Contains("strcmp", StringComparison.Ordinal) || v.Contains("wcscmp", StringComparison.Ordinal)) return "string-compare";
-        if (v.Contains("equal", StringComparison.Ordinal) || v.Contains("operator==", StringComparison.Ordinal) || v.Contains("??8", StringComparison.Ordinal)) return "equality";
-        return call.Symbol;
+        var value = call.Symbol.ToLowerInvariant();
+        if (value.Contains("compare", StringComparison.Ordinal)) return "compare";
+        if (value.Contains("strcmp", StringComparison.Ordinal) || value.Contains("wcscmp", StringComparison.Ordinal)) return "string-compare";
+        if (value.Contains("equal", StringComparison.Ordinal) || value.Contains("operator==", StringComparison.Ordinal) || value.Contains("??8", StringComparison.Ordinal)) return "equality";
+        return call.Dll + "!" + call.Symbol;
     }
 
     private static string Fingerprint(List<SemanticDecoded> window, uint? guard, uint? flags)
     {
-        var selected = window.Where(x => (guard is null || x.Rva >= guard.Value) && (flags is null || x.Rva <= flags.Value + 12)).Take(80);
+        var selected = window
+            .Where(x => (guard is null || x.Rva >= guard.Value) && (flags is null || x.Rva <= flags.Value + 12))
+            .Take(80);
         return string.Join('>', selected.Select(x =>
         {
             if (x.Instruction.Mnemonic == Mnemonic.Call) return "CALL";
             if (x.Instruction.FlowControl == FlowControl.ConditionalBranch) return "JCC";
             if (x.Instruction.FlowControl == FlowControl.UnconditionalBranch) return "JMP";
             var members = MemberOffsets(x.Instruction).ToArray();
-            var m = x.Instruction.Mnemonic.ToString().ToUpperInvariant();
-            return members.Length == 0 ? m : m + "(" + string.Join(',', members) + ")";
+            var mnemonic = x.Instruction.Mnemonic.ToString().ToUpperInvariant();
+            return members.Length == 0 ? mnemonic : mnemonic + "(" + string.Join(',', members) + ")";
         }));
     }
 
     private static List<SemanticDecoded> DecodeText(SemanticPe pe)
     {
         var result = new List<SemanticDecoded>();
-        foreach (var s in pe.Sections.Where(x => x.Name.Equals(".text", StringComparison.OrdinalIgnoreCase)))
+        foreach (var section in pe.Sections.Where(x => x.Name.Equals(".text", StringComparison.OrdinalIgnoreCase)))
         {
-            var size = Math.Min(s.VirtualSize == 0 ? s.RawSize : s.VirtualSize, s.RawSize);
-            result.AddRange(DecodeRange(pe, s.VirtualAddress, s.VirtualAddress + size));
+            var size = Math.Min(section.VirtualSize == 0 ? section.RawSize : section.VirtualSize, section.RawSize);
+            result.AddRange(DecodeRange(pe, section.VirtualAddress, section.VirtualAddress + size));
         }
         return result.OrderBy(x => x.Rva).ToList();
     }
 
-    private static List<SemanticDecoded> DecodeForward(SemanticPe pe, uint startRva, uint count, uint product)
+    private static List<SemanticDecoded> DecodeForward(SemanticPe pe, uint startRva, uint byteCount)
     {
-        var section = pe.SectionForRva(startRva) ?? throw new InvalidDataException($"RVA 0x{startRva:X8} outside PE sections.");
-        var sectionEnd = section.VirtualAddress + Math.Min(section.VirtualSize == 0 ? section.RawSize : section.VirtualSize, section.RawSize);
-        return DecodeRange(pe, startRva, Math.Min(sectionEnd, startRva + count));
+        var section = pe.SectionForRva(startRva)
+            ?? throw new InvalidDataException($"RVA 0x{startRva:X8} outside PE sections.");
+        var sectionEnd = section.VirtualAddress +
+                         Math.Min(section.VirtualSize == 0 ? section.RawSize : section.VirtualSize, section.RawSize);
+        return DecodeRange(pe, startRva, Math.Min(sectionEnd, startRva + byteCount));
     }
 
     private static List<SemanticDecoded> DecodeRange(SemanticPe pe, uint startRva, uint endRva)
@@ -505,8 +497,10 @@ internal static class OemIdentitySemanticBridgeAnalyzer
         return result;
     }
 
-    private static OemSemanticInsn ToOutput(SemanticDecoded x, uint product, string[] tags) => new(x.Rva, (long)x.Rva - product, x.Bytes, x.Text, tags);
-    private static ulong? Immediate(in Instruction ins, int op)
+    private static OemSemanticInsn ToOutput(SemanticDecoded x, uint product, string[] tags) =>
+        new(x.Rva, (long)x.Rva - product, x.Bytes, x.Text, tags);
+
+    private static ulong? Immediate(Instruction ins, int op)
     {
         if (op >= ins.OpCount) return null;
         return ins.GetOpKind(op) switch
@@ -522,12 +516,14 @@ internal static class OemIdentitySemanticBridgeAnalyzer
             _ => null
         };
     }
+
     private static string Hex(uint? value) => value is null ? "unresolved" : $"0x{value:X8}";
 
     private sealed record SemanticDecoded(uint Rva, string Bytes, string Text, Instruction Instruction);
     private sealed record SemanticSection(string Name, uint VirtualSize, uint VirtualAddress, uint RawSize, uint RawPointer)
     {
-        public bool Contains(uint rva) => rva >= VirtualAddress && rva < VirtualAddress + Math.Max(VirtualSize, RawSize);
+        public bool Contains(uint rva) =>
+            rva >= VirtualAddress && rva < VirtualAddress + Math.Max(VirtualSize, RawSize);
     }
     private sealed record SemanticImport(string Dll, string Name, uint IatRva);
 
@@ -540,87 +536,189 @@ internal static class OemIdentitySemanticBridgeAnalyzer
         public List<SemanticSection> Sections { get; }
         public List<SemanticImport> Imports { get; }
 
-        private SemanticPe(byte[] bytes, ushort machine, bool plus, ulong imageBase, List<SemanticSection> sections, List<SemanticImport> imports)
-        { Bytes = bytes; Machine = machine; Pe32Plus = plus; ImageBase = imageBase; Sections = sections; Imports = imports; }
+        private SemanticPe(
+            byte[] bytes, ushort machine, bool plus, ulong imageBase,
+            List<SemanticSection> sections, List<SemanticImport> imports)
+        {
+            Bytes = bytes;
+            Machine = machine;
+            Pe32Plus = plus;
+            ImageBase = imageBase;
+            Sections = sections;
+            Imports = imports;
+        }
 
         public static SemanticPe Parse(string path)
         {
             var bytes = File.ReadAllBytes(path);
-            if (bytes.Length < 0x100 || bytes[0] != (byte)'M' || bytes[1] != (byte)'Z') throw new InvalidDataException("Not a PE image.");
-            var pe = I32(bytes, 0x3C); Ensure(bytes, pe, 24);
-            if (bytes[pe] != (byte)'P' || bytes[pe + 1] != (byte)'E') throw new InvalidDataException("PE signature missing.");
-            var machine = U16(bytes, pe + 4); var count = U16(bytes, pe + 6); var optionalSize = U16(bytes, pe + 20); var optional = pe + 24;
-            var magic = U16(bytes, optional); var plus = magic == 0x20B;
-            if (!plus && magic != 0x10B) throw new InvalidDataException($"Unsupported PE magic 0x{magic:X4}.");
+            if (bytes.Length < 0x100 || bytes[0] != (byte)'M' || bytes[1] != (byte)'Z')
+                throw new InvalidDataException("Not a PE image.");
+            var pe = I32(bytes, 0x3C);
+            Ensure(bytes, pe, 24);
+            if (bytes[pe] != (byte)'P' || bytes[pe + 1] != (byte)'E')
+                throw new InvalidDataException("PE signature missing.");
+
+            var machine = U16(bytes, pe + 4);
+            var sectionCount = U16(bytes, pe + 6);
+            var optionalSize = U16(bytes, pe + 20);
+            var optional = pe + 24;
+            var magic = U16(bytes, optional);
+            var plus = magic == 0x20B;
+            if (!plus && magic != 0x10B)
+                throw new InvalidDataException($"Unsupported PE magic 0x{magic:X4}.");
             ulong imageBase = plus ? U64(bytes, optional + 24) : U32(bytes, optional + 28);
-            var table = optional + optionalSize; var sections = new List<SemanticSection>();
-            for (var i = 0; i < count; i++)
+
+            var table = optional + optionalSize;
+            var sections = new List<SemanticSection>();
+            for (var i = 0; i < sectionCount; i++)
             {
-                var off = table + i * 40; Ensure(bytes, off, 40);
-                sections.Add(new SemanticSection(Encoding.ASCII.GetString(bytes, off, 8).TrimEnd('\0'), U32(bytes, off + 8), U32(bytes, off + 12), U32(bytes, off + 16), U32(bytes, off + 20)));
+                var off = table + i * 40;
+                Ensure(bytes, off, 40);
+                sections.Add(new SemanticSection(
+                    Encoding.ASCII.GetString(bytes, off, 8).TrimEnd('\0'),
+                    U32(bytes, off + 8), U32(bytes, off + 12),
+                    U32(bytes, off + 16), U32(bytes, off + 20)));
             }
-            var temp = new SemanticPe(bytes, machine, plus, imageBase, sections, []);
-            return new SemanticPe(bytes, machine, plus, imageBase, sections, temp.ParseImports(optional));
+
+            var temporary = new SemanticPe(bytes, machine, plus, imageBase, sections, []);
+            return new SemanticPe(bytes, machine, plus, imageBase, sections, temporary.ParseImports(optional));
         }
 
         private List<SemanticImport> ParseImports(int optional)
         {
-            var data = optional + (Pe32Plus ? 112 : 96); Ensure(Bytes, data + 8, 8);
-            var importRva = U32(Bytes, data + 8); if (importRva == 0) return [];
-            var result = new List<SemanticImport>(); var descriptor = RvaToOffset(importRva);
+            var dataDirectory = optional + (Pe32Plus ? 112 : 96);
+            Ensure(Bytes, dataDirectory + 8, 8);
+            var importRva = U32(Bytes, dataDirectory + 8);
+            if (importRva == 0) return [];
+
+            var result = new List<SemanticImport>();
+            var descriptor = RvaToOffset(importRva);
             for (var d = 0; d < 512; d++, descriptor += 20)
             {
                 Ensure(Bytes, descriptor, 20);
-                var original = U32(Bytes, descriptor); var nameRva = U32(Bytes, descriptor + 12); var first = U32(Bytes, descriptor + 16);
-                if (original == 0 && nameRva == 0 && first == 0) break;
-                var dll = ReadAsciiZ(RvaToOffset(nameRva), 260); var intRva = original != 0 ? original : first; var step = Pe32Plus ? 8 : 4;
+                var originalThunk = U32(Bytes, descriptor);
+                var nameRva = U32(Bytes, descriptor + 12);
+                var firstThunk = U32(Bytes, descriptor + 16);
+                if (originalThunk == 0 && nameRva == 0 && firstThunk == 0) break;
+
+                var dll = ReadAsciiZ(RvaToOffset(nameRva), 260);
+                var lookupRva = originalThunk != 0 ? originalThunk : firstThunk;
+                var step = Pe32Plus ? 8 : 4;
                 for (var index = 0; index < 4096; index++)
                 {
-                    var thunkOff = RvaToOffset(intRva + checked((uint)(index * step))); ulong thunk = Pe32Plus ? U64(Bytes, thunkOff) : U32(Bytes, thunkOff);
+                    var thunkOff = RvaToOffset(lookupRva + checked((uint)(index * step)));
+                    ulong thunk = Pe32Plus ? U64(Bytes, thunkOff) : U32(Bytes, thunkOff);
                     if (thunk == 0) break;
-                    var flag = Pe32Plus ? 0x8000000000000000UL : 0x80000000UL;
+                    var ordinalFlag = Pe32Plus ? 0x8000000000000000UL : 0x80000000UL;
                     string name;
-                    if ((thunk & flag) != 0) name = "#" + (thunk & 0xFFFF);
-                    else { var byName = RvaToOffset(checked((uint)thunk)); name = ReadAsciiZ(byName + 2, 512); }
-                    result.Add(new SemanticImport(dll, name, first + checked((uint)(index * step))));
+                    if ((thunk & ordinalFlag) != 0)
+                        name = "#" + (thunk & 0xFFFF);
+                    else
+                    {
+                        var byName = RvaToOffset(checked((uint)thunk));
+                        name = ReadAsciiZ(byName + 2, 512);
+                    }
+                    result.Add(new SemanticImport(
+                        dll, name, firstThunk + checked((uint)(index * step))));
                 }
             }
             return result;
         }
 
-        public SemanticSection? SectionForRva(uint rva) => Sections.FirstOrDefault(s => s.Contains(rva));
+        public SemanticSection? SectionForRva(uint rva) => Sections.FirstOrDefault(x => x.Contains(rva));
+
         public int RvaToOffset(uint rva)
         {
-            var s = SectionForRva(rva) ?? throw new InvalidDataException($"RVA 0x{rva:X8} outside sections.");
-            var off = checked((int)(s.RawPointer + rva - s.VirtualAddress)); Ensure(Bytes, off, 1); return off;
+            var section = SectionForRva(rva)
+                ?? throw new InvalidDataException($"RVA 0x{rva:X8} outside sections.");
+            var raw = checked(section.RawPointer + (rva - section.VirtualAddress));
+            var off = checked((int)raw);
+            Ensure(Bytes, off, 1);
+            return off;
         }
+
         public string? TryReadString(ulong address)
         {
             uint rva;
-            if (address >= ImageBase && address - ImageBase <= uint.MaxValue) rva = checked((uint)(address - ImageBase));
-            else if (address <= uint.MaxValue) rva = checked((uint)address); else return null;
-            var section = SectionForRva(rva); if (section is null || section.Name.Equals(".text", StringComparison.OrdinalIgnoreCase)) return null;
-            int off; try { off = RvaToOffset(rva); } catch { return null; }
-            var ascii = ReadAsciiZ(off, 120); if (Readable(ascii)) return ascii;
-            var unicode = ReadUnicodeZ(off, 120); return Readable(unicode) ? unicode : null;
+            if (address >= ImageBase && address - ImageBase <= uint.MaxValue)
+                rva = checked((uint)(address - ImageBase));
+            else if (address <= uint.MaxValue)
+                rva = checked((uint)address);
+            else
+                return null;
+
+            var section = SectionForRva(rva);
+            if (section is null || section.Name.Equals(".text", StringComparison.OrdinalIgnoreCase)) return null;
+            int off;
+            try { off = RvaToOffset(rva); }
+            catch { return null; }
+
+            var ascii = ReadAsciiZ(off, 120);
+            if (Readable(ascii)) return ascii;
+            var unicode = ReadUnicodeZ(off, 120);
+            return Readable(unicode) ? unicode : null;
         }
+
         private string ReadAsciiZ(int off, int max)
-        { var end = Math.Min(Bytes.Length, off + max); var len = 0; while (off + len < end && Bytes[off + len] != 0) len++; return len == 0 ? string.Empty : Encoding.ASCII.GetString(Bytes, off, len); }
+        {
+            var end = Math.Min(Bytes.Length, off + max);
+            var length = 0;
+            while (off + length < end && Bytes[off + length] != 0) length++;
+            return length == 0 ? string.Empty : Encoding.ASCII.GetString(Bytes, off, length);
+        }
+
         private string ReadUnicodeZ(int off, int max)
-        { var chars = new List<char>(); for (var i = 0; i < max && off + i * 2 + 1 < Bytes.Length; i++) { var v = U16(Bytes, off + i * 2); if (v == 0) break; chars.Add((char)v); } return new string(chars.ToArray()); }
-        private static bool Readable(string value) => value.Length is >= 1 and <= 120 && value.Count(c => !char.IsControl(c)) >= Math.Max(1, value.Length * 3 / 4);
+        {
+            var chars = new List<char>();
+            for (var i = 0; i < max && off + i * 2 + 1 < Bytes.Length; i++)
+            {
+                var value = U16(Bytes, off + i * 2);
+                if (value == 0) break;
+                chars.Add((char)value);
+            }
+            return new string(chars.ToArray());
+        }
+
+        private static bool Readable(string value) =>
+            value.Length is >= 1 and <= 120 &&
+            value.Count(c => !char.IsControl(c)) >= Math.Max(1, value.Length * 3 / 4);
     }
 
     private sealed class SemanticFormatterOutput : FormatterOutput
     {
-        private readonly StringBuilder _sb = new();
-        public override void Write(string text, FormatterTextKind kind) => _sb.Append(text);
-        public string Take() { var value = _sb.ToString(); _sb.Clear(); return value; }
+        private readonly StringBuilder _buffer = new();
+        public override void Write(string text, FormatterTextKind kind) => _buffer.Append(text);
+        public string Take()
+        {
+            var value = _buffer.ToString();
+            _buffer.Clear();
+            return value;
+        }
     }
 
-    private static ushort U16(byte[] b, int o) { Ensure(b, o, 2); return BinaryPrimitives.ReadUInt16LittleEndian(b.AsSpan(o, 2)); }
-    private static uint U32(byte[] b, int o) { Ensure(b, o, 4); return BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan(o, 4)); }
-    private static ulong U64(byte[] b, int o) { Ensure(b, o, 8); return BinaryPrimitives.ReadUInt64LittleEndian(b.AsSpan(o, 8)); }
-    private static int I32(byte[] b, int o) { Ensure(b, o, 4); return BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(o, 4)); }
-    private static void Ensure(byte[] b, int o, int n) { if (o < 0 || n < 0 || o + n > b.Length) throw new InvalidDataException("PE range outside file."); }
+    private static ushort U16(byte[] bytes, int offset)
+    {
+        Ensure(bytes, offset, 2);
+        return BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset, 2));
+    }
+    private static uint U32(byte[] bytes, int offset)
+    {
+        Ensure(bytes, offset, 4);
+        return BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset, 4));
+    }
+    private static ulong U64(byte[] bytes, int offset)
+    {
+        Ensure(bytes, offset, 8);
+        return BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(offset, 8));
+    }
+    private static int I32(byte[] bytes, int offset)
+    {
+        Ensure(bytes, offset, 4);
+        return BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset, 4));
+    }
+    private static void Ensure(byte[] bytes, int offset, int count)
+    {
+        if (offset < 0 || count < 0 || offset + count > bytes.Length)
+            throw new InvalidDataException("PE range outside file.");
+    }
 }
