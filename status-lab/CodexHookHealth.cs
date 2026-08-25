@@ -16,8 +16,8 @@ internal static class CodexHookHealth
 
     public static CodexHookHealthSnapshot Inspect()
     {
-        var homes = DetectHomes().ToArray();
-        if (homes.Length == 0)
+        var homes = DetectHomes();
+        if (homes.Count == 0)
             return new("Не установлены", 0, 0, "Codex home не найден");
 
         var healthy = 0;
@@ -51,40 +51,45 @@ internal static class CodexHookHealth
             }
         }
 
-        var status = healthy == homes.Length ? "Установлены · актуальны" : healthy == 0 ? "Нужно установить / обновить" : "Частично актуальны";
-        return new(status, homes.Length, healthy, string.Join(" · ", details));
+        var status = healthy == homes.Count ? "Установлены · актуальны" : healthy == 0 ? "Нужно установить / обновить" : "Частично актуальны";
+        return new(status, homes.Count, healthy, string.Join(" · ", details));
     }
 
-    private static IEnumerable<string> DetectHomes()
+    private static List<string> DetectHomes()
     {
+        var result = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var explicitHome = Environment.GetEnvironmentVariable("CODEX_HOME");
-        if (!string.IsNullOrWhiteSpace(explicitHome))
+
+        void AddIfPresent(string? value)
         {
-            var full = Path.GetFullPath(Environment.ExpandEnvironmentVariables(explicitHome));
-            if (Directory.Exists(full) && seen.Add(full))
-                yield return full;
+            if (string.IsNullOrWhiteSpace(value))
+                return;
+            try
+            {
+                var full = Path.GetFullPath(Environment.ExpandEnvironmentVariables(value));
+                if (Directory.Exists(full) && seen.Add(full))
+                    result.Add(full);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+            }
         }
 
+        AddIfPresent(Environment.GetEnvironmentVariable("CODEX_HOME"));
         var user = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        foreach (var name in new[] { ".codex-agentloop", ".codex" })
-        {
-            var path = Path.Combine(user, name);
-            if (Directory.Exists(path) && seen.Add(path))
-                yield return path;
-        }
+        AddIfPresent(Path.Combine(user, ".codex-agentloop"));
+        AddIfPresent(Path.Combine(user, ".codex"));
 
         try
         {
             foreach (var path in Directory.EnumerateDirectories(user, ".codex-*", SearchOption.TopDirectoryOnly))
-            {
-                if (seen.Add(path))
-                    yield return path;
-            }
+                AddIfPresent(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
         }
+
+        return result;
     }
 
     private static bool HasStatusLabHandler(JsonElement root, string eventName)
