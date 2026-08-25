@@ -33,7 +33,7 @@ if ($trayText -notmatch 'StatusTrayIpc\.RunServerAsync' -or $trayText -notmatch 
 if ($trayText -match 'new\s+ControlCenterForm') {
     throw 'Status Tray must not instantiate Control Center in-process.'
 }
-if ($controlText -notmatch 'StatusTrayIpc\.SendAsync' -or $controlText -notmatch 'Status Tray: подключён' -or $controlText -notmatch 'FormatElapsed') {
+if ($controlText -notmatch 'StatusTrayIpc\.SendAsync' -or $controlText -notmatch 'ApplySnapshot' -or $controlText -notmatch 'FormatElapsed') {
     throw 'Standalone Control Center must use tray IPC and expose live state/elapsed time.'
 }
 if ($controlText -match 'K15RgbCanary|K15HidProtocol|HidD_SetFeature|ApplyEffect|SelectActiveSlot') {
