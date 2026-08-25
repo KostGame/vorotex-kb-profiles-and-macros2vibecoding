@@ -122,7 +122,7 @@ internal sealed class NotificationLearningLabForm : Form
         panel.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "Windows Notification Learning Lab\nЖивые toast-данные хранятся только в RAM. Scheduler показывает будущую overlay-очередь; Rule Designer настраивает и сохраняет правила явно.",
+            Text = "Windows Notification Learning Lab\nЖивые toast-данные хранятся только в RAM. Scheduler показывает будущую overlay-очередь; Rule Designer настраивает правила, Rules Manager ими управляет.",
             Font = new Font(Font, FontStyle.Bold),
             ForeColor = ForeColor,
             Margin = new Padding(0, 0, 12, 0)
@@ -130,6 +130,7 @@ internal sealed class NotificationLearningLabForm : Form
 
         var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
         buttons.Controls.Add(Button("Reload rules", (_, _) => ReloadRules(showMessage: true)));
+        buttons.Controls.Add(Button("Manage rules…", (_, _) => OpenRulesManager()));
         buttons.Controls.Add(Button("Open notifications.toml", (_, _) => OpenRulesFile()));
         buttons.Controls.Add(Button("Restore rules backup…", (_, _) => RestoreRulesBackup()));
         buttons.Controls.Add(Button("Clear RAM", (_, _) => ClearLearningBuffer()));
@@ -328,7 +329,7 @@ internal sealed class NotificationLearningLabForm : Form
         panel.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "M4b rules UI · scheduler simulation · no keyboard rendering",
+            Text = "M5 rules manager · scheduler simulation · no keyboard rendering",
             ForeColor = Color.FromArgb(120, 132, 150)
         }, 1, 0);
         return panel;
@@ -481,6 +482,17 @@ internal sealed class NotificationLearningLabForm : Form
         {
             ReloadRules(showMessage: false);
             _status.Text = "Notification rule saved · rules reloaded";
+        }
+    }
+
+    private void OpenRulesManager()
+    {
+        using var manager = new NotificationRulesManagerForm();
+        manager.ShowDialog(this);
+        if (manager.RulesChanged)
+        {
+            ReloadRules(showMessage: false);
+            _status.Text = "Notification rules changed · Learning Lab reloaded them";
         }
     }
 
