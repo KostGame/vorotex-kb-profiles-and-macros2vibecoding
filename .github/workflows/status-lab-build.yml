@@ -47,6 +47,10 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/vendor-static-smoke.ps1
 
+      - name: Keyboard Sleep UI Trace read-only safety tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/keyboard-sleep-ui-trace-smoke.ps1
+
       - name: State reducer and RGB protocol smoke tests
         run: dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
 
