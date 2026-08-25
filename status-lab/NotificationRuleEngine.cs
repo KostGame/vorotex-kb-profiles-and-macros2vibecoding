@@ -71,6 +71,7 @@ internal sealed record NotificationOverlayIntent(
     NotificationBehavior Behavior,
     WindowsNotificationChangeKind ChangeKind,
     bool Dismiss,
+    double MaxDurationSeconds,
     NotificationVisualConfig Display,
     DateTimeOffset SourceCreatedUtc);
 
@@ -112,6 +113,7 @@ internal sealed class NotificationRuleEngine
             rule.Behavior,
             observation.ChangeKind,
             observation.ChangeKind == WindowsNotificationChangeKind.Removed,
+            rule.MaxDurationSeconds,
             CloneDisplay(rule.Display),
             observation.CreationTime.ToUniversalTime());
     }
