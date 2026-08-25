@@ -5,7 +5,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Vorotex.K15.StatusLab</AssemblyName>
+    <AssemblyName>Vorotex.K15.StatusTray</AssemblyName>
     <RootNamespace>Vorotex.K15.StatusLab</RootNamespace>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
@@ -18,14 +18,23 @@
     <Compile Remove="lighting-lab\**\*.cs" />
     <Compile Remove="sleep-sweep\**\*.cs" />
     <Compile Remove="vendor-static-lab\**\*.cs" />
+    <Compile Remove="control-center\**\*.cs" />
+    <Compile Remove="hid-research-lab\**\*.cs" />
+    <Compile Remove="StatusLabApplicationContext.cs" />
+    <Compile Remove="ControlCenterForm.cs" />
+    <Compile Remove="DeviceSettingsResearch.cs" />
     <EmbeddedResource Remove="tests\**\*" />
     <EmbeddedResource Remove="lighting-lab\**\*" />
     <EmbeddedResource Remove="sleep-sweep\**\*" />
     <EmbeddedResource Remove="vendor-static-lab\**\*" />
+    <EmbeddedResource Remove="control-center\**\*" />
+    <EmbeddedResource Remove="hid-research-lab\**\*" />
     <None Remove="tests\**\*" />
     <None Remove="lighting-lab\**\*" />
     <None Remove="sleep-sweep\**\*" />
     <None Remove="vendor-static-lab\**\*" />
+    <None Remove="control-center\**\*" />
+    <None Remove="hid-research-lab\**\*" />
   </ItemGroup>
 
   <ItemGroup>
