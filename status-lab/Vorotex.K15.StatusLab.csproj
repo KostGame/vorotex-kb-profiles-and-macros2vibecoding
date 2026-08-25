@@ -17,12 +17,15 @@
     <Compile Remove="tests\**\*.cs" />
     <Compile Remove="lighting-lab\**\*.cs" />
     <Compile Remove="sleep-sweep\**\*.cs" />
+    <Compile Remove="vendor-static-lab\**\*.cs" />
     <EmbeddedResource Remove="tests\**\*" />
     <EmbeddedResource Remove="lighting-lab\**\*" />
     <EmbeddedResource Remove="sleep-sweep\**\*" />
+    <EmbeddedResource Remove="vendor-static-lab\**\*" />
     <None Remove="tests\**\*" />
     <None Remove="lighting-lab\**\*" />
     <None Remove="sleep-sweep\**\*" />
+    <None Remove="vendor-static-lab\**\*" />
   </ItemGroup>
 
   <ItemGroup>
