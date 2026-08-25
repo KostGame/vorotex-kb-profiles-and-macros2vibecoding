@@ -72,4 +72,8 @@ if (($captureText -match 'GetWindowText\(') -and ($captureText -notmatch 'TitleS
     throw 'Foreground title may only be persisted as hash/length metadata.'
 }
 
+if (($captureText -notmatch 'currentSection') -or ($captureText -notmatch '\{currentSection\}\.\{key\}')) {
+    throw 'Safe Set.ini capture must preserve section-qualified keys so root.SleepTime and Reset.SleepTime cannot collapse.'
+}
+
 Write-Output 'Keyboard Sleep UI Trace owner-capture read-only safety gates: PASS'
