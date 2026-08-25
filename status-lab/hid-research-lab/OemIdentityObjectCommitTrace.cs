@@ -712,7 +712,7 @@ internal static class OemIdentityObjectCommitAnalyzer
         var formatter = new IntelFormatter();
         var output = new CommitFormatterOutput();
         var result = new List<Decoded>();
-        while (decoder.CanDecode && decoder.IP < endRva && result.Count < 250000)
+        while (decoder.IP < endRva && result.Count < 250000)
         {
             decoder.Decode(out var ins);
             if (ins.Code == Code.INVALID || ins.Length == 0) break;
