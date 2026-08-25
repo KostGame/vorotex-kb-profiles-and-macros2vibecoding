@@ -17,7 +17,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private long _readOffset;
     private string _tailRemainder = string.Empty;
 
-    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 15)
+    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 30)
     {
         _reducer = new StateReducer(doneAttentionTimeoutSeconds);
     }
@@ -129,87 +129,60 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         {
             _readOffset = 0;
             _tailRemainder = string.Empty;
-            _pending.Clear();
         }
-
-        if (length <= _readOffset)
+        if (length == _readOffset)
             return;
 
-        byte[] delta;
+        string appended;
         try
         {
-            using var stream = new FileStream(
-                EventJournal.FilePath,
-                FileMode.Open,
-                FileAccess.Read,
+            using var stream = new FileStream(EventJournal.FilePath, FileMode.Open, FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length < _readOffset)
-            {
+            if (_readOffset > stream.Length)
                 _readOffset = 0;
-                _tailRemainder = string.Empty;
-            }
-
             stream.Seek(_readOffset, SeekOrigin.Begin);
-            var remaining = checked((int)(stream.Length - _readOffset));
-            delta = new byte[remaining];
-            var total = 0;
-            while (total < delta.Length)
-            {
-                var read = stream.Read(delta, total, delta.Length - total);
-                if (read == 0)
-                    break;
-                total += read;
-            }
-
-            if (total != delta.Length)
-                Array.Resize(ref delta, total);
+            using var reader = new StreamReader(stream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: true,
+                bufferSize: 4096, leaveOpen: true);
+            appended = reader.ReadToEnd();
             _readOffset = stream.Position;
         }
-        catch (IOException)
-        {
-            return;
-        }
-        catch (UnauthorizedAccessException)
+        catch
         {
             return;
         }
 
-        if (delta.Length == 0)
+        if (appended.Length == 0)
             return;
 
-        var text = _tailRemainder + Encoding.UTF8.GetString(delta);
-        var lines = text.Split('\n');
-        var completeCount = lines.Length - 1;
-        for (var index = 0; index < completeCount; index++)
+        var combined = _tailRemainder + appended;
+        var lines = combined.Split('\n');
+        _tailRemainder = combined.EndsWith('\n') ? string.Empty : lines[^1];
+        var count = combined.EndsWith('\n') ? lines.Length : lines.Length - 1;
+        for (var index = 0; index < count; index++)
         {
             var input = ParseInput(lines[index].TrimEnd('\r'));
             if (input is not null)
                 _pending.Add(input);
         }
-
-        _tailRemainder = text.EndsWith('\n') ? string.Empty : lines[^1];
     }
 
-    private void FlushReadyEvents(DateTimeOffset watermark)
+    private void FlushReadyEvents(DateTimeOffset thresholdUtc)
     {
         if (_pending.Count == 0)
             return;
 
-        _pending.Sort(static (left, right) => left.TimestampUtc.CompareTo(right.TimestampUtc));
+        _pending.Sort((left, right) => left.TimestampUtc.CompareTo(right.TimestampUtc));
+        var ready = _pending.TakeWhile(input => input.TimestampUtc <= thresholdUtc).ToArray();
+        if (ready.Length == 0)
+            return;
+        _pending.RemoveRange(0, ready.Length);
 
-        var readyCount = 0;
-        while (readyCount < _pending.Count && _pending[readyCount].TimestampUtc <= watermark)
-            readyCount++;
-
-        for (var index = 0; index < readyCount; index++)
+        foreach (var input in ready)
         {
-            var transition = _reducer.Apply(_pending[index]);
+            var transition = _reducer.Apply(input);
             if (transition is not null)
                 PublishTransition(transition);
         }
-
-        if (readyCount > 0)
-            _pending.RemoveRange(0, readyCount);
     }
 
     private void PublishTransition(StateTransition transition)
@@ -222,16 +195,14 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             previous = ToWireName(transition.Previous),
             current = ToWireName(transition.Current),
             reason = transition.Reason,
-            sourceTimestampUtc = transition.TimestampUtc,
             focusedSessionId = _reducer.FocusedSessionId,
             focusedCwd = _reducer.FocusedCwd,
-            activeTaskSessions = _reducer.ActiveTaskSessionCount
+            sourceTimestampUtc = transition.TimestampUtc
         });
-
         StateChanged?.Invoke(transition.Current, transition);
     }
 
-    internal static StatusInputEvent? ParseInput(string line)
+    private static StatusInputEvent? ParseInput(string line)
     {
         if (string.IsNullOrWhiteSpace(line))
             return null;
@@ -240,41 +211,35 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         {
             using var document = JsonDocument.Parse(line);
             var root = document.RootElement;
+            if (!root.TryGetProperty("source", out var sourceNode) ||
+                !root.TryGetProperty("event", out var eventNode) ||
+                !root.TryGetProperty("timestampUtc", out var timestampNode) ||
+                !DateTimeOffset.TryParse(timestampNode.GetString(), out var timestamp))
+            {
+                return null;
+            }
 
-            var source = GetString(root, "source");
+            var source = sourceNode.GetString() ?? string.Empty;
+            var eventName = eventNode.GetString() ?? string.Empty;
             if (source is not ("codex_hook" or "windows_notification"))
                 return null;
 
-            var eventName = GetString(root, "event");
-            var timestampText = GetString(root, "timestampUtc");
-            if (string.IsNullOrWhiteSpace(eventName) ||
-                !DateTimeOffset.TryParse(timestampText, out var timestampUtc))
-                return null;
-
             uint? notificationId = null;
-            if (root.TryGetProperty("notificationId", out var idNode) &&
-                idNode.ValueKind == JsonValueKind.Number &&
-                idNode.TryGetUInt32(out var parsedId))
-            {
-                notificationId = parsedId;
-            }
-
-            var packageFamilyName = GetString(root, "packageFamilyName");
-            var errorHint = root.TryGetProperty("errorHint", out var errorNode) &&
-                errorNode.ValueKind is JsonValueKind.True;
+            if (root.TryGetProperty("notificationId", out var notificationNode) && notificationNode.TryGetUInt32(out var id))
+                notificationId = id;
 
             return new StatusInputEvent(
-                timestampUtc.ToUniversalTime(),
+                timestamp.ToUniversalTime(),
                 source,
                 eventName,
                 notificationId,
-                packageFamilyName,
-                errorHint,
-                GetString(root, "sessionId"),
-                GetString(root, "turnId"),
-                GetString(root, "cwd"));
+                root.TryGetProperty("packageFamilyName", out var packageNode) ? packageNode.GetString() ?? string.Empty : string.Empty,
+                root.TryGetProperty("errorHint", out var errorNode) && errorNode.ValueKind == JsonValueKind.True,
+                root.TryGetProperty("sessionId", out var sessionNode) ? sessionNode.GetString() ?? string.Empty : string.Empty,
+                root.TryGetProperty("turnId", out var turnNode) ? turnNode.GetString() ?? string.Empty : string.Empty,
+                root.TryGetProperty("cwd", out var cwdNode) ? cwdNode.GetString() ?? string.Empty : string.Empty);
         }
-        catch (JsonException)
+        catch
         {
             return null;
         }
@@ -282,59 +247,32 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 
     private static string[] SafeReadReplayLines()
     {
-        var lines = new List<string>();
-        foreach (var path in new[] { EventJournal.ArchivePath(1), EventJournal.FilePath })
+        try
         {
-            try
-            {
-                if (File.Exists(path))
-                    lines.AddRange(File.ReadLines(path));
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
+            return File.ReadLines(EventJournal.FilePath)
+                .TakeLast(StartupReplayMaxLines)
+                .ToArray();
         }
-
-        return lines.Count <= StartupReplayMaxLines
-            ? lines.ToArray()
-            : lines.Skip(lines.Count - StartupReplayMaxLines).ToArray();
+        catch
+        {
+            return [];
+        }
     }
 
     private static long SafeCurrentLength()
     {
-        try
-        {
-            return File.Exists(EventJournal.FilePath) ? new FileInfo(EventJournal.FilePath).Length : 0;
-        }
-        catch (IOException)
-        {
-            return 0;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return 0;
-        }
+        try { return new FileInfo(EventJournal.FilePath).Length; }
+        catch { return 0; }
     }
 
-    private static string GetString(JsonElement root, string name)
-    {
-        if (!root.TryGetProperty(name, out var node) || node.ValueKind != JsonValueKind.String)
-            return string.Empty;
-
-        return node.GetString() ?? string.Empty;
-    }
-
-    internal static string ToWireName(K15NormalizedState state) => state switch
+    public static string ToWireName(K15NormalizedState state) => state switch
     {
         K15NormalizedState.Normal => "NORMAL",
         K15NormalizedState.Running => "RUNNING",
         K15NormalizedState.Waiting => "WAITING",
         K15NormalizedState.DonePendingAttention => "DONE_PENDING_ATTENTION",
         K15NormalizedState.Error => "ERROR",
-        _ => "UNKNOWN"
+        _ => state.ToString().ToUpperInvariant()
     };
 
     public async ValueTask DisposeAsync()
@@ -342,15 +280,9 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         _cts.Cancel();
         if (_loopTask is not null)
         {
-            try
-            {
-                await _loopTask;
-            }
-            catch (OperationCanceledException)
-            {
-            }
+            try { await _loopTask; }
+            catch (OperationCanceledException) { }
         }
-
         _cts.Dispose();
     }
 }
