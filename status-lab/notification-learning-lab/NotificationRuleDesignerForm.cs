@@ -20,6 +20,7 @@ internal sealed class NotificationRuleDesignerForm : Form
     private readonly TextBox _preview = new();
     private readonly Label _validation = new();
     private readonly Button _copy = new();
+    private readonly Button _save = new();
 
     public NotificationRuleDesignerForm(WindowsNotificationObservation observation, bool includeTitleCondition)
     {
@@ -76,6 +77,13 @@ internal sealed class NotificationRuleDesignerForm : Form
         StyleButton(_copy);
         _copy.Click += (_, _) => CopyPreview();
         buttons.Controls.Add(_copy);
+
+        _save.Text = "Save rule…";
+        _save.AutoSize = true;
+        StyleButton(_save);
+        _save.Click += (_, _) => SaveRule();
+        buttons.Controls.Add(_save);
+
         var close = new Button { Text = "Close", AutoSize = true };
         StyleButton(close);
         close.Click += (_, _) => Close();
@@ -135,15 +143,16 @@ internal sealed class NotificationRuleDesignerForm : Form
         panel.SetColumnSpan(_includeTitle, 2);
         row++;
 
-        panel.Controls.Add(new Label
+        var note = new Label
         {
             AutoSize = true,
             MaximumSize = new Size(340, 0),
-            Text = "Body text is never inserted by this designer. The dialog only generates a draft and never writes notifications.toml.",
+            Text = "Body text is never inserted by this designer. Save is always explicit: before notifications.toml changes, the current file is copied to notifications.toml.bak.",
             ForeColor = Color.FromArgb(145, 158, 180),
             Margin = new Padding(4, 14, 4, 4)
-        }, 0, row);
-        panel.SetColumnSpan(panel.GetControlFromPosition(0, row)!, 2);
+        };
+        panel.Controls.Add(note, 0, row);
+        panel.SetColumnSpan(note, 2);
         return panel;
     }
 
@@ -221,32 +230,34 @@ internal sealed class NotificationRuleDesignerForm : Form
         _includeTitle.CheckedChanged += (_, _) => RefreshPreview();
     }
 
+    private NotificationRuleDraftOptions ReadOptions() => new()
+    {
+        RuleId = _ruleId.Text,
+        IncludeTitleCondition = _includeTitle.Checked,
+        Priority = _priority.SelectedItem is NotificationPriority priority ? priority : NotificationPriority.Normal,
+        Behavior = _behavior.SelectedItem is NotificationBehavior behavior ? behavior : NotificationBehavior.Pulse,
+        MaxDurationSeconds = (double)_maxDuration.Value,
+        Display = new NotificationVisualConfig
+        {
+            Effect = _effect.SelectedItem?.ToString() ?? "single_color_breathing",
+            ColorMode = _colorMode.SelectedItem is NotificationColorMode colorMode ? colorMode : NotificationColorMode.Custom,
+            Color = _color.Text.Trim(),
+            Brightness = (int)_brightness.Value,
+            Speed = (int)_speed.Value,
+            Direction = (int)_direction.Value,
+            DurationSeconds = (double)_duration.Value
+        }
+    };
+
     private void RefreshPreview()
     {
         try
         {
-            var options = new NotificationRuleDraftOptions
-            {
-                RuleId = _ruleId.Text,
-                IncludeTitleCondition = _includeTitle.Checked,
-                Priority = _priority.SelectedItem is NotificationPriority priority ? priority : NotificationPriority.Normal,
-                Behavior = _behavior.SelectedItem is NotificationBehavior behavior ? behavior : NotificationBehavior.Pulse,
-                MaxDurationSeconds = (double)_maxDuration.Value,
-                Display = new NotificationVisualConfig
-                {
-                    Effect = _effect.SelectedItem?.ToString() ?? "single_color_breathing",
-                    ColorMode = _colorMode.SelectedItem is NotificationColorMode colorMode ? colorMode : NotificationColorMode.Custom,
-                    Color = _color.Text.Trim(),
-                    Brightness = (int)_brightness.Value,
-                    Speed = (int)_speed.Value,
-                    Direction = (int)_direction.Value,
-                    DurationSeconds = (double)_duration.Value
-                }
-            };
-            _preview.Text = NotificationRuleDraftBuilder.Build(_observation, options);
-            _validation.Text = "Draft valid · ready to copy";
+            _preview.Text = NotificationRuleDraftBuilder.Build(_observation, ReadOptions());
+            _validation.Text = "Draft valid · ready to copy or save";
             _validation.ForeColor = Color.FromArgb(174, 220, 174);
             _copy.Enabled = true;
+            _save.Enabled = true;
         }
         catch (Exception ex)
         {
@@ -254,6 +265,7 @@ internal sealed class NotificationRuleDesignerForm : Form
             _validation.Text = "Draft invalid";
             _validation.ForeColor = Color.FromArgb(255, 150, 145);
             _copy.Enabled = false;
+            _save.Enabled = false;
         }
     }
 
@@ -279,6 +291,45 @@ internal sealed class NotificationRuleDesignerForm : Form
             return;
         Clipboard.SetText(_preview.Text);
         _validation.Text = "Copied to clipboard · notifications.toml unchanged";
+    }
+
+    private void SaveRule()
+    {
+        if (!_save.Enabled)
+            return;
+
+        NotificationRule rule;
+        try
+        {
+            rule = NotificationRuleDraftBuilder.CreateRule(_observation, ReadOptions());
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Invalid notification rule", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var confirmation = MessageBox.Show(this,
+            $"Add rule '{rule.Id}' to notifications.toml?\r\n\r\nA backup of the current file will be written to:\r\n{NotificationRulesStore.BackupPath}",
+            "Save notification rule",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2);
+        if (confirmation != DialogResult.Yes)
+            return;
+
+        try
+        {
+            NotificationRulesStore.AddRule(rule);
+            _validation.Text = $"Saved '{rule.Id}' · backup created";
+            _validation.ForeColor = Color.FromArgb(174, 220, 174);
+            DialogResult = DialogResult.OK;
+            Close();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "notifications.toml was not changed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private static void ConfigureNumeric(NumericUpDown control, decimal min, decimal max, decimal value, int decimals)
