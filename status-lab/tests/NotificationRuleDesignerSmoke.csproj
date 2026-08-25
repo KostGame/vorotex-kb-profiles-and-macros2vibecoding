@@ -13,6 +13,7 @@
     <Compile Include="..\NotificationRuleEngine.cs" Link="NotificationRuleEngine.cs" />
     <Compile Include="..\NotificationRulesConfig.cs" Link="NotificationRulesConfig.cs" />
     <Compile Include="..\NotificationRuleDraftBuilder.cs" Link="NotificationRuleDraftBuilder.cs" />
+    <Compile Include="..\NotificationRulesStore.cs" Link="NotificationRulesStore.cs" />
     <Compile Include="..\EventJournal.cs" Link="EventJournal.cs" />
   </ItemGroup>
 </Project>
