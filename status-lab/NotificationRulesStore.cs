@@ -10,29 +10,73 @@ internal static class NotificationRulesStore
     public static void AddRule(NotificationRule rule) =>
         AddRuleToFile(NotificationRulesConfig.FilePath, rule);
 
+    public static void SetRuleEnabled(string ruleId, bool enabled) =>
+        SetRuleEnabledForFile(NotificationRulesConfig.FilePath, ruleId, enabled);
+
+    public static void DeleteRule(string ruleId) =>
+        DeleteRuleFromFile(NotificationRulesConfig.FilePath, ruleId);
+
     public static void RestoreBackup() =>
         RestoreBackupForFile(NotificationRulesConfig.FilePath);
 
-    internal static void AddRuleToFile(string filePath, NotificationRule rule)
+    internal static NotificationRulesConfig LoadFromFile(string filePath)
     {
-        ArgumentNullException.ThrowIfNull(rule);
         EnsureConfigExists(filePath);
-
-        NotificationRulesConfig config;
         try
         {
-            config = NotificationRulesToml.Parse(File.ReadAllText(filePath, Encoding.UTF8));
+            return NotificationRulesToml.Parse(File.ReadAllText(filePath, Encoding.UTF8));
         }
         catch (Exception ex)
         {
             throw new InvalidDataException(
-                "notifications.toml is invalid; refusing to overwrite it. Fix or restore the file first.", ex);
+                "notifications.toml is invalid; refusing to mutate it. Fix or restore the file first.", ex);
         }
+    }
+
+    internal static void AddRuleToFile(string filePath, NotificationRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        var config = LoadFromFile(filePath);
 
         if (config.Rules.Any(existing => string.Equals(existing.Id, rule.Id, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidDataException($"Rule id '{rule.Id}' already exists. Choose another id or edit the existing rule.");
 
         config.Rules.Add(CloneRule(rule));
+        config.Validate();
+        WriteValidated(filePath, config, createBackup: true);
+    }
+
+    internal static void SetRuleEnabledForFile(string filePath, string ruleId, bool enabled)
+    {
+        if (string.IsNullOrWhiteSpace(ruleId))
+            throw new ArgumentException("Rule id is required.", nameof(ruleId));
+
+        var config = LoadFromFile(filePath);
+        var rule = config.Rules.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, ruleId, StringComparison.OrdinalIgnoreCase));
+        if (rule is null)
+            throw new InvalidDataException($"Rule id '{ruleId}' was not found.");
+
+        if (rule.Enabled == enabled)
+            return;
+
+        rule.Enabled = enabled;
+        config.Validate();
+        WriteValidated(filePath, config, createBackup: true);
+    }
+
+    internal static void DeleteRuleFromFile(string filePath, string ruleId)
+    {
+        if (string.IsNullOrWhiteSpace(ruleId))
+            throw new ArgumentException("Rule id is required.", nameof(ruleId));
+
+        var config = LoadFromFile(filePath);
+        var index = config.Rules.FindIndex(candidate =>
+            string.Equals(candidate.Id, ruleId, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+            throw new InvalidDataException($"Rule id '{ruleId}' was not found.");
+
+        config.Rules.RemoveAt(index);
         config.Validate();
         WriteValidated(filePath, config, createBackup: true);
     }
@@ -59,9 +103,11 @@ internal static class NotificationRulesStore
     {
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
         if (!File.Exists(filePath))
+        {
             File.WriteAllText(filePath,
                 NotificationRulesToml.Serialize(NotificationRulesConfig.CreateDefault()),
                 new UTF8Encoding(false));
+        }
     }
 
     private static void WriteValidated(string filePath, NotificationRulesConfig config, bool createBackup)
