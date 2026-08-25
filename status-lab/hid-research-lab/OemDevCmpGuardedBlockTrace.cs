@@ -443,15 +443,15 @@ internal static class OemDevCmpGuardedBlockAnalyzer
             OpKind.Immediate16 => ins.Immediate16,
             OpKind.Immediate32 => ins.Immediate32,
             OpKind.Immediate64 => ins.Immediate64,
-            OpKind.Immediate8to16 => ins.Immediate8to16,
-            OpKind.Immediate8to32 => unchecked((ulong)ins.Immediate8to32),
+            OpKind.Immediate8to16 => unchecked((ulong)(long)ins.Immediate8to16),
+            OpKind.Immediate8to32 => unchecked((ulong)(long)ins.Immediate8to32),
             OpKind.Immediate8to64 => unchecked((ulong)ins.Immediate8to64),
             OpKind.Immediate32to64 => unchecked((ulong)ins.Immediate32to64),
             _ => null
         };
     }
 
-    private static IEnumerable<string> OperandSignatures(in Instruction ins)
+    private static IEnumerable<string> OperandSignatures(Instruction ins)
     {
         for (var op = 0; op < ins.OpCount; op++)
         {
