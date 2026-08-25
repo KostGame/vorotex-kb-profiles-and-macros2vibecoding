@@ -147,4 +147,35 @@ catch (InvalidDataException)
 }
 Require(regexRejected, "Invalid regex must fail config validation.");
 
-Console.WriteLine("Windows notification rule engine + learning buffer tests: PASS");
+var safeDraft = NotificationRuleDraftBuilder.Build(Obs(WindowsNotificationChangeKind.Added));
+Require(safeDraft.Contains("package_family_name = \"TelegramMessengerLLP.TelegramDesktop_test\"", StringComparison.Ordinal),
+    "Learning draft must prefer stable PFN identity when available.");
+Require(safeDraft.Contains("title_contains = []", StringComparison.Ordinal) &&
+        !safeDraft.Contains("title_contains = [\"Kost\"]", StringComparison.Ordinal),
+    "Privacy-safe draft must not persist notification title by default.");
+Require(!safeDraft.Contains("body_contains = [\"hello\"]", StringComparison.Ordinal),
+    "Learning draft must never persist notification body by default.");
+
+var titleDraft = NotificationRuleDraftBuilder.Build(Obs(WindowsNotificationChangeKind.Added), includeTitleCondition: true);
+Require(titleDraft.Contains("title_contains = [\"Kost\"]", StringComparison.Ordinal),
+    "Explicit title-specific draft must persist selected title condition.");
+Require(titleDraft.Contains("body_contains = []", StringComparison.Ordinal),
+    "Title-specific draft must still avoid persisting body text.");
+
+var aumidDraft = NotificationRuleDraftBuilder.Build(
+    Obs(WindowsNotificationChangeKind.Added, app: "", pfn: "", aumid: "Contoso.App", title: "X"));
+Require(aumidDraft.Contains("app_user_model_id = \"Contoso.App\"", StringComparison.Ordinal),
+    "Draft builder must fall back to AUMID when PFN is unavailable.");
+
+var noIdentityRejected = false;
+try
+{
+    NotificationRuleDraftBuilder.Build(Obs(WindowsNotificationChangeKind.Added, app: "", pfn: "", aumid: ""));
+}
+catch (InvalidDataException)
+{
+    noIdentityRejected = true;
+}
+Require(noIdentityRejected, "Draft builder must fail closed when no stable application identity exists.");
+
+Console.WriteLine("Windows notification rule engine + learning buffer + rule draft tests: PASS");
