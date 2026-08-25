@@ -75,4 +75,62 @@ var noBodyLeak = NotificationRuleDraftBuilder.Build(observation, new Notificatio
 Require(!noBodyLeak.Contains("The deployment completed", StringComparison.Ordinal),
     "Generated draft leaked notification body text.");
 
-Console.WriteLine("Notification rule designer draft tests: PASS");
+var rule = NotificationRuleDraftBuilder.CreateRule(observation, options);
+var tempRoot = Path.Combine(Path.GetTempPath(), "vorotex-notification-store-smoke-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(tempRoot);
+try
+{
+    var file = Path.Combine(tempRoot, "notifications.toml");
+    var emptyText = NotificationRulesToml.Serialize(NotificationRulesConfig.CreateDefault());
+    File.WriteAllText(file, emptyText);
+
+    NotificationRulesStore.AddRuleToFile(file, rule);
+    var saved = NotificationRulesToml.Parse(File.ReadAllText(file));
+    Require(saved.Rules.Count == 1 && saved.Rules[0].Id == "telegram-build-ready",
+        "Explicit save did not persist the validated notification rule.");
+    Require(File.Exists(NotificationRulesStore.BackupPathFor(file)),
+        "Explicit save must create notifications.toml.bak first.");
+    var backup = NotificationRulesToml.Parse(File.ReadAllText(NotificationRulesStore.BackupPathFor(file)));
+    Require(backup.Rules.Count == 0, "Backup must contain the pre-save configuration.");
+
+    var beforeDuplicate = File.ReadAllText(file);
+    var duplicateRejected = false;
+    try
+    {
+        NotificationRulesStore.AddRuleToFile(file, rule);
+    }
+    catch (InvalidDataException)
+    {
+        duplicateRejected = true;
+    }
+    Require(duplicateRejected, "Duplicate notification rule ids must fail closed.");
+    Require(File.ReadAllText(file) == beforeDuplicate,
+        "Duplicate rejection must preserve the current notifications.toml byte-for-byte.");
+
+    NotificationRulesStore.RestoreBackupForFile(file);
+    var restored = NotificationRulesToml.Parse(File.ReadAllText(file));
+    Require(restored.Rules.Count == 0, "Restore backup must recover the pre-save rules.");
+    Require(File.Exists(NotificationRulesStore.PreRestoreBackupPathFor(file)),
+        "Restore must preserve the replaced current file as pre-restore backup.");
+
+    const string broken = "this is not valid toml";
+    File.WriteAllText(file, broken);
+    var invalidSourceRejected = false;
+    try
+    {
+        NotificationRulesStore.AddRuleToFile(file, rule);
+    }
+    catch (InvalidDataException)
+    {
+        invalidSourceRejected = true;
+    }
+    Require(invalidSourceRejected, "Invalid existing notifications.toml must block save.");
+    Require(File.ReadAllText(file) == broken,
+        "Failed save against invalid source must preserve that source unchanged.");
+}
+finally
+{
+    try { Directory.Delete(tempRoot, recursive: true); } catch { }
+}
+
+Console.WriteLine("Notification Rule Designer + atomic rules store tests: PASS");
