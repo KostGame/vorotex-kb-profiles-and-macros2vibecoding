@@ -6,6 +6,7 @@ on:
       - 'status-lab/WindowsNotificationPoller.cs'
       - 'status-lab/WindowsNotificationModels.cs'
       - 'status-lab/NotificationRuleEngine.cs'
+      - 'status-lab/NotificationOverlayScheduler.cs'
       - 'status-lab/NotificationLearningBuffer.cs'
       - 'status-lab/NotificationRulesConfig.cs'
       - 'status-lab/NotificationRuleDraftBuilder.cs'
@@ -25,7 +26,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Notification rule engine and learning tests
+      - name: Notification rule engine, learning and scheduler tests
         run: dotnet run --project status-lab/tests/NotificationRulesSmoke.csproj -c Release
 
       - name: Build Status Lab with notification observation model
@@ -40,6 +41,7 @@ jobs:
           $paths = @(
             'status-lab/WindowsNotificationModels.cs',
             'status-lab/NotificationRuleEngine.cs',
+            'status-lab/NotificationOverlayScheduler.cs',
             'status-lab/NotificationLearningBuffer.cs',
             'status-lab/NotificationRulesConfig.cs',
             'status-lab/NotificationRuleDraftBuilder.cs'
@@ -53,6 +55,18 @@ jobs:
             throw 'Notification Engine / Learning Lab must not mutate or depend on Codex semantic state.'
           }
           Write-Output 'Notification Engine isolation gates: PASS'
+
+      - name: Verify bounded overlay scheduler
+        shell: powershell
+        run: |
+          $scheduler = Get-Content -LiteralPath 'status-lab/NotificationOverlayScheduler.cs' -Raw -Encoding UTF8
+          if ($scheduler -notmatch 'PendingCount' -or $scheduler -notmatch '_pending') {
+            throw 'Notification overlay scheduler must expose the bounded single-pending model.'
+          }
+          if ($scheduler -match 'Queue<|ConcurrentQueue<|List<ScheduledNotificationOverlay>') {
+            throw 'Notification overlay scheduler must not grow an unbounded queue.'
+          }
+          Write-Output 'Notification overlay bounded-queue gate: PASS'
 
       - name: Verify Learning Lab privacy boundary
         shell: powershell
