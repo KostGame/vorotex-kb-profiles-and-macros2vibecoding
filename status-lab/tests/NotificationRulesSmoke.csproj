@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\WindowsNotificationModels.cs" Link="WindowsNotificationModels.cs" />
+    <Compile Include="..\NotificationRuleEngine.cs" Link="NotificationRuleEngine.cs" />
+    <Compile Include="..\NotificationLearningBuffer.cs" Link="NotificationLearningBuffer.cs" />
+    <Compile Include="..\NotificationRulesConfig.cs" Link="NotificationRulesConfig.cs" />
+    <Compile Include="..\EventJournal.cs" Link="EventJournal.cs" />
+  </ItemGroup>
+</Project>

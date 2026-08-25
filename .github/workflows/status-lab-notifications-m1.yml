@@ -1,0 +1,47 @@
+name: Status Lab Notification Engine M1
+
+on:
+  pull_request:
+    paths:
+      - 'status-lab/WindowsNotificationPoller.cs'
+      - 'status-lab/WindowsNotificationModels.cs'
+      - 'status-lab/NotificationRuleEngine.cs'
+      - 'status-lab/NotificationLearningBuffer.cs'
+      - 'status-lab/NotificationRulesConfig.cs'
+      - 'status-lab/notifications/**'
+      - 'status-lab/tests/NotificationRulesSmoke*'
+      - '.github/workflows/status-lab-notifications-m1.yml'
+  workflow_dispatch:
+
+jobs:
+  notification-engine-m1:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Notification rule engine tests
+        run: dotnet run --project status-lab/tests/NotificationRulesSmoke.csproj -c Release
+
+      - name: Build Status Lab with notification observation model
+        run: dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release
+
+      - name: Verify M1 has no keyboard write path
+        shell: powershell
+        run: |
+          $paths = @(
+            'status-lab/WindowsNotificationModels.cs',
+            'status-lab/NotificationRuleEngine.cs',
+            'status-lab/NotificationLearningBuffer.cs',
+            'status-lab/NotificationRulesConfig.cs'
+          )
+          $text = ($paths | ForEach-Object { Get-Content -LiteralPath $_ -Raw -Encoding UTF8 }) -join "`n"
+          if ($text -match 'HidD_SetFeature|DeviceWriteCommand|LightingWriteCommand|SelectActiveSlot|ApplyEffect') {
+            throw 'Notification Engine M1 must remain read-only with respect to K15.'
+          }
+          if ($text -match 'K15NormalizedState|StateReducer') {
+            throw 'Notification Engine M1 must not mutate or depend on Codex semantic state.'
+          }
+          Write-Output 'Notification Engine M1 isolation gates: PASS'
