@@ -34,16 +34,23 @@ if ($html -match "\['mono_water'" -or $html -match "\['tetris_blocks'" -or $html
 if ($html -notmatch 'cycle_breathing' -or $html -notmatch 'profile_pair' -or $html -notmatch 'stop_signal') {
     throw 'Configurator must expose accepted Cycle breathing and profile-pair STOP/activation signals.'
 }
-if ($html -notmatch 'doneTimeout' -or $html -notmatch 'done_attention_timeout_seconds') {
-    throw 'Configurator must expose independent DONE fallback timeout.'
+if ($html -notmatch 'doneTimeout:30' -or $html -notmatch 'schema_version = 4' -or $html -notmatch 'profile_switch:\{enabled:false') {
+    throw 'Configurator must expose RC1 schema/defaults: v4, 30s DONE, profile switch OFF.'
+}
+if ($html -notmatch "activation:\{enabled:true,effect:'cycle_breathing'" -or $html -notmatch 'migrateLoadedModel') {
+    throw 'Configurator must use Cycle breathing activation and migrate beta defaults in memory.'
 }
 
 $toml = Get-Content -LiteralPath $configExample -Raw -Encoding UTF8
-if ($toml -notmatch 'schema_version\s*=\s*3' -or $toml -notmatch '\[stop_signal\]' -or $toml -notmatch 'profile_pair') {
-    throw 'TOML example must use schema v3 and include profile-pair STOP signal.'
+if ($toml -notmatch 'schema_version\s*=\s*4' -or $toml -notmatch '\[stop_signal\]' -or $toml -notmatch 'profile_pair') {
+    throw 'TOML example must use schema v4 and include profile-pair STOP signal.'
 }
-if ($toml -notmatch '\[behavior\]' -or $toml -notmatch 'done_attention_timeout_seconds\s*=\s*15') {
-    throw 'TOML example must expose bounded DONE fallback behavior.'
+if ($toml -notmatch '\[behavior\]' -or $toml -notmatch 'done_attention_timeout_seconds\s*=\s*30') {
+    throw 'TOML example must expose 30-second DONE fallback.'
+}
+if ($toml -notmatch '\[profile_switch\][\s\S]*?enabled\s*=\s*false' -or
+    $toml -notmatch '\[activation\][\s\S]*?effect\s*=\s*"cycle_breathing"') {
+    throw 'RC1 TOML must disable profile-switch overlay and use Cycle breathing activation.'
 }
 if ($toml -notmatch '\[profiles\.A\]' -or $toml -notmatch '\[states\.running\]' -or $toml -notmatch '#') {
     throw 'TOML example must be annotated and include profile/state sections.'
@@ -65,6 +72,10 @@ if ($rgbSource -notmatch 'rgb_stop_signal_started' -or $rgbSource -notmatch 'Sto
 if ($rgbSource -notmatch 'hardwareProfileSelectionPolicy = "observe_only"') {
     throw 'K15RgbCanary must log observe-only hardware-profile policy.'
 }
+if ($rgbSource -notmatch '_pendingRestores' -or $rgbSource -notmatch 'RestorePendingForSlotLocked' -or
+    $rgbSource -notmatch 'manual_restore_while_disabled') {
+    throw 'RGB OFF must retain deferred exact baselines and allow manual restore on the physical active profile.'
+}
 
 $traySource = Get-Content -LiteralPath $trayIconFactory -Raw -Encoding UTF8
 if ($traySource -notmatch 'trackingEnabled' -or $traySource -notmatch 'DestroyIcon') {
@@ -75,6 +86,9 @@ $stateSource = Get-Content -LiteralPath $stateReducer -Raw -Encoding UTF8
 $normalizerSource = Get-Content -LiteralPath $normalizer -Raw -Encoding UTF8
 if ($stateSource -notmatch 'FocusedSessionId' -or $stateSource -notmatch 'IsInternalCwd' -or $stateSource -notmatch 'Rehydrate') {
     throw 'State reducer must be session-aware and support restart rehydration.'
+}
+if ($stateSource -notmatch 'case "PreToolUse"' -or $stateSource -notmatch 'codex_pre_tool_use') {
+    throw 'State reducer must resume WAITING from the PreToolUse approval signal.'
 }
 if ($stateSource -notmatch 'BindRecentNotificationToDone' -or $stateSource -notmatch 'done_attention_timeout') {
     throw 'State reducer must correlate pre-Stop completion notifications and provide DONE timeout.'
@@ -97,6 +111,10 @@ if ($hookLoggerSource -notmatch 'Rotate-JournalIfNeeded') {
 }
 if ($appSource -notmatch '_loggingItem' -or $appSource -notmatch 'ToggleDetailedLogging' -or $appSource -notmatch 'RefreshTrackingIndicator') {
     throw 'Tray must expose detailed-log switch and tracking indicator wiring.'
+}
+if ($appSource -notmatch 'ManualResetAttention' -or $appSource -notmatch 'RestoreNativeLightingAsync' -or
+    $appSource -notmatch 'manual_attention_reset') {
+    throw 'Tray must expose manual WAITING/DONE reset and exact baseline recovery.'
 }
 
 $labSource = (Get-Content -LiteralPath $lightingLabForm -Raw -Encoding UTF8) + (Get-Content -LiteralPath $lightingLabSession -Raw -Encoding UTF8)
@@ -166,9 +184,9 @@ try {
 
     $installed = Get-Content -LiteralPath $hooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($installed.description -ne 'pre-existing') { throw 'Installer did not preserve existing root fields.' }
-    if (@($installed.hooks.PreToolUse).Count -ne 1) { throw 'Installer did not preserve existing hook groups.' }
+    if (@($installed.hooks.PreToolUse).Count -ne 2) { throw 'Installer must preserve the existing PreToolUse group and add its own group.' }
 
-    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd')) {
+    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd')) {
         $groups = @($installed.hooks.$eventName)
         $statusLabHandlers = @(
             foreach ($group in $groups) {
@@ -197,11 +215,11 @@ try {
     $agentLoopHooksPath = Join-Path $agentLoopHome 'hooks.json'
     if (-not (Test-Path -LiteralPath $agentLoopHooksPath)) { throw 'Installer did not install hooks into .codex-agentloop.' }
     $agentLoopInstalled = Get-Content -LiteralPath $agentLoopHooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd')) {
+    foreach ($eventName in @('UserPromptSubmit', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd')) {
         if (@($agentLoopInstalled.hooks.$eventName).Count -lt 1) { throw "Missing $eventName in .codex-agentloop hooks.json." }
     }
 
-    Write-Output 'Status Lab bounded-log + DONE correlation + configurator backup + Lighting Lab smoke tests: PASS'
+    Write-Output 'Status Lab RC1 approval + restore + config + Lighting Lab smoke tests: PASS'
 }
 finally {
     $env:LOCALAPPDATA = $oldLocalAppData

@@ -75,14 +75,14 @@ internal sealed class ProfileSetConfig
 
 internal sealed class StatusLabConfig
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
     public const int MaxNotifierColors = 2;
     public static string FilePath { get; } = Path.Combine(EventJournal.DirectoryPath, "config.toml");
 
     public string? LoadWarning { get; private set; }
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public WireColorOrder WireColorOrder { get; set; } = WireColorOrder.RGB;
-    public double DoneAttentionTimeoutSeconds { get; set; } = 15;
+    public double DoneAttentionTimeoutSeconds { get; set; } = 30;
     public ProfileSetConfig Profiles { get; set; } = new();
     public StateLightingConfig States { get; set; } = new();
     public LightingEffectConfig ProfileSwitch { get; set; } = new();
@@ -94,7 +94,7 @@ internal sealed class StatusLabConfig
     {
         SchemaVersion = CurrentSchemaVersion,
         WireColorOrder = WireColorOrder.RGB,
-        DoneAttentionTimeoutSeconds = 15,
+        DoneAttentionTimeoutSeconds = 30,
         Profiles = new ProfileSetConfig
         {
             A = new ProfileLightingConfig { Color = "#FF0000" },
@@ -107,9 +107,11 @@ internal sealed class StatusLabConfig
             Done = Effect(K15LightingMode.SingleColorBreathing, PaletteSource.Profile, 6, 5, 0, 0),
             Error = Effect(K15LightingMode.SingleColorBreathing, PaletteSource.Profile, 6, 7, 0, 0, enabled: false)
         },
-        ProfileSwitch = Effect(K15LightingMode.FlowingWater, PaletteSource.Profile, 5, 5, 0, 4),
+        // Physical K15 already has a native A/B transition flash. RC1 leaves it alone.
+        ProfileSwitch = Effect(K15LightingMode.FlowingWater, PaletteSource.Profile, 5, 5, 0, 0, enabled: false),
         StopSignal = Effect(K15LightingMode.CycleBreathing, PaletteSource.ProfilePair, 6, 7, 0, 3),
-        ActivationSignal = Effect(K15LightingMode.FlowingWater, PaletteSource.ProfilePair, 5, 5, 0, 3),
+        // Cycle breathing visibly alternates both profile colors within the short activation window.
+        ActivationSignal = Effect(K15LightingMode.CycleBreathing, PaletteSource.ProfilePair, 6, 7, 0, 3),
         EffectLabDurationSeconds = 4
     };
 
@@ -182,9 +184,9 @@ internal sealed class StatusLabConfig
 
     public void Validate()
     {
-        if (SchemaVersion is not (2 or CurrentSchemaVersion))
+        if (SchemaVersion < 2 || SchemaVersion > CurrentSchemaVersion)
             throw new InvalidDataException(
-                $"Unsupported schema_version {SchemaVersion}; expected 2 or {CurrentSchemaVersion}.");
+                $"Unsupported schema_version {SchemaVersion}; expected 2..{CurrentSchemaVersion}.");
 
         _ = ParseColor(Profiles.A.Color);
         _ = ParseColor(Profiles.B.Color);
@@ -204,9 +206,50 @@ internal sealed class StatusLabConfig
 
     internal void NormalizeLegacySchema()
     {
-        if (SchemaVersion == 2)
-            SchemaVersion = CurrentSchemaVersion;
+        if (SchemaVersion >= CurrentSchemaVersion)
+            return;
+
+        // Migrate only exact former defaults. User-customized values are preserved.
+        if (DoneAttentionTimeoutSeconds == 15)
+            DoneAttentionTimeoutSeconds = 30;
+
+        if (LooksLikeLegacyProfileSwitchDefault(ProfileSwitch))
+        {
+            ProfileSwitch.Enabled = false;
+            ProfileSwitch.DurationSeconds = 0;
+        }
+
+        if (LooksLikeLegacyActivationDefault(ActivationSignal))
+        {
+            ActivationSignal.Enabled = true;
+            ActivationSignal.Mode = K15LightingMode.CycleBreathing;
+            ActivationSignal.Palette = PaletteSource.ProfilePair;
+            ActivationSignal.Brightness = 6;
+            ActivationSignal.Speed = 7;
+            ActivationSignal.Direction = 0;
+            ActivationSignal.DurationSeconds = 3;
+        }
+
+        SchemaVersion = CurrentSchemaVersion;
     }
+
+    private static bool LooksLikeLegacyProfileSwitchDefault(LightingEffectConfig effect) =>
+        effect.Enabled &&
+        effect.Mode == K15LightingMode.FlowingWater &&
+        effect.Palette == PaletteSource.Profile &&
+        effect.Brightness == 5 &&
+        effect.Speed == 5 &&
+        effect.Direction == 0 &&
+        (Math.Abs(effect.DurationSeconds - 2) < 0.001 || Math.Abs(effect.DurationSeconds - 4) < 0.001);
+
+    private static bool LooksLikeLegacyActivationDefault(LightingEffectConfig effect) =>
+        effect.Enabled &&
+        effect.Mode == K15LightingMode.FlowingWater &&
+        effect.Palette == PaletteSource.ProfilePair &&
+        effect.Brightness == 5 &&
+        effect.Speed == 5 &&
+        effect.Direction == 0 &&
+        Math.Abs(effect.DurationSeconds - 3) < 0.001;
 
     internal static bool IsControlledPaletteMode(K15LightingMode mode) => mode is
         K15LightingMode.Constant or

@@ -7,6 +7,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     private readonly StatusLabConfig _config;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<byte, K15HidLightingController.LightingSnapshot> _snapshots = new();
+    private readonly Dictionary<byte, K15HidLightingController.LightingSnapshot> _pendingRestores = new();
 
     private K15HidLightingController? _controller;
     private K15HidLightingController.LightingSnapshot? _snapshot;
@@ -35,6 +36,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 return;
 
             _controller = K15HidLightingController.Open();
+            var currentSlot = _controller.ReadActiveSlot();
+            RestorePendingForSlotLocked(currentSlot, "rgb_enable");
             _snapshot = _controller.PrepareProfileSnapshot(_config);
             _snapshots[_snapshot.OnboardSlot] = _snapshot;
             SetDesiredStateLocked(currentState);
@@ -48,6 +51,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 exactBaselineMode = _snapshot.Header[0],
                 configPath = StatusLabConfig.FilePath,
                 wireColorOrder = _config.WireColorOrder.ToString(),
+                pendingRestoreSlots = _pendingRestores.Keys.OrderBy(slot => slot).ToArray(),
                 hardwareProfileSelectionPolicy = "observe_only"
             });
             StatusChanged?.Invoke($"RGB: ON · profile {ProfileName(_snapshot.OnboardSlot)}");
@@ -137,7 +141,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         try
         {
             if (!Enabled || _controller is null || _snapshot is null)
-                throw new InvalidOperationException("Enable K15 RGB canary before running Effect Lab.");
+                throw new InvalidOperationException("Enable K15 RGB indication before running Effect Lab.");
 
             var currentSlot = _controller.ReadActiveSlot();
             if (currentSlot != _snapshot.OnboardSlot)
@@ -167,20 +171,41 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         await _gate.WaitAsync();
         try
         {
-            if (!Enabled || _controller is null || _snapshot is null)
+            if (Enabled && _controller is not null && _snapshot is not null)
+            {
+                var currentSlot = _controller.ReadActiveSlot();
+                if (currentSlot != _snapshot.OnboardSlot)
+                    AdoptActiveProfileLocked(currentSlot, startProfileOverlay: false);
+
+                ClearOverlayLocked();
+                _controller.Restore(_snapshot);
+                _pendingRestores.Remove(_snapshot.OnboardSlot);
+                _appliedState = K15NormalizedState.Normal;
+                if (_desiredState != K15NormalizedState.Normal)
+                    _expiredState = _desiredState;
+                StatusChanged?.Invoke($"RGB: baseline restored · profile {ProfileName(_snapshot.OnboardSlot)}");
+                Log("rgb_manual_baseline_restored", new { onboardSlot = _snapshot.OnboardSlot, trackingEnabled = true });
                 return;
+            }
 
-            var currentSlot = _controller.ReadActiveSlot();
-            if (currentSlot != _snapshot.OnboardSlot)
-                AdoptActiveProfileLocked(currentSlot, startProfileOverlay: false);
+            using var controller = K15HidLightingController.Open();
+            var slot = controller.ReadActiveSlot();
+            if (!_pendingRestores.TryGetValue(slot, out var pending))
+            {
+                StatusChanged?.Invoke($"RGB: OFF · no pending restore for profile {ProfileName(slot)}");
+                return;
+            }
 
-            ClearOverlayLocked();
-            _controller.Restore(_snapshot);
-            _appliedState = K15NormalizedState.Normal;
-            if (_desiredState != K15NormalizedState.Normal)
-                _expiredState = _desiredState;
-            StatusChanged?.Invoke($"RGB: baseline restored · profile {ProfileName(_snapshot.OnboardSlot)}");
-            Log("rgb_effect_test_restored", new { onboardSlot = _snapshot.OnboardSlot });
+            controller.Restore(pending);
+            _pendingRestores.Remove(slot);
+            StatusChanged?.Invoke($"RGB: OFF · baseline recovered for profile {ProfileName(slot)}");
+            Log("rgb_pending_baseline_restored", new
+            {
+                onboardSlot = slot,
+                profile = ProfileName(slot),
+                trigger = "manual_restore_while_disabled",
+                remainingSlots = _pendingRestores.Keys.OrderBy(value => value).ToArray()
+            });
         }
         finally
         {
@@ -323,10 +348,17 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         if (_snapshot?.OnboardSlot == observedSlot)
             return;
 
+        RestorePendingForSlotLocked(observedSlot, "profile_observed");
+
         var cachedSnapshot = _snapshots.TryGetValue(observedSlot, out var knownSnapshot);
-        if (cachedSnapshot)
+        var baselineReapplied = false;
+        if (cachedSnapshot && knownSnapshot is not null)
         {
+            // The profile may still contain a notifier effect from the last time it was active.
+            // Reapply its exact session baseline before any new state effect.
+            _controller.Restore(knownSnapshot);
             _snapshot = knownSnapshot;
+            baselineReapplied = true;
         }
         else
         {
@@ -346,7 +378,9 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             onboardSlot = observedSlot,
             profile = ProfileName(observedSlot),
             programmaticProfileSelection = false,
-            cachedSnapshot
+            cachedSnapshot,
+            baselineReapplied,
+            profileSwitchOverlayEnabled = _config.ProfileSwitch.Enabled
         });
 
         if (startProfileOverlay && _config.ProfileSwitch.Enabled && _config.ProfileSwitch.DurationSeconds > 0)
@@ -357,6 +391,22 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         }
 
         ApplyDesiredLocked();
+    }
+
+    private void RestorePendingForSlotLocked(byte slot, string trigger)
+    {
+        if (_controller is null || !_pendingRestores.TryGetValue(slot, out var pending))
+            return;
+
+        _controller.Restore(pending);
+        _pendingRestores.Remove(slot);
+        Log("rgb_pending_baseline_restored", new
+        {
+            onboardSlot = slot,
+            profile = ProfileName(slot),
+            trigger,
+            remainingSlots = _pendingRestores.Keys.OrderBy(value => value).ToArray()
+        });
     }
 
     private void BeginOverlayLocked(LightingEffectConfig source, string kind,
@@ -506,15 +556,22 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             if (!Enabled)
                 return;
 
+            // Preserve exact baselines before attempting any restore. An inactive profile cannot be
+            // safely selected by Status Lab, so its baseline stays pending until that profile is
+            // physically active again. Never forget a deferred rollback just because RGB is OFF.
+            foreach (var pair in _snapshots)
+                _pendingRestores[pair.Key] = pair.Value;
+
             try
             {
                 if (_controller is not null)
                 {
                     var currentSlot = _controller.ReadActiveSlot();
-                    if (_snapshots.TryGetValue(currentSlot, out var currentSnapshot))
+                    if (_pendingRestores.TryGetValue(currentSlot, out var currentSnapshot))
                     {
                         _snapshot = currentSnapshot;
                         _controller.Restore(currentSnapshot);
+                        _pendingRestores.Remove(currentSlot);
                         Log("rgb_active_profile_restored_on_disable", new
                         {
                             reason,
@@ -523,14 +580,13 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                         });
                     }
 
-                    var deferred = _snapshots.Keys.Where(slot => slot != currentSlot).OrderBy(slot => slot).ToArray();
-                    if (deferred.Length > 0)
+                    if (_pendingRestores.Count > 0)
                     {
                         Log("rgb_inactive_profile_restore_deferred", new
                         {
                             reason,
                             activeSlot = currentSlot,
-                            deferredSlots = deferred
+                            deferredSlots = _pendingRestores.Keys.OrderBy(slot => slot).ToArray()
                         });
                     }
                 }
@@ -542,9 +598,10 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                     reason,
                     exception = ex.GetType().FullName,
                     hresult = ex.HResult,
-                    message = ex.Message
+                    message = ex.Message,
+                    pendingSlots = _pendingRestores.Keys.OrderBy(slot => slot).ToArray()
                 });
-                StatusChanged?.Invoke($"RGB: OFF · restore incomplete ({ShortTransportMessage(ex)})");
+                StatusChanged?.Invoke($"RGB: OFF · restore pending ({ShortTransportMessage(ex)})");
             }
             finally
             {
@@ -556,8 +613,16 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 _stateVisualUntilUtc = null;
                 ResetVisualStateLocked();
                 Enabled = false;
-                StatusChanged?.Invoke("RGB: OFF");
-                Log("rgb_canary_disabled", new { reason, programmaticProfileSelection = false });
+                var pending = _pendingRestores.Keys.OrderBy(slot => slot).Select(ProfileName).ToArray();
+                StatusChanged?.Invoke(pending.Length == 0
+                    ? "RGB: OFF"
+                    : $"RGB: OFF · pending baseline {string.Join(",", pending)}");
+                Log("rgb_canary_disabled", new
+                {
+                    reason,
+                    programmaticProfileSelection = false,
+                    pendingRestoreSlots = _pendingRestores.Keys.OrderBy(slot => slot).ToArray()
+                });
             }
         }
         finally
@@ -589,6 +654,14 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await DisableAsync("application_exit");
+        if (_pendingRestores.Count > 0)
+        {
+            Log("rgb_pending_restore_on_exit", new
+            {
+                pendingSlots = _pendingRestores.Keys.OrderBy(slot => slot).ToArray(),
+                note = "No programmatic profile selection; reopen Status Lab on that physical profile to recover its exact baseline."
+            });
+        }
         _gate.Dispose();
     }
 }

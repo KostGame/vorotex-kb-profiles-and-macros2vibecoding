@@ -57,7 +57,7 @@ internal static class ConfigToml
         config.NormalizeLegacySchema();
         config.Validate();
         var b = new StringBuilder();
-        b.AppendLine("# VOROTEX K15 Status Lab");
+        b.AppendLine("# VOROTEX K15 Status Lab RC1");
         b.AppendLine("# Цвета принадлежат аппаратным профилям A/B. NORMAL восстанавливает exact baseline.");
         b.AppendLine("# palette = profile      -> цвет физически активного профиля");
         b.AppendLine("# palette = profile_pair -> два основных цвета: A затем B");
@@ -72,8 +72,8 @@ internal static class ConfigToml
         b.AppendLine($"wire_color_order = \"{config.WireColorOrder.ToString().ToLowerInvariant()}\"");
         b.AppendLine();
         b.AppendLine("[behavior]");
-        b.AppendLine("# Safety fallback: DONE не должен мигать бесконечно даже если toast correlation не сработал.");
-        b.AppendLine("# 0 = отключить fallback timeout; рекомендуется 15..60 секунд.");
+        b.AppendLine("# Safety fallback для DONE_PENDING_ATTENTION, независимо от визуального effect duration.");
+        b.AppendLine("# 0 = отключить fallback timeout; RC1 default = 30 секунд.");
         b.AppendLine($"done_attention_timeout_seconds = {Format(config.DoneAttentionTimeoutSeconds)}");
         b.AppendLine();
         WriteProfile(b, "A", config.Profiles.A, "RED / TOOLS-AUTH");
@@ -87,11 +87,11 @@ internal static class ConfigToml
         WriteEffect(b, "states.error", config.States.Error,
             "ERROR зарезервирован для high-confidence semantic source; default disabled.");
         WriteEffect(b, "profile_switch", config.ProfileSwitch,
-            "Flowing Water после физического переключения. У K15 есть собственная тройная flash-анимация; duration 4s оставляет наш сигнал видимым после неё.");
+            "RC1 default OFF: K15 уже показывает собственную native A/B flash-анимацию.");
         WriteEffect(b, "stop_signal", config.StopSignal,
             "Момент STOP: короткий Cycle breathing RED <-> BLUE, затем states.done.");
         WriteEffect(b, "activation", config.ActivationSignal,
-            "Включение RGB-индикации: короткий Flowing Water двумя основными цветами A/B.");
+            "Включение RGB-индикации: быстрый Cycle breathing RED <-> BLUE, чтобы оба цвета были видны.");
         b.AppendLine("[effect_lab]");
         b.AppendLine("# Встроенный tray Effect Test остаётся коротким smoke. Полные исследования делаются в Lighting Lab.");
         b.AppendLine($"test_duration_seconds = {Format(config.EffectLabDurationSeconds)}");

@@ -17,7 +17,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private long _readOffset;
     private string _tailRemainder = string.Empty;
 
-    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 15)
+    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 30)
     {
         _reducer = new StateReducer(doneAttentionTimeoutSeconds);
     }
