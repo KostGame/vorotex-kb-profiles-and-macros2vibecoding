@@ -20,8 +20,8 @@ try {
         throw "Expected CODEX_HOME plus default .codex to be synchronized; installer count=$($result.count)."
     }
 
-    foreach ($home in @($agentLoopHome, $defaultHome)) {
-        $hooksPath = Join-Path $home 'hooks.json'
+    foreach ($codexHomePath in @($agentLoopHome, $defaultHome)) {
+        $hooksPath = Join-Path $codexHomePath 'hooks.json'
         if (-not (Test-Path -LiteralPath $hooksPath)) {
             throw "hooks.json missing after sync: $hooksPath"
         }
@@ -37,7 +37,7 @@ try {
                 }
             )
             if ($matches.Count -ne 1) {
-                throw "Expected exactly one Status Lab handler for $eventName in $home; found $($matches.Count)."
+                throw "Expected exactly one Status Lab handler for $eventName in $codexHomePath; found $($matches.Count)."
             }
         }
     }
