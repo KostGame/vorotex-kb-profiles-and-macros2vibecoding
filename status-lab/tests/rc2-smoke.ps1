@@ -23,10 +23,10 @@ $semanticText = (Get-Content -LiteralPath $reducer -Raw -Encoding UTF8) + (Get-C
 if ($appText -notmatch 'OpenControlCenter' -or $appText -notmatch 'GetControlCenterSnapshot' -or $appText -notmatch 'DoubleClick') {
     throw 'Tray must expose and open RC2 Control Center.'
 }
-if ($controlText -notmatch 'Состояние' -or $controlText -notmatch 'Причина' -or $controlText -notmatch 'В этом состоянии') {
+if ($controlText -notmatch 'ControlCenterSnapshot' -or $controlText -notmatch 'StateSinceUtc' -or $controlText -notmatch 'FormatElapsed') {
     throw 'Control Center must expose state reason and elapsed time.'
 }
-if ($controlText -notmatch 'Capture BEFORE' -or $controlText -notmatch 'Capture AFTER' -or $controlText -notmatch 'sleep/standby') {
+if ($controlText -notmatch 'CaptureBefore' -or $controlText -notmatch 'CaptureAfter' -or $controlText -notmatch 'DeviceSettingsResearch') {
     throw 'Control Center must expose evidence-first sleep research workflow.'
 }
 if ($startupText -notmatch 'CurrentUser' -or $startupText -notmatch 'Windows\\CurrentVersion\\Run') {
