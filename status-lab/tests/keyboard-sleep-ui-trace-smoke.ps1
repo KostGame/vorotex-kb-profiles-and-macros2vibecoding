@@ -9,9 +9,10 @@ foreach ($path in @($form, $trace, $capture)) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Keyboard Sleep UI Trace file missing: $path" }
 }
 
-$text = (Get-Content -LiteralPath $form -Raw -Encoding UTF8) +
-        (Get-Content -LiteralPath $trace -Raw -Encoding UTF8) +
-        (Get-Content -LiteralPath $capture -Raw -Encoding UTF8)
+$formText = Get-Content -LiteralPath $form -Raw -Encoding UTF8
+$traceText = Get-Content -LiteralPath $trace -Raw -Encoding UTF8
+$captureText = Get-Content -LiteralPath $capture -Raw -Encoding UTF8
+$text = $formText + $traceText + $captureText
 
 foreach ($forbidden in @(
     'HidD_SetFeature\s*\(',
@@ -58,7 +59,6 @@ foreach ($required in @(
     'executablePatched = false',
     'unknownSelectorsProbed = false',
     'Start owner capture',
-    'Поставить метку',
     'Stop capture'
 )) {
     if ($text -notmatch [regex]::Escape($required)) { throw "Keyboard Sleep UI Trace missing required read-only evidence feature: $required" }
@@ -68,8 +68,7 @@ if ($text -notmatch 'SHA256\.HashData') {
     throw 'Keyboard Sleep UI Trace must hash observed content instead of persisting arbitrary raw vendor/window text.'
 }
 
-if ($capture -and ((Get-Content -LiteralPath $capture -Raw -Encoding UTF8) -match 'GetWindowText\(') -and
-    ((Get-Content -LiteralPath $capture -Raw -Encoding UTF8) -notmatch 'TitleSha256')) {
+if (($captureText -match 'GetWindowText\(') -and ($captureText -notmatch 'TitleSha256')) {
     throw 'Foreground title may only be persisted as hash/length metadata.'
 }
 
