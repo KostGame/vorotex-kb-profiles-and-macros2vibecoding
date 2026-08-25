@@ -13,6 +13,9 @@
     <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Iced" Version="1.21.0" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="..\sleep-sweep\SleepSweepSession.cs" Link="SleepSweepSession.cs" />
     <Compile Include="..\sleep-sweep\SleepSweepForm.cs" Link="SleepSweepForm.cs" />
     <Compile Include="..\vendor-static-lab\VendorPeAnalyzer.cs" Link="VendorPeAnalyzer.cs" />
