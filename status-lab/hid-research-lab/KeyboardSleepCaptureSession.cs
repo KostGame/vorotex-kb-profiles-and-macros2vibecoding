@@ -372,11 +372,19 @@ internal sealed class KeyboardSleepCaptureSession : IAsyncDisposable
     private static Dictionary<string, string> ReadSafeIniKeys(string path)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var currentSection = "root";
         try
         {
             foreach (var line in File.ReadLines(path).Take(1000))
             {
                 var trimmed = line.Trim();
+                if (trimmed.StartsWith('[') && trimmed.EndsWith(']') && trimmed.Length > 2)
+                {
+                    currentSection = trimmed[1..^1].Trim();
+                    if (currentSection.Length == 0)
+                        currentSection = "root";
+                    continue;
+                }
                 foreach (var key in SafeIniKeys)
                 {
                     if (!trimmed.StartsWith(key + "=", StringComparison.OrdinalIgnoreCase))
@@ -384,7 +392,7 @@ internal sealed class KeyboardSleepCaptureSession : IAsyncDisposable
                     var value = trimmed[(key.Length + 1)..].Trim();
                     if (value.Length > 80)
                         value = value[..80];
-                    result[key] = value;
+                    result[$"{currentSection}.{key}"] = value;
                 }
             }
         }
