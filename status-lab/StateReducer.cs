@@ -51,7 +51,7 @@ internal sealed class StateReducer
     private readonly Dictionary<uint, DateTimeOffset> _recentOpenAiAdds = new();
     private readonly Dictionary<string, SessionRuntime> _sessions = new(StringComparer.Ordinal);
 
-    public StateReducer(double doneAttentionTimeoutSeconds = 15)
+    public StateReducer(double doneAttentionTimeoutSeconds = 30)
     {
         if (doneAttentionTimeoutSeconds < 0 || doneAttentionTimeoutSeconds > 3600)
             throw new ArgumentOutOfRangeException(nameof(doneAttentionTimeoutSeconds));
@@ -170,13 +170,16 @@ internal sealed class StateReducer
                 BindRecentNotificationToWaiting(input.TimestampUtc);
                 return waitingTransition;
 
+            case "PreToolUse":
             case "PostToolUse":
                 session.State = K15NormalizedState.Running;
                 session.LastPermissionUtc = null;
                 session.LastStopUtc = null;
                 session.DoneEnteredUtc = null;
                 _waitingNotificationIds.Clear();
-                return FocusSession(session, "codex_post_tool_use", input.TimestampUtc);
+                return FocusSession(session,
+                    input.EventName == "PreToolUse" ? "codex_pre_tool_use" : "codex_post_tool_use",
+                    input.TimestampUtc);
 
             case "Stop":
                 session.State = K15NormalizedState.DonePendingAttention;
