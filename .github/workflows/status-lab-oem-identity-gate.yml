@@ -1,0 +1,36 @@
+name: Status Lab OEM Identity Gate Trace
+
+on:
+  push:
+    branches:
+      - 'agent/**'
+    paths:
+      - 'status-lab/hid-research-lab/**'
+      - 'status-lab/tests/oem-identity-gate-trace-smoke.ps1'
+      - '.github/workflows/status-lab-oem-identity-gate.yml'
+  pull_request:
+    paths:
+      - 'status-lab/hid-research-lab/**'
+      - 'status-lab/tests/oem-identity-gate-trace-smoke.ps1'
+      - '.github/workflows/status-lab-oem-identity-gate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  identity-gate-readonly:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: OEM Identity Gate Trace read-only safety smoke
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/oem-identity-gate-trace-smoke.ps1
+      - name: Restore HID Research Lab
+        run: dotnet restore status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj
+      - name: Build HID Research Lab
+        run: dotnet build status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj -c Release --no-restore
