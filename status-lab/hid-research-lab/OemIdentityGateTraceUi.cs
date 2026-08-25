@@ -35,7 +35,7 @@ internal sealed class OemIdentityGateTraceForm : Form
         AutoSize = false,
         Size = new Size(810, 105),
         ForeColor = Color.FromArgb(190, 210, 235),
-        Location = new Point(24, 382)
+        Location = new Point(24, 422)
     };
     private string? _lastOutput;
 
@@ -43,7 +43,7 @@ internal sealed class OemIdentityGateTraceForm : Form
     {
         Text = "VOROTEX K15 · OEM Identity Gate Trace";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(860, 510);
+        ClientSize = new Size(860, 550);
         BackColor = Color.FromArgb(13, 17, 23);
         ForeColor = Color.Gainsboro;
         Font = new Font("Segoe UI", 9.5f);
@@ -107,15 +107,21 @@ internal sealed class OemIdentityGateTraceForm : Form
         open.Click += (_, _) => OpenOutput();
         Controls.Add(open);
 
+        var provenance = ActionButton("Run field provenance trace", 24, 350, 220);
+        provenance.BackColor = Color.FromArgb(69, 63, 130);
+        provenance.FlatAppearance.BorderColor = Color.FromArgb(105, 96, 178);
+        provenance.Click += async (_, _) => await RunFieldProvenanceAsync(provenance);
+        Controls.Add(provenance);
+
         Controls.Add(new Label
         {
             Text = "Safety: static read-only · no HID handle · no process launch/attach/debug · no patching/spoofing.",
             AutoSize = true,
             ForeColor = Color.FromArgb(145, 158, 180),
-            Location = new Point(24, 354)
+            Location = new Point(24, 394)
         });
 
-        _status.Text = "Готово. Semantic bridge исправляет raw-byte xrefs, разрешает IAT/helper calls и связывает их с guarded selection.";
+        _status.Text = "Готово. Field provenance trace идёт от aligned DevName/DevCmpStr parser branch к persistent member writes без выполнения OEM кода.";
         Controls.Add(_status);
     }
 
@@ -136,23 +142,15 @@ internal sealed class OemIdentityGateTraceForm : Form
 
     private async Task RunIdentityAsync(Button button)
     {
-        if (!ValidateInputs("OEM Identity Gate Trace"))
-            return;
-
+        if (!ValidateInputs("OEM Identity Gate Trace")) return;
         button.Enabled = false;
         _status.Text = "Строю model/product identity trace…";
         try
         {
             var report = await Task.Run(() => OemIdentityGateTraceAnalyzer.Analyze(_exeA.Text, _exeB.Text));
             var root = ResearchRoot("oem-identity-gate-trace");
-            File.WriteAllText(
-                Path.Combine(root, "oem-identity-gate-trace.json"),
-                JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
-                new UTF8Encoding(false));
-            File.WriteAllText(
-                Path.Combine(root, "oem-identity-gate-trace.txt"),
-                OemIdentityGateTraceAnalyzer.ToText(report),
-                new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "oem-identity-gate-trace.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "oem-identity-gate-trace.txt"), OemIdentityGateTraceAnalyzer.ToText(report), new UTF8Encoding(false));
             _lastOutput = root;
             _status.Text = $"IDENTITY VERDICT: {report.Verdict} · score={report.EvidenceScore}\n{root}";
             OpenOutput();
@@ -162,31 +160,20 @@ internal sealed class OemIdentityGateTraceForm : Form
             _status.Text = "Identity trace не завершён: " + ex.Message;
             MessageBox.Show(ex.Message, "OEM Identity Gate Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        finally
-        {
-            button.Enabled = true;
-        }
+        finally { button.Enabled = true; }
     }
 
     private async Task RunCompareAsync(Button button)
     {
-        if (!ValidateInputs("OEM Product Compare Branch Trace"))
-            return;
-
+        if (!ValidateInputs("OEM Product Compare Branch Trace")) return;
         button.Enabled = false;
         _status.Text = "Декодирую bounded x86 region и связываю ProductString → compare/helper → Jcc…";
         try
         {
             var report = await Task.Run(() => OemProductCompareBranchAnalyzer.Analyze(_exeA.Text, _exeB.Text));
             var root = ResearchRoot("oem-product-compare-branch");
-            File.WriteAllText(
-                Path.Combine(root, "oem-product-compare-branch.json"),
-                JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
-                new UTF8Encoding(false));
-            File.WriteAllText(
-                Path.Combine(root, "oem-product-compare-branch.txt"),
-                OemProductCompareBranchAnalyzer.ToText(report),
-                new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "oem-product-compare-branch.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "oem-product-compare-branch.txt"), OemProductCompareBranchAnalyzer.ToText(report), new UTF8Encoding(false));
             _lastOutput = root;
             _status.Text = $"COMPARE VERDICT: {report.Verdict}\n{root}";
             OpenOutput();
@@ -196,31 +183,20 @@ internal sealed class OemIdentityGateTraceForm : Form
             _status.Text = "Compare branch trace не завершён: " + ex.Message;
             MessageBox.Show(ex.Message, "OEM Product Compare Branch Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        finally
-        {
-            button.Enabled = true;
-        }
+        finally { button.Enabled = true; }
     }
 
     private async Task RunGuardedAsync(Button button)
     {
-        if (!ValidateInputs("OEM DevCmpStr Guarded Block Trace"))
-            return;
-
+        if (!ValidateInputs("OEM DevCmpStr Guarded Block Trace")) return;
         button.Enabled = false;
         _status.Text = "Раскрываю полный DevCmpStr==1 guarded block и трассирую DevName → runtime member…";
         try
         {
             var report = await Task.Run(() => OemDevCmpGuardedBlockAnalyzer.Analyze(_exeA.Text, _exeB.Text));
             var root = ResearchRoot("oem-devcmp-guarded-block");
-            File.WriteAllText(
-                Path.Combine(root, "oem-devcmp-guarded-block.json"),
-                JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
-                new UTF8Encoding(false));
-            File.WriteAllText(
-                Path.Combine(root, "oem-devcmp-guarded-block.txt"),
-                OemDevCmpGuardedBlockAnalyzer.ToText(report),
-                new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "oem-devcmp-guarded-block.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "oem-devcmp-guarded-block.txt"), OemDevCmpGuardedBlockAnalyzer.ToText(report), new UTF8Encoding(false));
             _lastOutput = root;
             _status.Text = $"GUARDED VERDICT: {report.Verdict}\n{root}";
             OpenOutput();
@@ -230,31 +206,20 @@ internal sealed class OemIdentityGateTraceForm : Form
             _status.Text = "Guarded block trace не завершён: " + ex.Message;
             MessageBox.Show(ex.Message, "OEM DevCmpStr Guarded Block Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        finally
-        {
-            button.Enabled = true;
-        }
+        finally { button.Enabled = true; }
     }
 
     private async Task RunSemanticBridgeAsync(Button button)
     {
-        if (!ValidateInputs("OEM Identity Semantic Bridge Trace"))
-            return;
-
+        if (!ValidateInputs("OEM Identity Semantic Bridge Trace")) return;
         button.Enabled = false;
         _status.Text = "Выравниваю field xrefs по инструкциям, разрешаю IAT/helper calls и трассирую boolean compare…";
         try
         {
             var report = await Task.Run(() => OemIdentitySemanticBridgeAnalyzer.Analyze(_exeA.Text, _exeB.Text));
             var root = ResearchRoot("oem-identity-semantic-bridge");
-            File.WriteAllText(
-                Path.Combine(root, "oem-identity-semantic-bridge.json"),
-                JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
-                new UTF8Encoding(false));
-            File.WriteAllText(
-                Path.Combine(root, "oem-identity-semantic-bridge.txt"),
-                OemIdentitySemanticBridgeAnalyzer.ToText(report),
-                new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "oem-identity-semantic-bridge.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "oem-identity-semantic-bridge.txt"), OemIdentitySemanticBridgeAnalyzer.ToText(report), new UTF8Encoding(false));
             _lastOutput = root;
             _status.Text = $"SEMANTIC BRIDGE VERDICT: {report.Verdict}\n{root}";
             OpenOutput();
@@ -264,27 +229,42 @@ internal sealed class OemIdentityGateTraceForm : Form
             _status.Text = "Semantic bridge trace не завершён: " + ex.Message;
             MessageBox.Show(ex.Message, "OEM Identity Semantic Bridge Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        finally
+        finally { button.Enabled = true; }
+    }
+
+    private async Task RunFieldProvenanceAsync(Button button)
+    {
+        if (!ValidateInputs("OEM Identity Field Provenance Trace")) return;
+        button.Enabled = false;
+        _status.Text = "Трассирую DevName/DevCmpStr match-path и persistent member writes…";
+        try
         {
-            button.Enabled = true;
+            var report = await Task.Run(() => OemIdentityFieldProvenanceAnalyzer.Analyze(_exeA.Text, _exeB.Text));
+            var root = ResearchRoot("oem-identity-field-provenance");
+            File.WriteAllText(Path.Combine(root, "oem-identity-field-provenance.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "oem-identity-field-provenance.txt"), OemIdentityFieldProvenanceAnalyzer.ToText(report), new UTF8Encoding(false));
+            _lastOutput = root;
+            _status.Text = $"FIELD PROVENANCE VERDICT: {report.Verdict}\n{root}";
+            OpenOutput();
         }
+        catch (Exception ex)
+        {
+            _status.Text = "Field provenance trace не завершён: " + ex.Message;
+            MessageBox.Show(ex.Message, "OEM Identity Field Provenance Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally { button.Enabled = true; }
     }
 
     private static string ResearchRoot(string prefix)
     {
-        var root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Vorotex.K15.StatusLab",
-            "research",
-            prefix + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Vorotex.K15.StatusLab", "research", prefix + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
         Directory.CreateDirectory(root);
         return root;
     }
 
     private void OpenOutput()
     {
-        if (string.IsNullOrWhiteSpace(_lastOutput) || !Directory.Exists(_lastOutput))
-            return;
+        if (string.IsNullOrWhiteSpace(_lastOutput) || !Directory.Exists(_lastOutput)) return;
         Process.Start(new ProcessStartInfo("explorer.exe", _lastOutput) { UseShellExecute = true });
     }
 
@@ -297,10 +277,8 @@ internal sealed class OemIdentityGateTraceForm : Form
             CheckFileExists = true,
             Multiselect = false
         };
-        if (File.Exists(target.Text))
-            dialog.InitialDirectory = Path.GetDirectoryName(target.Text);
-        if (dialog.ShowDialog() == DialogResult.OK)
-            target.Text = dialog.FileName;
+        if (File.Exists(target.Text)) dialog.InitialDirectory = Path.GetDirectoryName(target.Text);
+        if (dialog.ShowDialog() == DialogResult.OK) target.Text = dialog.FileName;
     }
 
     private static TextBox InputBox() => new()
