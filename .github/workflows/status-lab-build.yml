@@ -51,6 +51,10 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/keyboard-sleep-ui-trace-smoke.ps1
 
+      - name: OEM Device Identity Diff read-only safety tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/oem-device-identity-diff-smoke.ps1
+
       - name: State reducer and RGB protocol smoke tests
         run: dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
 
