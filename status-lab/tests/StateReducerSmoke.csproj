@@ -4,9 +4,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="StateReducerSmokeProgram.cs" />
     <Compile Include="..\StateReducer.cs" Link="StateReducer.cs" />
     <Compile Include="..\K15HidProtocol.cs" Link="K15HidProtocol.cs" />
     <Compile Include="..\StatusLabConfig.cs" Link="StatusLabConfig.cs" />
