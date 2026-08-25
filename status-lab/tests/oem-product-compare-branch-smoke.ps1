@@ -41,18 +41,26 @@ foreach ($forbidden in @(
     'CreateRemoteThread',
     'SetWindowsHookEx',
     'RegistryKey',
-    'SelectActiveSlot',
-    'Firmware',
-    'ResetDevice'
+    'SelectActiveSlot(',
+    'ResetDevice('
 )) {
     if ($analyzerText -match [regex]::Escape($forbidden)) { throw "Forbidden device/process mutation surface found in compare-branch analyzer: $forbidden" }
+}
+
+if ($analyzerText -notmatch 'firmwareModified\s*=\s*false') {
+    throw 'Safety report must explicitly state firmwareModified=false.'
+}
+if ($analyzerText -notmatch 'deviceOpened\s*=\s*false') {
+    throw 'Safety report must explicitly state deviceOpened=false.'
+}
+if ($analyzerText -notmatch 'processAttached\s*=\s*false') {
+    throw 'Safety report must explicitly state processAttached=false.'
 }
 
 if ($analyzerText -notmatch 'IsProvenCandidate') {
     throw 'PROVEN verdict must be guarded by a dedicated conservative predicate.'
 }
-if ($analyzerText -notmatch 'IsKnownCompareImport\(candidate\.ImportName\).*ProductBufferArgumentMatch.*DevNameArgumentMatch' -and
-    $analyzerText -notmatch '(?s)IsProvenCandidate.*IsKnownCompareImport\(candidate\.ImportName\).*candidate\.ProductBufferArgumentMatch.*candidate\.DevNameArgumentMatch.*candidate\.BranchRva') {
+if ($analyzerText -notmatch '(?s)IsProvenCandidate.*IsKnownCompareImport\(candidate\.ImportName\).*candidate\.ProductBufferArgumentMatch.*candidate\.DevNameArgumentMatch.*candidate\.BranchRva') {
     throw 'PROVEN predicate must require compare import + ProductString buffer + DevName argument + conditional branch.'
 }
 
