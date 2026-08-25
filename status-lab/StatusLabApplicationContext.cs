@@ -52,7 +52,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         _rgbStatusItem = new ToolStripMenuItem("RGB: OFF") { Enabled = false };
         _rgbCanaryItem = new ToolStripMenuItem("Включить RGB-индикацию статусов");
         _rgbCanaryItem.Click += async (_, _) => await ToggleRgbCanaryAsync();
-        _codexHookItem = new ToolStripMenuItem("Установить Codex hooks");
+        _codexHookItem = new ToolStripMenuItem("Установить / обновить Codex hooks");
         _codexHookItem.Click += async (_, _) => await InstallCodexHooksAsync();
         _loggingItem = new ToolStripMenuItem();
         _loggingItem.Click += (_, _) => ToggleDetailedLogging();
@@ -88,9 +88,10 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         menu.Items.Add(_trackingStatusItem);
         menu.Items.Add(_notificationStatusItem);
         menu.Items.Add(_rgbStatusItem);
-        menu.Items.Add("Сбросить состояние в NORMAL", null, (_, _) => _stateNormalizer.Acknowledge());
+        menu.Items.Add("✓ Сбросить WAITING / DONE", null, (_, _) => ManualResetAttention());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_rgbCanaryItem);
+        menu.Items.Add("Восстановить штатную подсветку текущего профиля", null, async (_, _) => await RestoreNativeLightingAsync());
         menu.Items.Add("Открыть RGB config.toml", null, (_, _) => OpenPath(StatusLabConfig.FilePath));
         menu.Items.Add("Открыть RGB configurator", null, (_, _) => OpenConfigurator());
         menu.Items.Add(BuildEffectLabMenu());
@@ -146,6 +147,42 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
                 : $"Состояние: {wire} · Codex {ShortSession(_stateNormalizer.FocusedSessionId)}";
             RefreshTrayTooltip(wire);
         });
+    }
+
+    private void ManualResetAttention()
+    {
+        var previous = JournalStateNormalizer.ToWireName(_stateNormalizer.State);
+        _stateNormalizer.Acknowledge();
+        EventJournal.Append(new
+        {
+            timestampUtc = DateTimeOffset.UtcNow,
+            source = "status_lab",
+            @event = "manual_attention_reset",
+            previous
+        });
+        ShowBalloon("Status Lab сбросил WAITING / DONE и свои привязки к уведомлениям. Системные toast Windows не удаляются.");
+    }
+
+    private async Task RestoreNativeLightingAsync()
+    {
+        try
+        {
+            await _rgbCanary.RestoreCurrentAsync();
+            ShowBalloon("Попытка восстановления exact baseline текущего физического профиля выполнена.");
+        }
+        catch (Exception ex)
+        {
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "k15_rgb",
+                @event = "manual_baseline_restore_failed",
+                exception = ex.GetType().FullName,
+                hresult = ex.HResult,
+                message = ex.Message
+            });
+            ShowBalloon($"Не удалось восстановить штатную подсветку: {ex.Message}");
+        }
     }
 
     private async Task ToggleRgbCanaryAsync()
@@ -358,9 +395,10 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
                 timestampUtc = DateTimeOffset.UtcNow,
                 source = "status_lab",
                 @event = "codex_hooks_installed",
-                count
+                count,
+                includesPreToolUse = true
             });
-            ShowBalloon($"Codex hooks установлены в {count} окружение(я). Полностью перезапусти Codex перед тестом.");
+            ShowBalloon($"Codex hooks обновлены в {count} окружение(я), включая PreToolUse для approval. Полностью перезапусти Codex перед тестом.");
         }
         catch (Exception ex)
         {
