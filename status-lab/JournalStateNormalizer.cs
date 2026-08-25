@@ -129,60 +129,87 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         {
             _readOffset = 0;
             _tailRemainder = string.Empty;
+            _pending.Clear();
         }
-        if (length == _readOffset)
+
+        if (length <= _readOffset)
             return;
 
-        string appended;
+        byte[] delta;
         try
         {
-            using var stream = new FileStream(EventJournal.FilePath, FileMode.Open, FileAccess.Read,
+            using var stream = new FileStream(
+                EventJournal.FilePath,
+                FileMode.Open,
+                FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete);
-            if (_readOffset > stream.Length)
+            if (stream.Length < _readOffset)
+            {
                 _readOffset = 0;
+                _tailRemainder = string.Empty;
+            }
+
             stream.Seek(_readOffset, SeekOrigin.Begin);
-            using var reader = new StreamReader(stream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: true,
-                bufferSize: 4096, leaveOpen: true);
-            appended = reader.ReadToEnd();
+            var remaining = checked((int)(stream.Length - _readOffset));
+            delta = new byte[remaining];
+            var total = 0;
+            while (total < delta.Length)
+            {
+                var read = stream.Read(delta, total, delta.Length - total);
+                if (read == 0)
+                    break;
+                total += read;
+            }
+
+            if (total != delta.Length)
+                Array.Resize(ref delta, total);
             _readOffset = stream.Position;
         }
-        catch
+        catch (IOException)
+        {
+            return;
+        }
+        catch (UnauthorizedAccessException)
         {
             return;
         }
 
-        if (appended.Length == 0)
+        if (delta.Length == 0)
             return;
 
-        var combined = _tailRemainder + appended;
-        var lines = combined.Split('\n');
-        _tailRemainder = combined.EndsWith('\n') ? string.Empty : lines[^1];
-        var count = combined.EndsWith('\n') ? lines.Length : lines.Length - 1;
-        for (var index = 0; index < count; index++)
+        var text = _tailRemainder + Encoding.UTF8.GetString(delta);
+        var lines = text.Split('\n');
+        var completeCount = lines.Length - 1;
+        for (var index = 0; index < completeCount; index++)
         {
             var input = ParseInput(lines[index].TrimEnd('\r'));
             if (input is not null)
                 _pending.Add(input);
         }
+
+        _tailRemainder = text.EndsWith('\n') ? string.Empty : lines[^1];
     }
 
-    private void FlushReadyEvents(DateTimeOffset thresholdUtc)
+    private void FlushReadyEvents(DateTimeOffset watermark)
     {
         if (_pending.Count == 0)
             return;
 
-        _pending.Sort((left, right) => left.TimestampUtc.CompareTo(right.TimestampUtc));
-        var ready = _pending.TakeWhile(input => input.TimestampUtc <= thresholdUtc).ToArray();
-        if (ready.Length == 0)
-            return;
-        _pending.RemoveRange(0, ready.Length);
+        _pending.Sort(static (left, right) => left.TimestampUtc.CompareTo(right.TimestampUtc));
 
-        foreach (var input in ready)
+        var readyCount = 0;
+        while (readyCount < _pending.Count && _pending[readyCount].TimestampUtc <= watermark)
+            readyCount++;
+
+        for (var index = 0; index < readyCount; index++)
         {
-            var transition = _reducer.Apply(input);
+            var transition = _reducer.Apply(_pending[index]);
             if (transition is not null)
                 PublishTransition(transition);
         }
+
+        if (readyCount > 0)
+            _pending.RemoveRange(0, readyCount);
     }
 
     private void PublishTransition(StateTransition transition)
@@ -195,14 +222,16 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             previous = ToWireName(transition.Previous),
             current = ToWireName(transition.Current),
             reason = transition.Reason,
+            sourceTimestampUtc = transition.TimestampUtc,
             focusedSessionId = _reducer.FocusedSessionId,
             focusedCwd = _reducer.FocusedCwd,
-            sourceTimestampUtc = transition.TimestampUtc
+            activeTaskSessions = _reducer.ActiveTaskSessionCount
         });
+
         StateChanged?.Invoke(transition.Current, transition);
     }
 
-    private static StatusInputEvent? ParseInput(string line)
+    internal static StatusInputEvent? ParseInput(string line)
     {
         if (string.IsNullOrWhiteSpace(line))
             return null;
@@ -211,35 +240,41 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         {
             using var document = JsonDocument.Parse(line);
             var root = document.RootElement;
-            if (!root.TryGetProperty("source", out var sourceNode) ||
-                !root.TryGetProperty("event", out var eventNode) ||
-                !root.TryGetProperty("timestampUtc", out var timestampNode) ||
-                !DateTimeOffset.TryParse(timestampNode.GetString(), out var timestamp))
-            {
-                return null;
-            }
 
-            var source = sourceNode.GetString() ?? string.Empty;
-            var eventName = eventNode.GetString() ?? string.Empty;
+            var source = GetString(root, "source");
             if (source is not ("codex_hook" or "windows_notification"))
                 return null;
 
+            var eventName = GetString(root, "event");
+            var timestampText = GetString(root, "timestampUtc");
+            if (string.IsNullOrWhiteSpace(eventName) ||
+                !DateTimeOffset.TryParse(timestampText, out var timestampUtc))
+                return null;
+
             uint? notificationId = null;
-            if (root.TryGetProperty("notificationId", out var notificationNode) && notificationNode.TryGetUInt32(out var id))
-                notificationId = id;
+            if (root.TryGetProperty("notificationId", out var idNode) &&
+                idNode.ValueKind == JsonValueKind.Number &&
+                idNode.TryGetUInt32(out var parsedId))
+            {
+                notificationId = parsedId;
+            }
+
+            var packageFamilyName = GetString(root, "packageFamilyName");
+            var errorHint = root.TryGetProperty("errorHint", out var errorNode) &&
+                errorNode.ValueKind is JsonValueKind.True;
 
             return new StatusInputEvent(
-                timestamp.ToUniversalTime(),
+                timestampUtc.ToUniversalTime(),
                 source,
                 eventName,
                 notificationId,
-                root.TryGetProperty("packageFamilyName", out var packageNode) ? packageNode.GetString() ?? string.Empty : string.Empty,
-                root.TryGetProperty("errorHint", out var errorNode) && errorNode.ValueKind == JsonValueKind.True,
-                root.TryGetProperty("sessionId", out var sessionNode) ? sessionNode.GetString() ?? string.Empty : string.Empty,
-                root.TryGetProperty("turnId", out var turnNode) ? turnNode.GetString() ?? string.Empty : string.Empty,
-                root.TryGetProperty("cwd", out var cwdNode) ? cwdNode.GetString() ?? string.Empty : string.Empty);
+                packageFamilyName,
+                errorHint,
+                GetString(root, "sessionId"),
+                GetString(root, "turnId"),
+                GetString(root, "cwd"));
         }
-        catch
+        catch (JsonException)
         {
             return null;
         }
@@ -247,32 +282,59 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 
     private static string[] SafeReadReplayLines()
     {
-        try
+        var lines = new List<string>();
+        foreach (var path in new[] { EventJournal.ArchivePath(1), EventJournal.FilePath })
         {
-            return File.ReadLines(EventJournal.FilePath)
-                .TakeLast(StartupReplayMaxLines)
-                .ToArray();
+            try
+            {
+                if (File.Exists(path))
+                    lines.AddRange(File.ReadLines(path));
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
-        catch
-        {
-            return [];
-        }
+
+        return lines.Count <= StartupReplayMaxLines
+            ? lines.ToArray()
+            : lines.Skip(lines.Count - StartupReplayMaxLines).ToArray();
     }
 
     private static long SafeCurrentLength()
     {
-        try { return new FileInfo(EventJournal.FilePath).Length; }
-        catch { return 0; }
+        try
+        {
+            return File.Exists(EventJournal.FilePath) ? new FileInfo(EventJournal.FilePath).Length : 0;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return 0;
+        }
     }
 
-    public static string ToWireName(K15NormalizedState state) => state switch
+    private static string GetString(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var node) || node.ValueKind != JsonValueKind.String)
+            return string.Empty;
+
+        return node.GetString() ?? string.Empty;
+    }
+
+    internal static string ToWireName(K15NormalizedState state) => state switch
     {
         K15NormalizedState.Normal => "NORMAL",
         K15NormalizedState.Running => "RUNNING",
         K15NormalizedState.Waiting => "WAITING",
         K15NormalizedState.DonePendingAttention => "DONE_PENDING_ATTENTION",
         K15NormalizedState.Error => "ERROR",
-        _ => state.ToString().ToUpperInvariant()
+        _ => "UNKNOWN"
     };
 
     public async ValueTask DisposeAsync()
@@ -280,9 +342,15 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         _cts.Cancel();
         if (_loopTask is not null)
         {
-            try { await _loopTask; }
-            catch (OperationCanceledException) { }
+            try
+            {
+                await _loopTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
         }
+
         _cts.Dispose();
     }
 }
