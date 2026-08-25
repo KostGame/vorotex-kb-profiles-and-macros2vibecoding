@@ -8,18 +8,23 @@ function Get-DetectedCodexHomes {
     param([string[]]$ExplicitHomes)
 
     $candidates = New-Object System.Collections.Generic.List[string]
+    $hasExplicitHomes = $false
 
     foreach ($home in @($ExplicitHomes)) {
         if (-not [string]::IsNullOrWhiteSpace($home)) {
             $candidates.Add($home)
+            $hasExplicitHomes = $true
         }
     }
 
-    if ($candidates.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
-        $candidates.Add($env:CODEX_HOME)
-    }
+    # An explicit -CodexHome remains a precise/manual override. Without it, CODEX_HOME is
+    # one detected environment, not an exclusive environment: Status Lab health checks all
+    # local Codex homes, so the installer must keep that same set in sync.
+    if (-not $hasExplicitHomes) {
+        if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+            $candidates.Add($env:CODEX_HOME)
+        }
 
-    if ($candidates.Count -eq 0) {
         foreach ($name in @('.codex-agentloop', '.codex')) {
             $candidate = Join-Path $env:USERPROFILE $name
             if (Test-Path -LiteralPath $candidate -PathType Container) {

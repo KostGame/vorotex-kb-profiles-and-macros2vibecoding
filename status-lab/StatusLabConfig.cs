@@ -57,6 +57,8 @@ internal sealed class LightingEffectConfig
 internal sealed class ProfileLightingConfig
 {
     public string Color { get; set; } = "#FFFFFF";
+    public bool ManagedNormal { get; set; } = true;
+    public int NormalBrightness { get; set; } = 6;
 }
 
 internal sealed class StateLightingConfig
@@ -75,14 +77,17 @@ internal sealed class ProfileSetConfig
 
 internal sealed class StatusLabConfig
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
     public const int MaxNotifierColors = 2;
     public static string FilePath { get; } = Path.Combine(EventJournal.DirectoryPath, "config.toml");
 
     public string? LoadWarning { get; private set; }
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public WireColorOrder WireColorOrder { get; set; } = WireColorOrder.RGB;
+    // Kept only to parse legacy RC1/RC2 config. It is never reinterpreted as
+    // stale attention: legacy 30 seconds must not clear unread work.
     public double DoneAttentionTimeoutSeconds { get; set; } = 30;
+    public double StaleAttentionTimeoutSeconds { get; set; } = 18000;
     public ProfileSetConfig Profiles { get; set; } = new();
     public StateLightingConfig States { get; set; } = new();
     public LightingEffectConfig ProfileSwitch { get; set; } = new();
@@ -95,10 +100,11 @@ internal sealed class StatusLabConfig
         SchemaVersion = CurrentSchemaVersion,
         WireColorOrder = WireColorOrder.RGB,
         DoneAttentionTimeoutSeconds = 30,
+        StaleAttentionTimeoutSeconds = 18000,
         Profiles = new ProfileSetConfig
         {
-            A = new ProfileLightingConfig { Color = "#FF0000" },
-            B = new ProfileLightingConfig { Color = "#0000FF" }
+            A = new ProfileLightingConfig { Color = "#FF0000", ManagedNormal = true, NormalBrightness = 6 },
+            B = new ProfileLightingConfig { Color = "#0000FF", ManagedNormal = true, NormalBrightness = 6 }
         },
         States = new StateLightingConfig
         {
@@ -158,13 +164,30 @@ internal sealed class StatusLabConfig
         _ => throw new ArgumentOutOfRangeException(nameof(onboardSlot))
     };
 
+    public LightingEffectConfig GetCanonicalNormal(byte onboardSlot)
+    {
+        var profile = GetProfile(onboardSlot);
+        return new LightingEffectConfig
+        {
+            Enabled = profile.ManagedNormal,
+            Mode = K15LightingMode.Constant,
+            Palette = PaletteSource.Profile,
+            Brightness = profile.NormalBrightness,
+            Speed = 4,
+            Direction = 0,
+            DurationSeconds = 0,
+            Colors = [profile.Color],
+            PaletteMask = 0x01
+        };
+    }
+
     public LightingEffectConfig GetState(K15NormalizedState state) => state switch
     {
         K15NormalizedState.Running => States.Running,
         K15NormalizedState.Waiting => States.Waiting,
         K15NormalizedState.DonePendingAttention => States.Done,
         K15NormalizedState.Error => States.Error,
-        _ => throw new ArgumentOutOfRangeException(nameof(state), "NORMAL restores the exact device baseline.")
+        _ => throw new ArgumentOutOfRangeException(nameof(state), "NORMAL restores the managed profile baseline or exact snapshot.")
     };
 
     public LightingEffectConfig RenderForProfile(byte onboardSlot, LightingEffectConfig source)
@@ -190,6 +213,8 @@ internal sealed class StatusLabConfig
 
         _ = ParseColor(Profiles.A.Color);
         _ = ParseColor(Profiles.B.Color);
+        ValidateProfile(Profiles.A, "profiles.A");
+        ValidateProfile(Profiles.B, "profiles.B");
         ValidateEffect(States.Running, "states.running");
         ValidateEffect(States.Waiting, "states.waiting");
         ValidateEffect(States.Done, "states.done");
@@ -200,6 +225,8 @@ internal sealed class StatusLabConfig
 
         if (DoneAttentionTimeoutSeconds is < 0 or > 3600)
             throw new InvalidDataException("behavior.done_attention_timeout_seconds must be 0..3600.");
+        if (StaleAttentionTimeoutSeconds is < 0 or > 259200)
+            throw new InvalidDataException("behavior.stale_attention_timeout_seconds must be 0..259200.");
         if (EffectLabDurationSeconds is < 0.5 or > 30)
             throw new InvalidDataException("effect_lab.test_duration_seconds must be 0.5..30.");
     }
@@ -257,6 +284,12 @@ internal sealed class StatusLabConfig
         K15LightingMode.SingleColorBreathing or
         K15LightingMode.CycleBreathing or
         K15LightingMode.Off;
+
+    private static void ValidateProfile(ProfileLightingConfig profile, string path)
+    {
+        if (profile.NormalBrightness is < 1 or > 6)
+            throw new InvalidDataException($"{path}.normal_brightness must be 1..6.");
+    }
 
     private static void ValidateEffect(LightingEffectConfig effect, string path)
     {

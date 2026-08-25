@@ -49,6 +49,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 onboardSlot = _snapshot.OnboardSlot,
                 profile = ProfileName(_snapshot.OnboardSlot),
                 exactBaselineMode = _snapshot.Header[0],
+                managedNormal = _snapshot.CanonicalNormal.Enabled,
                 configPath = StatusLabConfig.FilePath,
                 wireColorOrder = _config.WireColorOrder.ToString(),
                 pendingRestoreSlots = _pendingRestores.Keys.OrderBy(slot => slot).ToArray(),
@@ -183,27 +184,50 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 _appliedState = K15NormalizedState.Normal;
                 if (_desiredState != K15NormalizedState.Normal)
                     _expiredState = _desiredState;
-                StatusChanged?.Invoke($"RGB: baseline restored · profile {ProfileName(_snapshot.OnboardSlot)}");
-                Log("rgb_manual_baseline_restored", new { onboardSlot = _snapshot.OnboardSlot, trackingEnabled = true });
+                var policy = _snapshot.CanonicalNormal.Enabled ? "canonical NORMAL" : "exact baseline";
+                StatusChanged?.Invoke($"RGB: {policy} restored · profile {ProfileName(_snapshot.OnboardSlot)}");
+                Log("rgb_manual_baseline_restored", new
+                {
+                    onboardSlot = _snapshot.OnboardSlot,
+                    trackingEnabled = true,
+                    managedNormal = _snapshot.CanonicalNormal.Enabled
+                });
                 return;
             }
 
             using var controller = K15HidLightingController.Open();
-            var slot = controller.ReadActiveSlot();
+            var captured = controller.PrepareProfileSnapshot(_config);
+            var slot = captured.OnboardSlot;
+            if (captured.CanonicalNormal.Enabled)
+            {
+                controller.Restore(captured);
+                _pendingRestores.Remove(slot);
+                StatusChanged?.Invoke($"RGB: OFF · canonical NORMAL repaired · profile {ProfileName(slot)}");
+                Log("rgb_manual_baseline_restored", new
+                {
+                    onboardSlot = slot,
+                    trackingEnabled = false,
+                    managedNormal = true,
+                    trigger = "manual_repair_while_disabled"
+                });
+                return;
+            }
+
             if (!_pendingRestores.TryGetValue(slot, out var pending))
             {
-                StatusChanged?.Invoke($"RGB: OFF · no pending restore for profile {ProfileName(slot)}");
+                StatusChanged?.Invoke($"RGB: OFF · no pending exact restore for profile {ProfileName(slot)}");
                 return;
             }
 
             controller.Restore(pending);
             _pendingRestores.Remove(slot);
-            StatusChanged?.Invoke($"RGB: OFF · baseline recovered for profile {ProfileName(slot)}");
+            StatusChanged?.Invoke($"RGB: OFF · exact baseline recovered · profile {ProfileName(slot)}");
             Log("rgb_pending_baseline_restored", new
             {
                 onboardSlot = slot,
                 profile = ProfileName(slot),
                 trigger = "manual_restore_while_disabled",
+                managedNormal = false,
                 remainingSlots = _pendingRestores.Keys.OrderBy(value => value).ToArray()
             });
         }
@@ -355,7 +379,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         if (cachedSnapshot && knownSnapshot is not null)
         {
             // The profile may still contain a notifier effect from the last time it was active.
-            // Reapply its exact session baseline before any new state effect.
+            // Reapply its configured baseline policy before any new state effect.
             _controller.Restore(knownSnapshot);
             _snapshot = knownSnapshot;
             baselineReapplied = true;
@@ -405,6 +429,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             onboardSlot = slot,
             profile = ProfileName(slot),
             trigger,
+            managedNormal = pending.CanonicalNormal.Enabled,
             remainingSlots = _pendingRestores.Keys.OrderBy(value => value).ToArray()
         });
     }
@@ -448,7 +473,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         {
             _controller.Restore(_snapshot);
             _appliedState = K15NormalizedState.Normal;
-            StatusChanged?.Invoke($"RGB: NORMAL · exact baseline {ProfileName(_snapshot.OnboardSlot)}");
+            var policy = _snapshot.CanonicalNormal.Enabled ? "canonical NORMAL" : "exact baseline";
+            StatusChanged?.Invoke($"RGB: NORMAL · {policy} {ProfileName(_snapshot.OnboardSlot)}");
             return;
         }
 
@@ -556,9 +582,9 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             if (!Enabled)
                 return;
 
-            // Preserve exact baselines before attempting any restore. An inactive profile cannot be
-            // safely selected by Status Lab, so its baseline stays pending until that profile is
-            // physically active again. Never forget a deferred rollback just because RGB is OFF.
+            // Preserve profile rollback/policy snapshots before attempting any restore. An inactive
+            // profile cannot be safely selected by Status Lab, so its repair stays pending until
+            // that profile is physically active again. Never forget a deferred repair just because RGB is OFF.
             foreach (var pair in _snapshots)
                 _pendingRestores[pair.Key] = pair.Value;
 
@@ -576,7 +602,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                         {
                             reason,
                             onboardSlot = currentSlot,
-                            profile = ProfileName(currentSlot)
+                            profile = ProfileName(currentSlot),
+                            managedNormal = currentSnapshot.CanonicalNormal.Enabled
                         });
                     }
 
@@ -659,7 +686,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             Log("rgb_pending_restore_on_exit", new
             {
                 pendingSlots = _pendingRestores.Keys.OrderBy(slot => slot).ToArray(),
-                note = "No programmatic profile selection; reopen Status Lab on that physical profile to recover its exact baseline."
+                note = "No programmatic profile selection; reopen Status Lab on that physical profile to recover its configured baseline policy."
             });
         }
         _gate.Dispose();

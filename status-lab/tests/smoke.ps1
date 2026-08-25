@@ -10,7 +10,7 @@ $trayIconFactory = Join-Path $projectRoot 'TrayIconFactory.cs'
 $stateReducer = Join-Path $projectRoot 'StateReducer.cs'
 $normalizer = Join-Path $projectRoot 'JournalStateNormalizer.cs'
 $eventJournal = Join-Path $projectRoot 'EventJournal.cs'
-$appContext = Join-Path $projectRoot 'StatusLabApplicationContext.cs'
+$appContext = Join-Path $projectRoot 'StatusTrayApplicationContext.cs'
 $lightingLabProject = Join-Path $projectRoot 'lighting-lab\Vorotex.K15.LightingLab.csproj'
 $lightingLabForm = Join-Path $projectRoot 'lighting-lab\LightingLabForm.cs'
 $lightingLabSession = Join-Path $projectRoot 'lighting-lab\LightingLabSession.cs'
@@ -34,19 +34,19 @@ if ($html -match "\['mono_water'" -or $html -match "\['tetris_blocks'" -or $html
 if ($html -notmatch 'cycle_breathing' -or $html -notmatch 'profile_pair' -or $html -notmatch 'stop_signal') {
     throw 'Configurator must expose accepted Cycle breathing and profile-pair STOP/activation signals.'
 }
-if ($html -notmatch 'doneTimeout:30' -or $html -notmatch 'schema_version = 4' -or $html -notmatch 'profile_switch:\{enabled:false') {
-    throw 'Configurator must expose RC1 schema/defaults: v4, 30s DONE, profile switch OFF.'
+if ($html -notmatch 'staleTimeout:18000' -or $html -notmatch 'schema_version = 5' -or $html -notmatch 'profile_switch:\{enabled:false') {
+    throw 'Configurator must expose schema v5, five-hour stale attention reset, and profile switch OFF.'
 }
 if ($html -notmatch "activation:\{enabled:true,effect:'cycle_breathing'" -or $html -notmatch 'migrateLoadedModel') {
     throw 'Configurator must use Cycle breathing activation and migrate beta defaults in memory.'
 }
 
 $toml = Get-Content -LiteralPath $configExample -Raw -Encoding UTF8
-if ($toml -notmatch 'schema_version\s*=\s*4' -or $toml -notmatch '\[stop_signal\]' -or $toml -notmatch 'profile_pair') {
-    throw 'TOML example must use schema v4 and include profile-pair STOP signal.'
+if ($toml -notmatch 'schema_version\s*=\s*5' -or $toml -notmatch '\[stop_signal\]' -or $toml -notmatch 'profile_pair') {
+    throw 'TOML example must use schema v5 and include profile-pair STOP signal.'
 }
-if ($toml -notmatch '\[behavior\]' -or $toml -notmatch 'done_attention_timeout_seconds\s*=\s*30') {
-    throw 'TOML example must expose 30-second DONE fallback.'
+if ($toml -notmatch '\[behavior\]' -or $toml -notmatch 'stale_attention_timeout_seconds\s*=\s*18000') {
+    throw 'TOML example must expose five-hour stale attention reset.'
 }
 if ($toml -notmatch '\[profile_switch\][\s\S]*?enabled\s*=\s*false' -or
     $toml -notmatch '\[activation\][\s\S]*?effect\s*=\s*"cycle_breathing"') {
@@ -90,8 +90,9 @@ if ($stateSource -notmatch 'FocusedSessionId' -or $stateSource -notmatch 'IsInte
 if ($stateSource -notmatch 'case "PreToolUse"' -or $stateSource -notmatch 'codex_pre_tool_use') {
     throw 'State reducer must resume WAITING from the PreToolUse approval signal.'
 }
-if ($stateSource -notmatch 'BindRecentNotificationToDone' -or $stateSource -notmatch 'done_attention_timeout') {
-    throw 'State reducer must correlate pre-Stop completion notifications and provide DONE timeout.'
+if ($stateSource -notmatch 'CodexAttentionSnapshot' -or $stateSource -notmatch 'stale_attention_timeout' -or
+    $stateSource -match 'done_notification_resolved') {
+    throw 'State reducer must aggregate attention and never treat toast removal as DONE acknowledgement.'
 }
 if ($normalizerSource -notmatch 'StartupReplayWindow' -or $normalizerSource -notmatch 'state_rehydrated') {
     throw 'Journal normalizer must replay recent Codex hooks and log rehydrated state.'
@@ -116,6 +117,9 @@ if ($appSource -notmatch 'ManualResetAttention' -or $appSource -notmatch 'Restor
     $appSource -notmatch 'manual_attention_reset') {
     throw 'Tray must expose manual WAITING/DONE reset and exact baseline recovery.'
 }
+if ($appSource -notmatch 'StatusTrayIpc' -or $appSource -notmatch 'OpenControlCenterProcess') {
+    throw 'Split tray must expose local IPC and launch the standalone Control Center.'
+}
 
 $labSource = (Get-Content -LiteralPath $lightingLabForm -Raw -Encoding UTF8) + (Get-Content -LiteralPath $lightingLabSession -Raw -Encoding UTF8)
 if ($labSource -notmatch 'PaletteMask' -or $labSource -notmatch 'lighting-lab\.jsonl' -or $labSource -notmatch 'Restore exact baseline') {
@@ -128,6 +132,7 @@ if ($labSource -match '\bSelectActiveSlot\s*\(') {
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 $oldLocalAppData = $env:LOCALAPPDATA
 $oldUserProfile = $env:USERPROFILE
+$oldCodexHome = $env:CODEX_HOME
 
 try {
     $localAppData = Join-Path $tempRoot 'localappdata'
@@ -158,6 +163,9 @@ try {
     $codexHome = Join-Path $userProfile '.codex'
     $agentLoopHome = Join-Path $userProfile '.codex-agentloop'
     New-Item -ItemType Directory -Path $codexHome, $agentLoopHome -Force | Out-Null
+    # install-codex-hooks.ps1 intentionally honors CODEX_HOME before probing
+    # USERPROFILE. Keep that lookup fully inside the synthetic fixture.
+    $env:CODEX_HOME = $agentLoopHome
     Set-Content -LiteralPath (Join-Path $agentLoopHome 'config.toml') -Value 'model = "test"' -Encoding UTF8
     $hooksPath = Join-Path $codexHome 'hooks.json'
     @'
@@ -219,10 +227,11 @@ try {
         if (@($agentLoopInstalled.hooks.$eventName).Count -lt 1) { throw "Missing $eventName in .codex-agentloop hooks.json." }
     }
 
-    Write-Output 'Status Lab RC1 approval + restore + config + Lighting Lab smoke tests: PASS'
+    Write-Output 'Status Tray approval + restore + config + Lighting Lab smoke tests: PASS'
 }
 finally {
     $env:LOCALAPPDATA = $oldLocalAppData
     $env:USERPROFILE = $oldUserProfile
+    $env:CODEX_HOME = $oldCodexHome
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

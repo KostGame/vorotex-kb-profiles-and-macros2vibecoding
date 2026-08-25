@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Vorotex.K15.StatusLab;
 
-internal sealed class StatusLabApplicationContext : ApplicationContext
+internal sealed class StatusTrayApplicationContext : ApplicationContext
 {
     private readonly StatusLabConfig _config;
     private readonly WindowsNotificationPoller _notificationPoller = new();
@@ -16,18 +16,19 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _stateStatusItem;
     private readonly ToolStripMenuItem _trackingStatusItem;
     private readonly ToolStripMenuItem _rgbStatusItem;
-    private readonly ToolStripMenuItem _rgbCanaryItem;
+    private readonly ToolStripMenuItem _rgbItem;
     private readonly ToolStripMenuItem _notificationStatusItem;
     private readonly ToolStripMenuItem _codexHookItem;
     private readonly ToolStripMenuItem _loggingItem;
-    private ControlCenterForm? _controlCenter;
+    private readonly CancellationTokenSource _ipcCancellation = new();
+
     private string _notificationStatusText = "Уведомления: запуск...";
     private string _rgbStatusText = "RGB: OFF";
     private string _lastTransitionReason = "state_rehydrated";
     private DateTimeOffset _stateEnteredUtc = DateTimeOffset.UtcNow;
     private bool _exiting;
 
-    public StatusLabApplicationContext()
+    public StatusTrayApplicationContext()
     {
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
@@ -39,26 +40,23 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         EventJournal.Append(new
         {
             timestampUtc = DateTimeOffset.UtcNow,
-            source = "status_lab",
+            source = "status_tray",
             @event = "started",
-            version = typeof(StatusLabApplicationContext).Assembly.GetName().Version?.ToString(),
-            productSurface = "control_center_rc2",
-            rgbConfigPath = StatusLabConfig.FilePath,
+            version = typeof(StatusTrayApplicationContext).Assembly.GetName().Version?.ToString(),
+            productSurface = "status_tray_rc2_split",
             configSchema = _config.SchemaVersion,
-            wireColorOrder = _config.WireColorOrder.ToString(),
             staleAttentionTimeoutSeconds = _config.StaleAttentionTimeoutSeconds,
-            detailedLogging = EventJournal.DetailedLoggingEnabled,
-            configWarning = _config.LoadWarning,
             hardwareProfileSelectionPolicy = "observe_only",
-            unknownPowerWrites = false
+            unknownPowerWrites = false,
+            ipc = StatusTrayIpc.PipeName
         });
 
         _stateStatusItem = new ToolStripMenuItem("Состояние: NORMAL") { Enabled = false };
         _trackingStatusItem = new ToolStripMenuItem("RGB-индикация: ВЫКЛ") { Enabled = false };
         _notificationStatusItem = new ToolStripMenuItem(_notificationStatusText) { Enabled = false };
         _rgbStatusItem = new ToolStripMenuItem(_rgbStatusText) { Enabled = false };
-        _rgbCanaryItem = new ToolStripMenuItem("Включить RGB-индикацию статусов");
-        _rgbCanaryItem.Click += async (_, _) => await ToggleRgbCanaryAsync();
+        _rgbItem = new ToolStripMenuItem("Включить RGB-индикацию статусов");
+        _rgbItem.Click += async (_, _) => await ToggleRgbAsync();
         _codexHookItem = new ToolStripMenuItem("Установить / обновить Codex hooks");
         _codexHookItem.Click += async (_, _) => await InstallCodexHooksAsync();
         _loggingItem = new ToolStripMenuItem();
@@ -68,11 +66,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         _trayIcon = new NotifyIcon
         {
             Icon = _trackingOffIcon,
-            Text = "K15 Status Lab · NORMAL · RGB OFF",
+            Text = "K15 Status Tray · NORMAL · RGB OFF",
             Visible = true,
             ContextMenuStrip = BuildMenu()
         };
-        _trayIcon.DoubleClick += (_, _) => OpenControlCenter();
+        _trayIcon.DoubleClick += (_, _) => OpenControlCenterProcess();
 
         _notificationPoller.StatusChanged += status =>
         {
@@ -85,9 +83,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             _ = _rgbCanary.ApplyStateAsync(state, transition);
         };
         _rgbCanary.StatusChanged += UpdateRgbStatus;
+
         _stateNormalizer.Start();
         _ = StartNotificationPollingAsync();
         RefreshTrackingIndicator();
+        _ = Task.Run(() => StatusTrayIpc.RunServerAsync(HandleIpcAsync, _ipcCancellation.Token));
 
         if (!string.IsNullOrWhiteSpace(_config.LoadWarning))
             ShowBalloon(_config.LoadWarning);
@@ -96,9 +96,12 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
-        var controlCenter = new ToolStripMenuItem("Открыть K15 Control Center") { Font = new Font(SystemFonts.MenuFont, FontStyle.Bold) };
-        controlCenter.Click += (_, _) => OpenControlCenter();
-        menu.Items.Add(controlCenter);
+        var control = new ToolStripMenuItem("Открыть K15 Control Center")
+        {
+            Font = new Font(SystemFonts.MenuFont, FontStyle.Bold)
+        };
+        control.Click += (_, _) => OpenControlCenterProcess();
+        menu.Items.Add(control);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_stateStatusItem);
         menu.Items.Add(_trackingStatusItem);
@@ -106,51 +109,110 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         menu.Items.Add(_rgbStatusItem);
         menu.Items.Add("✓ Сбросить WAITING / DONE", null, (_, _) => ManualResetAttention());
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(_rgbCanaryItem);
-        menu.Items.Add("Восстановить штатную подсветку текущего профиля", null, async (_, _) => await RestoreNativeLightingAsync());
-        menu.Items.Add("Открыть RGB config.toml", null, (_, _) => OpenPath(StatusLabConfig.FilePath));
-        menu.Items.Add("Открыть RGB configurator", null, (_, _) => OpenConfigurator());
-        menu.Items.Add(BuildEffectLabMenu());
-        menu.Items.Add("Открыть K15 Lighting Lab", null, async (_, _) => await OpenLightingLabAsync());
+        menu.Items.Add(_rgbItem);
+        menu.Items.Add("Восстановить штатную подсветку текущего профиля", null,
+            async (_, _) => await RestoreNativeLightingAsync());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Открыть Lighting Lab", null, async (_, _) => await OpenLightingLabAsync());
+        menu.Items.Add("Открыть HID Research Lab", null, (_, _) => OpenSibling("Vorotex.K15.HidResearchLab.exe"));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_codexHookItem);
         menu.Items.Add(_loggingItem);
-        menu.Items.Add("Открыть журнал событий", null, (_, _) => OpenPath(EventJournal.FilePath));
+        menu.Items.Add("Открыть RGB config.toml", null, (_, _) => OpenPath(StatusLabConfig.FilePath));
+        menu.Items.Add("Открыть RGB configurator", null, (_, _) => OpenConfigurator());
         menu.Items.Add("Открыть папку журнала", null, (_, _) => OpenPath(EventJournal.DirectoryPath));
-        menu.Items.Add("Очистить журнал", null, (_, _) => ClearJournal());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Выход", null, async (_, _) => await ExitAsync());
         return menu;
     }
 
-    private void OpenControlCenter()
+    private async Task<StatusTrayIpcResponse> HandleIpcAsync(StatusTrayIpcRequest request)
     {
-        if (_controlCenter is null || _controlCenter.IsDisposed)
+        var command = request.Command.Trim().ToLowerInvariant();
+        return command switch
         {
-            _controlCenter = new ControlCenterForm(GetControlCenterSnapshot, new ControlCenterActions(
-                ToggleRgbCanaryAsync,
-                ManualResetAttention,
-                RestoreNativeLightingAsync,
-                InstallCodexHooksAsync,
-                OpenConfigurator,
-                OpenLightingLabAsync,
-                () => OpenPath(EventJournal.DirectoryPath),
-                SetAutostart));
-        }
-
-        if (!_controlCenter.Visible)
-            _controlCenter.Show();
-        if (_controlCenter.WindowState == FormWindowState.Minimized)
-            _controlCenter.WindowState = FormWindowState.Normal;
-        _controlCenter.Activate();
+            "snapshot" => await RunOnUiAsync(() => Task.FromResult(new StatusTrayIpcResponse(true, Snapshot: BuildSnapshot()))),
+            "toggle_rgb" => await RunCommandAsync(ToggleRgbAsync),
+            "reset_attention" => await RunCommandAsync(() => { ManualResetAttention(); return Task.CompletedTask; }),
+            "restore_lighting" => await RunCommandAsync(RestoreNativeLightingAsync),
+            "install_hooks" => await RunCommandAsync(InstallCodexHooksAsync),
+            "toggle_logging" => await RunCommandAsync(() => { ToggleDetailedLogging(); return Task.CompletedTask; }),
+            "set_autostart" => await RunCommandAsync(() =>
+            {
+                var enabled = string.Equals(request.Value, "true", StringComparison.OrdinalIgnoreCase);
+                if (!SetAutostart(enabled))
+                    throw new InvalidOperationException("Не удалось подтвердить изменение автозапуска Status Tray.");
+                return Task.CompletedTask;
+            }),
+            "open_configurator" => await RunCommandAsync(() => { OpenConfigurator(); return Task.CompletedTask; }),
+            "open_lighting_lab" => await RunCommandAsync(OpenLightingLabAsync),
+            "open_hid_research" => await RunCommandAsync(() => { OpenSibling("Vorotex.K15.HidResearchLab.exe"); return Task.CompletedTask; }),
+            "open_journal_folder" => await RunCommandAsync(() => { OpenPath(EventJournal.DirectoryPath); return Task.CompletedTask; }),
+            _ => new StatusTrayIpcResponse(false, $"Неизвестная IPC-команда: {request.Command}")
+        };
     }
 
-    private ControlCenterSnapshot GetControlCenterSnapshot()
+    private async Task<StatusTrayIpcResponse> RunCommandAsync(Func<Task> command)
     {
+        try
+        {
+            await RunOnUiAsync(command);
+            return new StatusTrayIpcResponse(true, Snapshot: await RunOnUiAsync(() => Task.FromResult(BuildSnapshot())));
+        }
+        catch (Exception ex)
+        {
+            return new StatusTrayIpcResponse(false, ex.Message);
+        }
+    }
+
+    private Task RunOnUiAsync(Func<Task> action)
+    {
+        if (_trayIcon.ContextMenuStrip?.InvokeRequired != true)
+            return action();
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _trayIcon.ContextMenuStrip.BeginInvoke(new Action(async () =>
+        {
+            try
+            {
+                await action();
+                tcs.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        }));
+        return tcs.Task;
+    }
+
+    private Task<T> RunOnUiAsync<T>(Func<Task<T>> action)
+    {
+        if (_trayIcon.ContextMenuStrip?.InvokeRequired != true)
+            return action();
+
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _trayIcon.ContextMenuStrip.BeginInvoke(new Action(async () =>
+        {
+            try
+            {
+                tcs.TrySetResult(await action());
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        }));
+        return tcs.Task;
+    }
+
+    private StatusTraySnapshot BuildSnapshot()
+    {
+        var hooks = CodexHookHealth.Inspect();
         var session = string.IsNullOrWhiteSpace(_stateNormalizer.FocusedSessionId)
             ? string.Empty
             : ShortSession(_stateNormalizer.FocusedSessionId);
-        return new ControlCenterSnapshot(
+        return new StatusTraySnapshot(
             JournalStateNormalizer.ToWireName(_stateNormalizer.State),
             _lastTransitionReason,
             _stateEnteredUtc,
@@ -160,10 +222,25 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             _rgbStatusText,
             _notificationStatusText,
             EventJournal.DetailedLoggingEnabled,
-            CodexHookHealth.Inspect(),
+            hooks.Healthy,
+            hooks.Status,
+            hooks.Detail,
             StartupManager.IsEnabled(),
             StatusLabConfig.FilePath,
             _config.SchemaVersion);
+    }
+
+    private void OpenControlCenterProcess() => OpenSibling("Vorotex.K15.ControlCenter.exe");
+
+    private void OpenSibling(string executable)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, executable);
+        if (!File.Exists(path))
+        {
+            ShowBalloon($"{executable} не найден рядом с Status Tray. Приложения RC2 теперь распространяются отдельно.");
+            return;
+        }
+        Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
     }
 
     private bool SetAutostart(bool enabled)
@@ -172,7 +249,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         {
             var result = StartupManager.SetEnabled(enabled);
             ShowBalloon(result
-                ? $"Автозапуск Status Lab: {(enabled ? "ВКЛ" : "ВЫКЛ")}."
+                ? $"Автозапуск Status Tray: {(enabled ? "ВКЛ" : "ВЫКЛ")}."
                 : "Не удалось подтвердить изменение автозапуска.");
             return result;
         }
@@ -181,36 +258,6 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             ShowBalloon("Автозапуск: " + ex.Message);
             return false;
         }
-    }
-
-    private ToolStripMenuItem BuildEffectLabMenu()
-    {
-        var lab = new ToolStripMenuItem("RGB Effect Test · quick");
-        AddEffectTest(lab, "Constant", K15LightingMode.Constant);
-        AddEffectTest(lab, "Flowing Water · one profile color", K15LightingMode.FlowingWater);
-        AddEffectTest(lab, "Single-color breathing", K15LightingMode.SingleColorBreathing);
-        AddEffectTest(lab, "Cycle breathing · one profile color", K15LightingMode.CycleBreathing);
-        lab.DropDownItems.Add(new ToolStripSeparator());
-        lab.DropDownItems.Add("Restore exact baseline", null, async (_, _) =>
-        {
-            try { await _rgbCanary.RestoreCurrentAsync(); }
-            catch (Exception ex) { ShowBalloon($"Effect Test restore: {ex.Message}"); }
-        });
-        return lab;
-    }
-
-    private void AddEffectTest(ToolStripMenuItem parent, string title, K15LightingMode mode)
-    {
-        parent.DropDownItems.Add(title, null, async (_, _) =>
-        {
-            if (!_rgbCanary.Enabled)
-            {
-                ShowBalloon("Сначала включи RGB-индикацию статусов. Для полного исследования режимов используй отдельный K15 Lighting Lab.");
-                return;
-            }
-            try { await _rgbCanary.TestEffectAsync(mode); }
-            catch (Exception ex) { ShowBalloon($"Effect Test: {ex.Message}"); }
-        });
     }
 
     private void UpdateNormalizedState(K15NormalizedState state, StateTransition? transition)
@@ -244,11 +291,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         EventJournal.Append(new
         {
             timestampUtc = DateTimeOffset.UtcNow,
-            source = "status_lab",
+            source = "status_tray",
             @event = "manual_attention_reset",
             previous
         });
-        ShowBalloon("Status Lab сбросил WAITING / DONE и свои привязки к уведомлениям. Системные toast Windows не удаляются.");
+        ShowBalloon("Status Tray сбросил WAITING / DONE. Системные toast Windows не удаляются.");
     }
 
     private async Task RestoreNativeLightingAsync()
@@ -256,7 +303,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         try
         {
             await _rgbCanary.RestoreCurrentAsync();
-            ShowBalloon("Попытка восстановления exact baseline текущего физического профиля выполнена.");
+            ShowBalloon("Exact baseline текущего физического профиля восстановлен, если snapshot был доступен.");
         }
         catch (Exception ex)
         {
@@ -266,26 +313,21 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
                 source = "k15_rgb",
                 @event = "manual_baseline_restore_failed",
                 exception = ex.GetType().FullName,
-                hresult = ex.HResult,
                 message = ex.Message
             });
             ShowBalloon($"Не удалось восстановить штатную подсветку: {ex.Message}");
         }
     }
 
-    private async Task ToggleRgbCanaryAsync()
+    private async Task ToggleRgbAsync()
     {
         if (_rgbCanary.Enabled)
         {
-            _rgbCanaryItem.Enabled = false;
-            try
-            {
-                await _rgbCanary.DisableAsync();
-                _rgbCanaryItem.Text = "Включить RGB-индикацию статусов";
-            }
+            _rgbItem.Enabled = false;
+            try { await _rgbCanary.DisableAsync(); }
             finally
             {
-                _rgbCanaryItem.Enabled = true;
+                _rgbItem.Enabled = true;
                 RefreshTrackingIndicator();
             }
             return;
@@ -293,18 +335,18 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 
         var result = MessageBox.Show(
             "Включить физическую RGB-индикацию статусов K15?\n\n" +
-            "Status Lab только наблюдает физически выбранный Profile A/B и НИКОГДА не переключает его программно. " +
-            "Цвет задаёт профиль, состояния и короткие сигналы меняют эффект/палитру. NORMAL восстанавливает exact onboard baseline. " +
-            "Закрой W910 WebDriver/VOROTEX перед тестом.\n\nПродолжить?",
-            "VOROTEX K15 RGB-индикация", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            "Status Tray только наблюдает физически выбранный Profile A/B и не переключает его программно. " +
+            "NORMAL восстанавливает exact onboard baseline. Закрой штатный VOROTEX перед обычной RGB-работой.\n\nПродолжить?",
+            "VOROTEX K15 Status Tray",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
         if (result != DialogResult.Yes)
             return;
 
-        _rgbCanaryItem.Enabled = false;
+        _rgbItem.Enabled = false;
         try
         {
             await _rgbCanary.EnableAsync(_stateNormalizer.State);
-            _rgbCanaryItem.Text = "Выключить RGB-индикацию статусов";
         }
         catch (Exception ex)
         {
@@ -314,14 +356,13 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
                 source = "k15_rgb",
                 @event = "rgb_enable_failed",
                 exception = ex.GetType().FullName,
-                hresult = ex.HResult,
                 message = ex.Message
             });
             ShowBalloon($"RGB-индикация не запущена: {ex.Message}");
         }
         finally
         {
-            _rgbCanaryItem.Enabled = true;
+            _rgbItem.Enabled = true;
             RefreshTrackingIndicator();
         }
     }
@@ -333,25 +374,24 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             var enabled = _rgbCanary.Enabled;
             _trackingStatusItem.Text = enabled ? "RGB-индикация: ВКЛ" : "RGB-индикация: ВЫКЛ";
             _trayIcon.Icon = enabled ? _trackingOnIcon : _trackingOffIcon;
-            _rgbCanaryItem.Text = enabled ? "Выключить RGB-индикацию статусов" : "Включить RGB-индикацию статусов";
+            _rgbItem.Text = enabled ? "Выключить RGB-индикацию статусов" : "Включить RGB-индикацию статусов";
             RefreshTrayTooltip(JournalStateNormalizer.ToWireName(_stateNormalizer.State));
         });
     }
 
-    private void RefreshTrayTooltip(string wireState)
+    private void RefreshTrayTooltip(string state)
     {
-        var tracking = _rgbCanary.Enabled ? "RGB ON" : "RGB OFF";
-        _trayIcon.Text = $"K15 Status Lab · {wireState} · {tracking}";
+        var rgb = _rgbCanary.Enabled ? "RGB ON" : "RGB OFF";
+        _trayIcon.Text = $"K15 Status Tray · {state} · {rgb}";
     }
 
     private void ToggleDetailedLogging()
     {
-        var enable = !EventJournal.DetailedLoggingEnabled;
-        EventJournal.SetDetailedLoggingEnabled(enable);
+        EventJournal.SetDetailedLoggingEnabled(!EventJournal.DetailedLoggingEnabled);
         RefreshLoggingItem();
-        ShowBalloon(enable
-            ? "Подробный журнал включён. events.jsonl всё равно ограничен ротацией."
-            : "Подробный журнал выключен. Минимальные Codex/notification события остаются для работы отслеживания; журнал автоматически ограничен по размеру.");
+        ShowBalloon(EventJournal.DetailedLoggingEnabled
+            ? "Подробный журнал включён. Размер всё равно ограничен ротацией."
+            : "Подробный журнал выключен. Минимальные lifecycle events остаются для работы отслеживания.");
     }
 
     private void RefreshLoggingItem()
@@ -366,33 +406,16 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         var path = Path.Combine(AppContext.BaseDirectory, "Vorotex.K15.LightingLab.exe");
         if (!File.Exists(path))
         {
-            ShowBalloon("Vorotex.K15.LightingLab.exe не найден рядом со Status Lab.");
+            ShowBalloon("Lighting Lab не найден рядом с Status Tray. Скачай его отдельным artifact.");
             return;
         }
 
         if (_rgbCanary.Enabled)
         {
-            try
-            {
-                await _rgbCanary.DisableAsync("lighting_lab_launch");
-                RefreshTrackingIndicator();
-                ShowBalloon("RGB-индикация выключена перед Lighting Lab. После исследований включи её снова вручную.");
-            }
-            catch (Exception ex)
-            {
-                ShowBalloon($"Не удалось безопасно освободить K15 для Lighting Lab: {ex.Message}");
-                return;
-            }
+            await _rgbCanary.DisableAsync("lighting_lab_launch");
+            RefreshTrackingIndicator();
         }
-
         Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
-        EventJournal.Append(new
-        {
-            timestampUtc = DateTimeOffset.UtcNow,
-            source = "status_lab",
-            @event = "lighting_lab_launched",
-            executable = path
-        });
     }
 
     private void UpdateRgbStatus(string status)
@@ -401,11 +424,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         Ui(() =>
         {
             _rgbStatusItem.Text = status;
-            var enabled = _rgbCanary.Enabled;
-            _trackingStatusItem.Text = enabled ? "RGB-индикация: ВКЛ" : "RGB-индикация: ВЫКЛ";
-            _trayIcon.Icon = enabled ? _trackingOnIcon : _trackingOffIcon;
-            _rgbCanaryItem.Text = enabled ? "Выключить RGB-индикацию статусов" : "Включить RGB-индикацию статусов";
-            RefreshTrayTooltip(JournalStateNormalizer.ToWireName(_stateNormalizer.State));
+            RefreshTrackingIndicator();
         });
     }
 
@@ -413,15 +432,13 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     {
         try
         {
-            var started = await _notificationPoller.StartAsync();
-            if (!started)
-                ShowBalloon("Доступ к уведомлениям не разрешен. Разреши его в Windows и перезапусти Status Lab.");
+            if (!await _notificationPoller.StartAsync())
+                ShowBalloon("Доступ к уведомлениям не разрешён. Разреши его в Windows и перезапусти Status Tray.");
         }
         catch (Exception ex)
         {
             _notificationStatusText = $"Уведомления: ошибка 0x{ex.HResult:X8}";
-            _notificationStatusItem.Text = _notificationStatusText;
-            ShowBalloon($"Не удалось запустить listener: 0x{ex.HResult:X8}");
+            Ui(() => _notificationStatusItem.Text = _notificationStatusText);
         }
     }
 
@@ -429,10 +446,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     {
         var script = Path.Combine(AppContext.BaseDirectory, "install-codex-hooks.ps1");
         if (!File.Exists(script))
-        {
-            ShowBalloon("install-codex-hooks.ps1 не найден рядом с приложением.");
-            return;
-        }
+            throw new FileNotFoundException("install-codex-hooks.ps1 не найден рядом со Status Tray.", script);
 
         _codexHookItem.Enabled = false;
         try
@@ -448,71 +462,35 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
                 StandardOutputEncoding = utf8,
                 StandardErrorEncoding = utf8
             };
-            psi.ArgumentList.Add("-NoProfile");
-            psi.ArgumentList.Add("-NonInteractive");
-            psi.ArgumentList.Add("-ExecutionPolicy");
-            psi.ArgumentList.Add("Bypass");
-            psi.ArgumentList.Add("-File");
-            psi.ArgumentList.Add(script);
+            foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script })
+                psi.ArgumentList.Add(arg);
 
             using var process = Process.Start(psi) ?? throw new InvalidOperationException("PowerShell process did not start.");
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
-            var stdout = (await stdoutTask).Trim();
-            var stderr = (await stderrTask).Trim();
+            var errorText = (await stderr).Trim();
+            var output = (await stdout).Trim();
             if (process.ExitCode != 0)
-            {
-                EventJournal.Append(new
-                {
-                    timestampUtc = DateTimeOffset.UtcNow,
-                    source = "status_lab",
-                    @event = "codex_hooks_install_failed",
-                    exitCode = process.ExitCode,
-                    stderr
-                });
-                ShowBalloon(string.IsNullOrWhiteSpace(stderr)
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(errorText)
                     ? $"Установщик hooks завершился с кодом {process.ExitCode}."
-                    : $"Не удалось установить hooks. Код {process.ExitCode}. Подробности в журнале.");
-                return;
-            }
+                    : errorText);
 
-            using var document = JsonDocument.Parse(stdout);
-            var root = document.RootElement;
-            var count = root.TryGetProperty("count", out var countNode) ? countNode.GetInt32() : 0;
-            EventJournal.Append(new
-            {
-                timestampUtc = DateTimeOffset.UtcNow,
-                source = "status_lab",
-                @event = "codex_hooks_installed",
-                count,
-                includesPreToolUse = true
-            });
-            ShowBalloon($"Codex hooks обновлены в {count} окружение(я), включая PreToolUse для approval. Полностью перезапусти Codex перед тестом.");
+            using var document = JsonDocument.Parse(output);
+            var count = document.RootElement.TryGetProperty("count", out var node) ? node.GetInt32() : 0;
+            ShowBalloon($"Codex hooks обновлены в {count} окружение(я). Полностью перезапусти Codex.");
         }
-        catch (Exception ex)
+        finally
         {
-            EventJournal.Append(new
-            {
-                timestampUtc = DateTimeOffset.UtcNow,
-                source = "status_lab",
-                @event = "codex_hooks_install_exception",
-                exception = ex.GetType().FullName,
-                message = ex.Message
-            });
-            ShowBalloon($"Не удалось установить Codex hooks: {ex.Message}");
+            _codexHookItem.Enabled = true;
         }
-        finally { _codexHookItem.Enabled = true; }
     }
 
     private void OpenConfigurator()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "configurator", "index.html");
         if (!File.Exists(path))
-        {
-            ShowBalloon("Встроенный RGB configurator не найден рядом со сборкой.");
-            return;
-        }
+            throw new FileNotFoundException("RGB configurator не найден в artifact Status Tray.", path);
 
         StatusLabConfig.EnsureExists();
         var configText = File.ReadAllText(StatusLabConfig.FilePath, Encoding.UTF8);
@@ -533,25 +511,9 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
     }
 
-    private void ClearJournal()
-    {
-        var result = MessageBox.Show("Очистить локальный диагностический журнал Status Lab и его архивы?",
-            "VOROTEX K15 Status Lab", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-        if (result != DialogResult.Yes)
-            return;
-        EventJournal.Clear();
-        _stateNormalizer.Acknowledge();
-        EventJournal.Append(new
-        {
-            timestampUtc = DateTimeOffset.UtcNow,
-            source = "status_lab",
-            @event = "journal_cleared"
-        });
-    }
-
     private void ShowBalloon(string message)
     {
-        _trayIcon.BalloonTipTitle = "VOROTEX K15 Status Lab";
+        _trayIcon.BalloonTipTitle = "VOROTEX K15 Status Tray";
         _trayIcon.BalloonTipText = message;
         _trayIcon.BalloonTipIcon = ToolTipIcon.Info;
         _trayIcon.ShowBalloonTip(5000);
@@ -566,7 +528,9 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             else
                 action();
         }
-        catch { }
+        catch
+        {
+        }
     }
 
     private async Task ExitAsync()
@@ -574,13 +538,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         if (_exiting)
             return;
         _exiting = true;
-        EventJournal.Append(new
-        {
-            timestampUtc = DateTimeOffset.UtcNow,
-            source = "status_lab",
-            @event = "stopping"
-        });
-        _controlCenter?.Close();
+        _ipcCancellation.Cancel();
         await _notificationPoller.DisposeAsync();
         await _stateNormalizer.DisposeAsync();
         await _rgbCanary.DisposeAsync();
@@ -589,6 +547,8 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 
     protected override void ExitThreadCore()
     {
+        _ipcCancellation.Cancel();
+        _ipcCancellation.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _trackingOnIcon.Dispose();

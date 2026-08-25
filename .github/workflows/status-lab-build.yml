@@ -31,38 +31,96 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/smoke.ps1
 
+      - name: RC2 four-app split safety tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/rc2-smoke.ps1
+
+      - name: Codex hook home sync regression
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/hook-home-sync-smoke.ps1
+
+      - name: Sleep Sweep read-only safety tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/sleep-sweep-smoke.ps1
+
+      - name: Vendor Static PE/IAT safety tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/vendor-static-smoke.ps1
+
       - name: State reducer and RGB protocol smoke tests
         run: dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
 
-      - name: Restore Status Lab
+      - name: Restore Status Tray
         run: dotnet restore status-lab/Vorotex.K15.StatusLab.csproj
+
+      - name: Restore Control Center
+        run: dotnet restore status-lab/control-center/Vorotex.K15.ControlCenter.csproj
 
       - name: Restore Lighting Lab
         run: dotnet restore status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj
 
-      - name: Build Status Lab
+      - name: Restore HID Research Lab
+        run: dotnet restore status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj
+
+      - name: Build Status Tray
         run: dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release --no-restore
+
+      - name: Build Control Center
+        run: dotnet build status-lab/control-center/Vorotex.K15.ControlCenter.csproj -c Release --no-restore
 
       - name: Build Lighting Lab
         run: dotnet build status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj -c Release --no-restore
 
-      - name: Publish Status Lab win-x64
+      - name: Build HID Research Lab
+        run: dotnet build status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj -c Release --no-restore
+
+      - name: Publish Status Tray win-x64
         run: dotnet publish status-lab/Vorotex.K15.StatusLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
+
+      - name: Publish Control Center win-x64
+        run: dotnet publish status-lab/control-center/Vorotex.K15.ControlCenter.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
 
       - name: Publish Lighting Lab win-x64
         run: dotnet publish status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
 
-      - name: Assemble portable package
+      - name: Publish HID Research Lab win-x64
+        run: dotnet publish status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
+
+      - name: Verify split outputs
         shell: powershell
         run: |
-          $statusPublish = 'status-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish'
-          $labPublish = 'status-lab/lighting-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish'
-          Copy-Item -LiteralPath (Join-Path $labPublish 'Vorotex.K15.LightingLab.exe') -Destination $statusPublish -Force
-          if (-not (Test-Path -LiteralPath (Join-Path $statusPublish 'Vorotex.K15.LightingLab.exe'))) { throw 'Lighting Lab EXE missing from portable package.' }
+          $tray = 'status-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.StatusTray.exe'
+          $control = 'status-lab/control-center/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.ControlCenter.exe'
+          $lighting = 'status-lab/lighting-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.LightingLab.exe'
+          $research = 'status-lab/hid-research-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.HidResearchLab.exe'
+          foreach ($file in @($tray,$control,$lighting,$research)) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "Split executable missing: $file" }
+          }
 
-      - name: Upload portable Status Lab + Lighting Lab
+      - name: Upload Status Tray
         uses: actions/upload-artifact@v4
         with:
-          name: vorotex-k15-status-lab-win-x64
+          name: vorotex-k15-status-tray-win-x64
           path: status-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/*
+          if-no-files-found: error
+
+      - name: Upload Control Center
+        uses: actions/upload-artifact@v4
+        with:
+          name: vorotex-k15-control-center-win-x64
+          path: status-lab/control-center/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.ControlCenter.exe
+          if-no-files-found: error
+
+      - name: Upload Lighting Lab
+        uses: actions/upload-artifact@v4
+        with:
+          name: vorotex-k15-lighting-lab-win-x64
+          path: status-lab/lighting-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.LightingLab.exe
+          if-no-files-found: error
+
+      - name: Upload HID Research Lab
+        uses: actions/upload-artifact@v4
+        with:
+          name: vorotex-k15-hid-research-lab-win-x64
+          path: status-lab/hid-research-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.HidResearchLab.exe
           if-no-files-found: error
