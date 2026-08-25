@@ -18,21 +18,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: agent/k15-rc2-codex-unread-probe
-          fetch-depth: 3
+          fetch-depth: 4
 
       - name: Verify staged ancestry
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if ((git branch --show-current) -ne 'agent/k15-rc2-codex-unread-probe') { throw 'Unexpected branch.' }
-          $base = git rev-parse 'HEAD^^'
+          $base = git rev-parse 'HEAD^^^'
           if ($base -ne '235ed1fdff8e1e5fc801807d717b4ee5983ca86a') { throw "Unexpected implementation base: $base" }
 
       - name: Recover and apply staged implementation
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $previous = (git show 'HEAD^:.github/workflows/rc2-codex-attention-implement-once.yml') -join "`n"
+          $previous = (git show 'HEAD^^:.github/workflows/rc2-codex-attention-implement-once.yml') -join "`n"
           $startMarker = "          @'`n"
           $endMarker = "`n          '@ | python -"
           $start = $previous.IndexOf($startMarker, [StringComparison]::Ordinal)
@@ -42,6 +42,48 @@ jobs:
           $payload = $previous.Substring($payloadStart, $end - $payloadStart)
           $payload = [Text.RegularExpressions.Regex]::Replace($payload, '(?m)^          ', '')
           [IO.File]::WriteAllText((Join-Path $PWD '_rc2_apply.py'), $payload, [Text.UTF8Encoding]::new($false))
+
+          $patcher = @'
+          from pathlib import Path
+          p = Path('_rc2_apply.py')
+          text = p.read_text(encoding='utf-8')
+          start = text.index('def replace_exact(path, old, new):')
+          end = text.index('\n\n# State reducer:', start)
+          replacement = '''import re
+          import textwrap
+
+          def replace_exact(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if text.count(old) == 1:
+                  p.write_text(text.replace(old, new), encoding='utf-8')
+                  return
+
+              old_lines = textwrap.dedent(old).strip('\\n').splitlines()
+              parts = []
+              for line in old_lines:
+                  stripped = line.strip()
+                  if stripped:
+                      parts.append(r'^[ \\t]*' + re.escape(stripped) + r'[ \\t]*$')
+                  else:
+                      parts.append(r'^[ \\t]*$')
+              pattern = re.compile('\\n'.join(parts), re.MULTILINE)
+              matches = list(pattern.finditer(text))
+              if len(matches) != 1:
+                  raise SystemExit(f'{path}: expected semantic fragment once, got {len(matches)}')
+
+              match = matches[0]
+              first_line = match.group(0).splitlines()[0]
+              base_indent = re.match(r'^[ \\t]*', first_line).group(0)
+              normalized_new = textwrap.dedent(new).strip('\\n')
+              replacement_text = '\\n'.join(
+                  (base_indent + line if line else '') for line in normalized_new.splitlines())
+              p.write_text(text[:match.start()] + replacement_text + text[match.end():], encoding='utf-8')
+          '''
+          p.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+          '@
+          $patcher = [Text.RegularExpressions.Regex]::Replace($patcher, '(?m)^          ', '')
+          $patcher | python -
           python _rc2_apply.py
           Remove-Item _rc2_apply.py -Force
 
