@@ -140,6 +140,7 @@ function Install-StatusLabHooks {
     $events = @(
         @{ Name = 'UserPromptSubmit'; Async = $true },
         @{ Name = 'PermissionRequest'; Async = $true },
+        @{ Name = 'PreToolUse'; Async = $true },
         @{ Name = 'PostToolUse'; Async = $true },
         @{ Name = 'Stop'; Async = $true },
         @{ Name = 'SessionEnd'; Async = $false }
@@ -186,7 +187,7 @@ function Install-StatusLabHooks {
 
     # Verify the exact Status Lab handlers survived serialization.
     $verify = Get-Content -LiteralPath $target -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
-    foreach ($name in @('UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'SessionEnd')) {
+    foreach ($name in @('UserPromptSubmit', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd')) {
         $matches = @(
             foreach ($group in @($verify.hooks.$name)) {
                 foreach ($handler in @($group.hooks)) {
