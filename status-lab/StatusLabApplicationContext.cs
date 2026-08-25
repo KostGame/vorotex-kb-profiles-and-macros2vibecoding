@@ -20,6 +20,11 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _notificationStatusItem;
     private readonly ToolStripMenuItem _codexHookItem;
     private readonly ToolStripMenuItem _loggingItem;
+    private ControlCenterForm? _controlCenter;
+    private string _notificationStatusText = "Уведомления: запуск...";
+    private string _rgbStatusText = "RGB: OFF";
+    private string _lastTransitionReason = "state_rehydrated";
+    private DateTimeOffset _stateEnteredUtc = DateTimeOffset.UtcNow;
     private bool _exiting;
 
     public StatusLabApplicationContext()
@@ -37,19 +42,21 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             source = "status_lab",
             @event = "started",
             version = typeof(StatusLabApplicationContext).Assembly.GetName().Version?.ToString(),
+            productSurface = "control_center_rc2",
             rgbConfigPath = StatusLabConfig.FilePath,
             configSchema = _config.SchemaVersion,
             wireColorOrder = _config.WireColorOrder.ToString(),
             doneAttentionTimeoutSeconds = _config.DoneAttentionTimeoutSeconds,
             detailedLogging = EventJournal.DetailedLoggingEnabled,
             configWarning = _config.LoadWarning,
-            hardwareProfileSelectionPolicy = "observe_only"
+            hardwareProfileSelectionPolicy = "observe_only",
+            unknownPowerWrites = false
         });
 
         _stateStatusItem = new ToolStripMenuItem("Состояние: NORMAL") { Enabled = false };
         _trackingStatusItem = new ToolStripMenuItem("RGB-индикация: ВЫКЛ") { Enabled = false };
-        _notificationStatusItem = new ToolStripMenuItem("Уведомления: запуск...") { Enabled = false };
-        _rgbStatusItem = new ToolStripMenuItem("RGB: OFF") { Enabled = false };
+        _notificationStatusItem = new ToolStripMenuItem(_notificationStatusText) { Enabled = false };
+        _rgbStatusItem = new ToolStripMenuItem(_rgbStatusText) { Enabled = false };
         _rgbCanaryItem = new ToolStripMenuItem("Включить RGB-индикацию статусов");
         _rgbCanaryItem.Click += async (_, _) => await ToggleRgbCanaryAsync();
         _codexHookItem = new ToolStripMenuItem("Установить / обновить Codex hooks");
@@ -65,8 +72,13 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             Visible = true,
             ContextMenuStrip = BuildMenu()
         };
+        _trayIcon.DoubleClick += (_, _) => OpenControlCenter();
 
-        _notificationPoller.StatusChanged += status => Ui(() => _notificationStatusItem.Text = status);
+        _notificationPoller.StatusChanged += status =>
+        {
+            _notificationStatusText = status;
+            Ui(() => _notificationStatusItem.Text = status);
+        };
         _stateNormalizer.StateChanged += (state, transition) =>
         {
             UpdateNormalizedState(state, transition);
@@ -84,6 +96,10 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
+        var controlCenter = new ToolStripMenuItem("Открыть K15 Control Center") { Font = new Font(SystemFonts.MenuFont, FontStyle.Bold) };
+        controlCenter.Click += (_, _) => OpenControlCenter();
+        menu.Items.Add(controlCenter);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_stateStatusItem);
         menu.Items.Add(_trackingStatusItem);
         menu.Items.Add(_notificationStatusItem);
@@ -105,6 +121,66 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Выход", null, async (_, _) => await ExitAsync());
         return menu;
+    }
+
+    private void OpenControlCenter()
+    {
+        if (_controlCenter is null || _controlCenter.IsDisposed)
+        {
+            _controlCenter = new ControlCenterForm(GetControlCenterSnapshot, new ControlCenterActions(
+                ToggleRgbCanaryAsync,
+                ManualResetAttention,
+                RestoreNativeLightingAsync,
+                InstallCodexHooksAsync,
+                OpenConfigurator,
+                OpenLightingLabAsync,
+                () => OpenPath(EventJournal.DirectoryPath),
+                SetAutostart));
+        }
+
+        if (!_controlCenter.Visible)
+            _controlCenter.Show();
+        if (_controlCenter.WindowState == FormWindowState.Minimized)
+            _controlCenter.WindowState = FormWindowState.Normal;
+        _controlCenter.Activate();
+    }
+
+    private ControlCenterSnapshot GetControlCenterSnapshot()
+    {
+        var session = string.IsNullOrWhiteSpace(_stateNormalizer.FocusedSessionId)
+            ? string.Empty
+            : ShortSession(_stateNormalizer.FocusedSessionId);
+        return new ControlCenterSnapshot(
+            JournalStateNormalizer.ToWireName(_stateNormalizer.State),
+            _lastTransitionReason,
+            _stateEnteredUtc,
+            session,
+            _stateNormalizer.FocusedCwd,
+            _rgbCanary.Enabled,
+            _rgbStatusText,
+            _notificationStatusText,
+            EventJournal.DetailedLoggingEnabled,
+            CodexHookHealth.Inspect(),
+            StartupManager.IsEnabled(),
+            StatusLabConfig.FilePath,
+            _config.SchemaVersion);
+    }
+
+    private bool SetAutostart(bool enabled)
+    {
+        try
+        {
+            var result = StartupManager.SetEnabled(enabled);
+            ShowBalloon(result
+                ? $"Автозапуск Status Lab: {(enabled ? "ВКЛ" : "ВЫКЛ")}."
+                : "Не удалось подтвердить изменение автозапуска.");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            ShowBalloon("Автозапуск: " + ex.Message);
+            return false;
+        }
     }
 
     private ToolStripMenuItem BuildEffectLabMenu()
@@ -140,6 +216,18 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     private void UpdateNormalizedState(K15NormalizedState state, StateTransition? transition)
     {
         var wire = JournalStateNormalizer.ToWireName(state);
+        if (transition is not null)
+        {
+            _lastTransitionReason = transition.Reason;
+            if (transition.Previous != transition.Current)
+                _stateEnteredUtc = DateTimeOffset.UtcNow;
+        }
+        else
+        {
+            _lastTransitionReason = "state_rehydrated";
+            _stateEnteredUtc = DateTimeOffset.UtcNow;
+        }
+
         Ui(() =>
         {
             _stateStatusItem.Text = string.IsNullOrWhiteSpace(_stateNormalizer.FocusedSessionId)
@@ -309,6 +397,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
 
     private void UpdateRgbStatus(string status)
     {
+        _rgbStatusText = status;
         Ui(() =>
         {
             _rgbStatusItem.Text = status;
@@ -330,7 +419,8 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            _notificationStatusItem.Text = $"Уведомления: ошибка 0x{ex.HResult:X8}";
+            _notificationStatusText = $"Уведомления: ошибка 0x{ex.HResult:X8}";
+            _notificationStatusItem.Text = _notificationStatusText;
             ShowBalloon($"Не удалось запустить listener: 0x{ex.HResult:X8}");
         }
     }
@@ -439,7 +529,8 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             StatusLabConfig.EnsureExists();
         else if (path == EventJournal.FilePath)
             EventJournal.EnsureExists();
-        Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+        if (Directory.Exists(path) || File.Exists(path))
+            Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
     }
 
     private void ClearJournal()
@@ -489,6 +580,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             source = "status_lab",
             @event = "stopping"
         });
+        _controlCenter?.Close();
         await _notificationPoller.DisposeAsync();
         await _stateNormalizer.DisposeAsync();
         await _rgbCanary.DisposeAsync();
