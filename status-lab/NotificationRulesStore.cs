@@ -4,50 +4,76 @@ namespace Vorotex.K15.StatusLab;
 
 internal static class NotificationRulesStore
 {
-    public static string BackupPath => NotificationRulesConfig.FilePath + ".bak";
-    public static string PreRestoreBackupPath => NotificationRulesConfig.FilePath + ".pre-restore.bak";
+    public static string BackupPath => BackupPathFor(NotificationRulesConfig.FilePath);
+    public static string PreRestoreBackupPath => PreRestoreBackupPathFor(NotificationRulesConfig.FilePath);
 
-    public static void AddRule(NotificationRule rule)
+    public static void AddRule(NotificationRule rule) =>
+        AddRuleToFile(NotificationRulesConfig.FilePath, rule);
+
+    public static void RestoreBackup() =>
+        RestoreBackupForFile(NotificationRulesConfig.FilePath);
+
+    internal static void AddRuleToFile(string filePath, NotificationRule rule)
     {
         ArgumentNullException.ThrowIfNull(rule);
-        NotificationRulesConfig.EnsureExists();
+        EnsureConfigExists(filePath);
 
-        var config = NotificationRulesConfig.LoadOrCreate();
-        if (!string.IsNullOrWhiteSpace(config.LoadWarning))
-            throw new InvalidDataException("notifications.toml is invalid; refusing to overwrite it. Fix or restore the file first.");
+        NotificationRulesConfig config;
+        try
+        {
+            config = NotificationRulesToml.Parse(File.ReadAllText(filePath, Encoding.UTF8));
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidDataException(
+                "notifications.toml is invalid; refusing to overwrite it. Fix or restore the file first.", ex);
+        }
 
         if (config.Rules.Any(existing => string.Equals(existing.Id, rule.Id, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidDataException($"Rule id '{rule.Id}' already exists. Choose another id or edit the existing rule.");
 
         config.Rules.Add(CloneRule(rule));
         config.Validate();
-        WriteValidated(config, createBackup: true);
+        WriteValidated(filePath, config, createBackup: true);
     }
 
-    public static void RestoreBackup()
+    internal static void RestoreBackupForFile(string filePath)
     {
-        if (!File.Exists(BackupPath))
-            throw new FileNotFoundException("No notifications.toml.bak backup exists.", BackupPath);
+        var backupPath = BackupPathFor(filePath);
+        if (!File.Exists(backupPath))
+            throw new FileNotFoundException("No notifications.toml.bak backup exists.", backupPath);
 
-        var backupText = File.ReadAllText(BackupPath, Encoding.UTF8);
+        var backupText = File.ReadAllText(backupPath, Encoding.UTF8);
         var restored = NotificationRulesToml.Parse(backupText);
         restored.Validate();
 
-        NotificationRulesConfig.EnsureExists();
-        File.Copy(NotificationRulesConfig.FilePath, PreRestoreBackupPath, overwrite: true);
-        WriteTextAtomically(NotificationRulesConfig.FilePath, backupText);
+        EnsureConfigExists(filePath);
+        File.Copy(filePath, PreRestoreBackupPathFor(filePath), overwrite: true);
+        WriteTextAtomically(filePath, backupText);
     }
 
-    private static void WriteValidated(NotificationRulesConfig config, bool createBackup)
+    internal static string BackupPathFor(string filePath) => filePath + ".bak";
+    internal static string PreRestoreBackupPathFor(string filePath) => filePath + ".pre-restore.bak";
+
+    private static void EnsureConfigExists(string filePath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        if (!File.Exists(filePath))
+            File.WriteAllText(filePath,
+                NotificationRulesToml.Serialize(NotificationRulesConfig.CreateDefault()),
+                new UTF8Encoding(false));
+    }
+
+    private static void WriteValidated(string filePath, NotificationRulesConfig config, bool createBackup)
     {
         config.Validate();
         var text = NotificationRulesToml.Serialize(config);
         _ = NotificationRulesToml.Parse(text);
 
-        if (createBackup && File.Exists(NotificationRulesConfig.FilePath))
-            File.Copy(NotificationRulesConfig.FilePath, BackupPath, overwrite: true);
+        if (createBackup && File.Exists(filePath))
+            File.Copy(filePath, BackupPathFor(filePath), overwrite: true);
 
-        WriteTextAtomically(NotificationRulesConfig.FilePath, text);
+        WriteTextAtomically(filePath, text);
     }
 
     private static void WriteTextAtomically(string destination, string text)
