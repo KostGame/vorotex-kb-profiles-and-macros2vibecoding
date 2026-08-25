@@ -10,6 +10,7 @@ on:
       - 'status-lab/NotificationLearningBuffer.cs'
       - 'status-lab/NotificationRulesConfig.cs'
       - 'status-lab/NotificationRuleDraftBuilder.cs'
+      - 'status-lab/NotificationRulesStore.cs'
       - 'status-lab/notification-learning-lab/**'
       - 'status-lab/notifications/**'
       - 'status-lab/tests/NotificationRulesSmoke*'
@@ -30,7 +31,7 @@ jobs:
       - name: Notification rule engine, learning and scheduler tests
         run: dotnet run --project status-lab/tests/NotificationRulesSmoke.csproj -c Release
 
-      - name: Notification Rule Designer draft tests
+      - name: Notification Rule Designer and atomic store tests
         run: dotnet run --project status-lab/tests/NotificationRuleDesignerSmoke.csproj -c Release
 
       - name: Build Status Lab with notification observation model
@@ -48,7 +49,8 @@ jobs:
             'status-lab/NotificationOverlayScheduler.cs',
             'status-lab/NotificationLearningBuffer.cs',
             'status-lab/NotificationRulesConfig.cs',
-            'status-lab/NotificationRuleDraftBuilder.cs'
+            'status-lab/NotificationRuleDraftBuilder.cs',
+            'status-lab/NotificationRulesStore.cs'
           )
           $paths += Get-ChildItem -LiteralPath 'status-lab/notification-learning-lab' -Filter '*.cs' -File | ForEach-Object FullName
           $text = ($paths | ForEach-Object { Get-Content -LiteralPath $_ -Raw -Encoding UTF8 }) -join "`n"
@@ -72,21 +74,33 @@ jobs:
           }
           Write-Output 'Notification overlay bounded-queue gate: PASS'
 
+      - name: Verify explicit atomic rule persistence
+        shell: powershell
+        run: |
+          $store = Get-Content -LiteralPath 'status-lab/NotificationRulesStore.cs' -Raw -Encoding UTF8
+          if ($store -notmatch 'File\.Replace' -or $store -notmatch 'BackupPathFor' -or $store -notmatch 'PreRestoreBackupPathFor') {
+            throw 'Notification rules store must retain atomic replace + backup/restore semantics.'
+          }
+          if ($store -notmatch 'Duplicate notification rule ids|already exists') {
+            throw 'Notification rules store must reject duplicate ids.'
+          }
+          Write-Output 'Notification rules atomic persistence gate: PASS'
+
       - name: Verify Learning Lab privacy boundary
         shell: powershell
         run: |
           $lab = (Get-ChildItem -LiteralPath 'status-lab/notification-learning-lab' -Filter '*.cs' -File |
             ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join "`n"
           if ($lab -match 'File\.WriteAllText|File\.AppendAllText|StreamWriter|EventJournal\.Append') {
-            throw 'Learning Lab must not persist raw learning samples.'
+            throw 'Learning Lab UI must not directly persist raw learning samples.'
           }
           if ($lab -notmatch 'NotificationLearningBuffer' -or $lab -notmatch 'RAM only|RAM-only') {
             throw 'Learning Lab must keep its bounded in-memory learning boundary explicit.'
           }
-          if ($lab -notmatch 'NotificationRuleDesignerForm' -or $lab -notmatch 'Copy TOML') {
-            throw 'Learning Lab must expose the explicit draft-only Rule Designer flow.'
+          if ($lab -notmatch 'NotificationRuleDesignerForm' -or $lab -notmatch 'Save rule') {
+            throw 'Learning Lab must expose the explicit Rule Designer save flow.'
           }
-          Write-Output 'Notification Learning Lab privacy + Rule Designer gate: PASS'
+          Write-Output 'Notification Learning Lab privacy + explicit Rule Designer gate: PASS'
 
       - name: Publish Notification Learning Lab
         run: dotnet publish status-lab/notification-learning-lab/Vorotex.K15.NotificationLearningLab.csproj -c Release -r win-x64 --self-contained true -o publish-notification-learning-lab
