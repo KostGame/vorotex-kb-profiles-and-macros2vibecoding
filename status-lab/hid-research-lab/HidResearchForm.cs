@@ -12,7 +12,7 @@ internal sealed class HidResearchForm : Form
     {
         AutoSize = false,
         ForeColor = Color.FromArgb(188, 207, 235),
-        Size = new Size(920, 56)
+        Size = new Size(920, 64)
     };
 
     private readonly Label _captureStatus = new()
@@ -23,13 +23,9 @@ internal sealed class HidResearchForm : Form
         Text = "Capture: остановлен"
     };
 
-    private readonly TextBox _targetExe = new()
-    {
-        BorderStyle = BorderStyle.FixedSingle,
-        BackColor = Color.FromArgb(15, 20, 28),
-        ForeColor = Color.Gainsboro,
-        Size = new Size(682, 28)
-    };
+    private readonly TextBox _targetExe = InputBox(682);
+    private readonly TextBox _identityExeA = InputBox(650);
+    private readonly TextBox _identityExeB = InputBox(650);
 
     private readonly TextBox _marker = new()
     {
@@ -52,8 +48,8 @@ internal sealed class HidResearchForm : Form
     {
         Text = "VOROTEX K15 HID Research Lab · RC2";
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(980, 790);
-        MinimumSize = new Size(960, 760);
+        ClientSize = new Size(980, 1100);
+        MinimumSize = new Size(960, 850);
         AutoScroll = true;
         BackColor = Color.FromArgb(13, 17, 23);
         ForeColor = Color.Gainsboro;
@@ -141,14 +137,50 @@ internal sealed class HidResearchForm : Form
         });
         Controls.Add(traceCard);
 
-        _status.Location = new Point(28, 682);
+        var identityCard = Card("OEM Device Identity Diff · VOROTEX ↔ SXS-W909", 24, 684, 920, 250);
+        identityCard.Controls.Add(Body(
+            "Сравнивает device-discovery imports/call-sites, VID/PID/model строки, известные K15 constants и identity-bearing resource/config файлы. Только статическое чтение двух OEM пакетов.",
+            18, 48, 875, 42));
+
+        identityCard.Controls.Add(new Label { Text = "A", AutoSize = true, Location = new Point(18, 100), ForeColor = Color.FromArgb(145, 175, 225) });
+        _identityExeA.Location = new Point(44, 96);
+        _identityExeA.Text = VendorPeAnalyzer.FindVendorExecutable() ?? string.Empty;
+        identityCard.Controls.Add(_identityExeA);
+        var browseA = ActionButton("VOROTEX EXE…", 710, 91, 170);
+        browseA.Click += (_, _) => BrowseIdentityExe(_identityExeA, "Выберите VOROTEX EXE (A)");
+        identityCard.Controls.Add(browseA);
+
+        identityCard.Controls.Add(new Label { Text = "B", AutoSize = true, Location = new Point(18, 141), ForeColor = Color.FromArgb(145, 175, 225) });
+        _identityExeB.Location = new Point(44, 137);
+        _identityExeB.Text = OemDeviceIdentityDiffAnalyzer.FindSxsW909Executable() ?? string.Empty;
+        identityCard.Controls.Add(_identityExeB);
+        var browseB = ActionButton("SXS-W909 EXE…", 710, 132, 170);
+        browseB.Click += (_, _) => BrowseIdentityExe(_identityExeB, "Выберите SXS-W909 EXE (B)");
+        identityCard.Controls.Add(browseB);
+
+        var identityRun = ActionButton("Run OEM identity diff", 18, 184, 220);
+        identityRun.Click += async (_, _) => await RunOemIdentityDiffAsync(identityRun);
+        identityCard.Controls.Add(identityRun);
+        var identityOpen = ActionButton("Открыть последний результат", 250, 184, 230);
+        identityOpen.Click += (_, _) => OpenOutputFolder();
+        identityCard.Controls.Add(identityOpen);
+        identityCard.Controls.Add(new Label
+        {
+            Text = "Safety: no HID handles · no feature reports · no process attach/injection · no EXE patching · no VID/PID spoofing.",
+            Location = new Point(500, 184),
+            Size = new Size(390, 46),
+            ForeColor = Color.FromArgb(145, 158, 180)
+        });
+        Controls.Add(identityCard);
+
+        _status.Location = new Point(28, 956);
         _status.Text = "Готово к исследованию. Для W909 можно выбрать его установленный главный EXE вручную.";
         Controls.Add(_status);
 
         Controls.Add(new Label
         {
-            Text = "Safety: no HID writes · no feature-query SetFeature · no process injection/debug attach · no EXE patching · no profile switching.",
-            Location = new Point(28, 744),
+            Text = "Global safety: no HID writes · no feature-query SetFeature · no process injection/debug attach · no EXE patching · no profile switching.",
+            Location = new Point(28, 1032),
             Size = new Size(915, 28),
             ForeColor = Color.FromArgb(145, 158, 180)
         });
@@ -164,19 +196,56 @@ internal sealed class HidResearchForm : Form
         };
     }
 
-    private void BrowseTargetExe()
+    private void BrowseTargetExe() => BrowseIdentityExe(_targetExe, "Выберите главный EXE VOROTEX / SXS-W909");
+
+    private void BrowseIdentityExe(TextBox target, string title)
     {
         using var dialog = new OpenFileDialog
         {
-            Title = "Выберите главный EXE VOROTEX / SXS-W909",
+            Title = title,
             Filter = "Windows executable (*.exe)|*.exe|All files (*.*)|*.*",
             CheckFileExists = true,
             Multiselect = false
         };
-        if (File.Exists(_targetExe.Text))
-            dialog.InitialDirectory = Path.GetDirectoryName(_targetExe.Text);
+        if (File.Exists(target.Text))
+            dialog.InitialDirectory = Path.GetDirectoryName(target.Text);
         if (dialog.ShowDialog(this) == DialogResult.OK)
-            _targetExe.Text = dialog.FileName;
+            target.Text = dialog.FileName;
+    }
+
+    private async Task RunOemIdentityDiffAsync(Button button)
+    {
+        var exeA = RequireIdentityExe(_identityExeA, "A");
+        var exeB = RequireIdentityExe(_identityExeB, "B");
+        button.Enabled = false;
+        _status.Text = "OEM Device Identity Diff: сравниваю discovery imports, strings, constants и package metadata...";
+        try
+        {
+            var report = await Task.Run(() => OemDeviceIdentityDiffAnalyzer.Analyze(exeA, exeB));
+            var root = NewSessionDirectory("oem-device-identity-diff");
+            var jsonPath = Path.Combine(root, "oem-device-identity-diff.json");
+            var textPath = Path.Combine(root, "oem-device-identity-diff.txt");
+            File.WriteAllText(jsonPath,
+                JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+            File.WriteAllText(textPath, OemDeviceIdentityDiffAnalyzer.ToText(report), new UTF8Encoding(false));
+            _lastOutputDirectory = root;
+            _openOutput.Enabled = true;
+            var top = report.Candidates.FirstOrDefault();
+            _status.Text = $"OEM identity diff готов. candidates={report.Candidates.Count}. " +
+                           (top is null ? "Сильных различий не ранжировано." : $"Top: [{top.Confidence}] {top.Category}. ") +
+                           $"\n{root}";
+            OpenOutputFolder();
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "OEM identity diff не завершён: " + ex.Message;
+            MessageBox.Show(ex.Message, "OEM Device Identity Diff", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            button.Enabled = true;
+        }
     }
 
     private async Task RunStaticTraceAsync(Button button)
@@ -289,11 +358,13 @@ internal sealed class HidResearchForm : Form
             $"K15={(status.K15Present ? "PRESENT" : "not seen")} · markers={status.MarkerCount} · config changes={status.ChangedConfigFiles}";
     }
 
-    private string RequireTargetExe()
+    private string RequireTargetExe() => RequireIdentityExe(_targetExe, "vendor");
+
+    private static string RequireIdentityExe(TextBox box, string label)
     {
-        var path = _targetExe.Text.Trim().Trim('"');
+        var path = box.Text.Trim().Trim('"');
         if (!File.Exists(path))
-            throw new FileNotFoundException("Выбранный vendor EXE не найден.", path);
+            throw new FileNotFoundException($"Выбранный OEM EXE {label} не найден.", path);
         return Path.GetFullPath(path);
     }
 
@@ -402,6 +473,14 @@ internal sealed class HidResearchForm : Form
         Location = new Point(x, y),
         Size = new Size(width, height),
         ForeColor = Color.FromArgb(188, 200, 218)
+    };
+
+    private static TextBox InputBox(int width) => new()
+    {
+        BorderStyle = BorderStyle.FixedSingle,
+        BackColor = Color.FromArgb(15, 20, 28),
+        ForeColor = Color.Gainsboro,
+        Size = new Size(width, 28)
     };
 
     private static Button ActionButton(string text, int x, int y, int width) => new()
