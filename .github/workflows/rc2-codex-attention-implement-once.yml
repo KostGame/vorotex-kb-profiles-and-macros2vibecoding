@@ -10,82 +10,51 @@ on:
 permissions:
   contents: write
 
+env:
+  GH_TOKEN: ${{ github.token }}
+  BASE_SHA: 235ed1fdff8e1e5fc801807d717b4ee5983ca86a
+
 jobs:
   implement:
     runs-on: windows-latest
     steps:
-      - name: Checkout exact branch
+      - name: Checkout branch
         uses: actions/checkout@v4
         with:
           ref: agent/k15-rc2-codex-unread-probe
-          fetch-depth: 4
+          fetch-depth: 0
 
-      - name: Verify staged ancestry
+      - name: Verify staging-only delta
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if ((git branch --show-current) -ne 'agent/k15-rc2-codex-unread-probe') { throw 'Unexpected branch.' }
-          $base = git rev-parse 'HEAD^^^'
-          if ($base -ne '235ed1fdff8e1e5fc801807d717b4ee5983ca86a') { throw "Unexpected implementation base: $base" }
+          git merge-base --is-ancestor $env:BASE_SHA HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Approved RC2 head is not an ancestor.' }
+          $unexpected = @(git diff --name-only "$env:BASE_SHA..HEAD" | Where-Object { $_ -ne '.github/workflows/rc2-codex-attention-implement-once.yml' })
+          if ($unexpected.Count -gt 0) { throw ('Unexpected pre-implementation paths: ' + ($unexpected -join ', ')) }
 
-      - name: Recover and apply staged implementation
+      - name: Materialize content-addressed implementation
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $previous = (git show 'HEAD^^:.github/workflows/rc2-codex-attention-implement-once.yml') -join "`n"
-          $startMarker = "          @'`n"
-          $endMarker = "`n          '@ | python -"
-          $start = $previous.IndexOf($startMarker, [StringComparison]::Ordinal)
-          $end = $previous.IndexOf($endMarker, [StringComparison]::Ordinal)
-          if ($start -lt 0 -or $end -le $start) { throw 'Could not recover staged implementation payload.' }
-          $payloadStart = $start + $startMarker.Length
-          $payload = $previous.Substring($payloadStart, $end - $payloadStart)
-          $payload = [Text.RegularExpressions.Regex]::Replace($payload, '(?m)^          ', '')
-          [IO.File]::WriteAllText((Join-Path $PWD '_rc2_apply.py'), $payload, [Text.UTF8Encoding]::new($false))
+          function Write-GitBlob([string]$Sha, [string]$Path) {
+            $json = gh api "/repos/$env:GITHUB_REPOSITORY/git/blobs/$Sha" | ConvertFrom-Json
+            $bytes = [Convert]::FromBase64String(($json.content -replace '\s', ''))
+            $parent = Split-Path -Parent $Path
+            if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+            [IO.File]::WriteAllBytes($Path, $bytes)
+          }
 
-          $patcher = @'
-          from pathlib import Path
-          p = Path('_rc2_apply.py')
-          text = p.read_text(encoding='utf-8')
-          start = text.index('def replace_exact(path, old, new):')
-          end = text.index('\n\n# State reducer:', start)
-          replacement = '''import re
-          import textwrap
+          Write-GitBlob 'c89205367195cfd630f45596db6ec65af082478e' 'status-lab/CodexDesktopAttention.cs'
+          Write-GitBlob '678c551b69ca910a5dbfe98d2d97bbc1f62d3ca4' 'status-lab/tests/CodexAttentionSmoke.csproj'
+          Write-GitBlob 'b5e1a969616426225b1be7c9fea552f84179b916' 'status-lab/tests/CodexAttentionSmokeProgram.cs'
+          Write-GitBlob 'b07bf0711a33c799b6799bf00847561f65c1f794' '_codex-attention.patch'
 
-          def replace_exact(path, old, new):
-              p = Path(path)
-              text = p.read_text(encoding='utf-8')
-              if text.count(old) == 1:
-                  p.write_text(text.replace(old, new), encoding='utf-8')
-                  return
-
-              old_lines = textwrap.dedent(old).strip('\\n').splitlines()
-              parts = []
-              for line in old_lines:
-                  stripped = line.strip()
-                  if stripped:
-                      parts.append(r'^[ \\t]*' + re.escape(stripped) + r'[ \\t]*$')
-                  else:
-                      parts.append(r'^[ \\t]*$')
-              pattern = re.compile('\\n'.join(parts), re.MULTILINE)
-              matches = list(pattern.finditer(text))
-              if len(matches) != 1:
-                  raise SystemExit(f'{path}: expected semantic fragment once, got {len(matches)}')
-
-              match = matches[0]
-              first_line = match.group(0).splitlines()[0]
-              base_indent = re.match(r'^[ \\t]*', first_line).group(0)
-              normalized_new = textwrap.dedent(new).strip('\\n')
-              replacement_text = '\\n'.join(
-                  (base_indent + line if line else '') for line in normalized_new.splitlines())
-              p.write_text(text[:match.start()] + replacement_text + text[match.end():], encoding='utf-8')
-          '''
-          p.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
-          '@
-          $patcher = [Text.RegularExpressions.Regex]::Replace($patcher, '(?m)^          ', '')
-          $patcher | python -
-          python _rc2_apply.py
-          Remove-Item _rc2_apply.py -Force
+          git apply --check _codex-attention.patch
+          if ($LASTEXITCODE -ne 0) { throw 'git apply --check failed.' }
+          git apply _codex-attention.patch
+          if ($LASTEXITCODE -ne 0) { throw 'git apply failed.' }
+          Remove-Item _codex-attention.patch -Force
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -110,8 +79,23 @@ jobs:
           git config user.name KostGame
           git config user.email 22446683+KostGame@users.noreply.github.com
           git add status-lab .github/workflows/status-lab-build.yml
-          $changed = @(git diff --cached --name-only)
-          if ($changed -notcontains 'status-lab/CodexDesktopAttention.cs') { throw 'CodexDesktopAttention.cs missing from staged diff.' }
-          if ($changed -notcontains 'status-lab/tests/CodexAttentionSmokeProgram.cs') { throw 'Codex attention smoke missing from staged diff.' }
+
+          $expected = @(
+            '.github/workflows/status-lab-build.yml',
+            'status-lab/CodexDesktopAttention.cs',
+            'status-lab/EventJournal.cs',
+            'status-lab/JournalStateNormalizer.cs',
+            'status-lab/StateReducer.cs',
+            'status-lab/StatusTrayApplicationContext.cs',
+            'status-lab/control-center/ControlCenterForm.cs',
+            'status-lab/shared/StatusTrayIpc.cs',
+            'status-lab/tests/CodexAttentionSmoke.csproj',
+            'status-lab/tests/CodexAttentionSmokeProgram.cs'
+          ) | Sort-Object
+          $actual = @(git diff --cached --name-only $env:BASE_SHA) | Sort-Object
+          if (Compare-Object $expected $actual) {
+            throw ('Unexpected staged scope: ' + ($actual -join ', '))
+          }
+
           git commit -m 'feat(status-lab): add Codex desktop attention probe'
           git push origin HEAD:agent/k15-rc2-codex-unread-probe
