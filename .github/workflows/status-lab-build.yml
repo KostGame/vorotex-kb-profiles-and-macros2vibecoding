@@ -39,6 +39,10 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/hook-home-sync-smoke.ps1
 
+      - name: Sleep Sweep read-only safety tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/sleep-sweep-smoke.ps1
+
       - name: State reducer and RGB protocol smoke tests
         run: dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
 
@@ -48,11 +52,17 @@ jobs:
       - name: Restore Lighting Lab
         run: dotnet restore status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj
 
+      - name: Restore Sleep Sweep Lab
+        run: dotnet restore status-lab/sleep-sweep/Vorotex.K15.SleepSweepLab.csproj
+
       - name: Build Status Lab
         run: dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release --no-restore
 
       - name: Build Lighting Lab
         run: dotnet build status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj -c Release --no-restore
+
+      - name: Build Sleep Sweep Lab
+        run: dotnet build status-lab/sleep-sweep/Vorotex.K15.SleepSweepLab.csproj -c Release --no-restore
 
       - name: Publish Status Lab win-x64
         run: dotnet publish status-lab/Vorotex.K15.StatusLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
@@ -60,15 +70,21 @@ jobs:
       - name: Publish Lighting Lab win-x64
         run: dotnet publish status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
 
+      - name: Publish Sleep Sweep Lab win-x64
+        run: dotnet publish status-lab/sleep-sweep/Vorotex.K15.SleepSweepLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
+
       - name: Assemble portable package
         shell: powershell
         run: |
           $statusPublish = 'status-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish'
           $labPublish = 'status-lab/lighting-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish'
+          $sleepPublish = 'status-lab/sleep-sweep/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish'
           Copy-Item -LiteralPath (Join-Path $labPublish 'Vorotex.K15.LightingLab.exe') -Destination $statusPublish -Force
+          Copy-Item -LiteralPath (Join-Path $sleepPublish 'Vorotex.K15.SleepSweepLab.exe') -Destination $statusPublish -Force
           if (-not (Test-Path -LiteralPath (Join-Path $statusPublish 'Vorotex.K15.LightingLab.exe'))) { throw 'Lighting Lab EXE missing from portable package.' }
+          if (-not (Test-Path -LiteralPath (Join-Path $statusPublish 'Vorotex.K15.SleepSweepLab.exe'))) { throw 'Sleep Sweep Lab EXE missing from portable package.' }
 
-      - name: Upload portable Status Lab + Lighting Lab
+      - name: Upload portable Status Lab + labs
         uses: actions/upload-artifact@v4
         with:
           name: vorotex-k15-status-lab-win-x64
