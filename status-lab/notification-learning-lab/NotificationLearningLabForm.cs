@@ -122,7 +122,7 @@ internal sealed class NotificationLearningLabForm : Form
         panel.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "Windows Notification Learning Lab\nЖивые toast-данные хранятся только в RAM. M3b показывает, как bounded scheduler разрулил бы overlay-очередь.",
+            Text = "Windows Notification Learning Lab\nЖивые toast-данные хранятся только в RAM. Scheduler показывает будущую overlay-очередь; Rule Designer настраивает и сохраняет правила явно.",
             Font = new Font(Font, FontStyle.Bold),
             ForeColor = ForeColor,
             Margin = new Padding(0, 0, 12, 0)
@@ -131,6 +131,7 @@ internal sealed class NotificationLearningLabForm : Form
         var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
         buttons.Controls.Add(Button("Reload rules", (_, _) => ReloadRules(showMessage: true)));
         buttons.Controls.Add(Button("Open notifications.toml", (_, _) => OpenRulesFile()));
+        buttons.Controls.Add(Button("Restore rules backup…", (_, _) => RestoreRulesBackup()));
         buttons.Controls.Add(Button("Clear RAM", (_, _) => ClearLearningBuffer()));
         panel.Controls.Add(buttons, 1, 0);
         return panel;
@@ -327,7 +328,7 @@ internal sealed class NotificationLearningLabForm : Form
         panel.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "M4a observation/design-only · no keyboard rendering",
+            Text = "M4b rules UI · scheduler simulation · no keyboard rendering",
             ForeColor = Color.FromArgb(120, 132, 150)
         }, 1, 0);
         return panel;
@@ -476,7 +477,41 @@ internal sealed class NotificationLearningLabForm : Form
         }
 
         using var designer = new NotificationRuleDesignerForm(selected, _includeTitle.Checked);
-        designer.ShowDialog(this);
+        if (designer.ShowDialog(this) == DialogResult.OK)
+        {
+            ReloadRules(showMessage: false);
+            _status.Text = "Notification rule saved · rules reloaded";
+        }
+    }
+
+    private void RestoreRulesBackup()
+    {
+        if (!File.Exists(NotificationRulesStore.BackupPath))
+        {
+            MessageBox.Show(this, "notifications.toml.bak does not exist yet.", "Restore notification rules",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var answer = MessageBox.Show(this,
+            $"Restore notification rules from:\r\n{NotificationRulesStore.BackupPath}?\r\n\r\nThe current file will be kept as notifications.toml.pre-restore.bak.",
+            "Restore notification rules",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (answer != DialogResult.Yes)
+            return;
+
+        try
+        {
+            NotificationRulesStore.RestoreBackup();
+            ReloadRules(showMessage: false);
+            _status.Text = "Notification rules backup restored · rules reloaded";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Backup was not restored", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void ReloadRules(bool showMessage)
