@@ -63,6 +63,10 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/oem-product-compare-branch-smoke.ps1
 
+      - name: OEM DevCmpStr Guarded Block read-only safety tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/oem-devcmp-guarded-block-smoke.ps1
+
       - name: State reducer and RGB protocol smoke tests
         run: dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
 
