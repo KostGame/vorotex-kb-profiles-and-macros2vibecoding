@@ -25,12 +25,7 @@ internal sealed class K15HidLightingController : IDisposable
     public static K15HidLightingController Open()
     {
         HidD_GetHidGuid(out var hidGuid);
-        var set = SetupDiGetClassDevs(
-            ref hidGuid,
-            IntPtr.Zero,
-            IntPtr.Zero,
-            DigcfPresent | DigcfDeviceInterface);
-
+        var set = SetupDiGetClassDevs(ref hidGuid, IntPtr.Zero, IntPtr.Zero, DigcfPresent | DigcfDeviceInterface);
         if (set == IntPtr.Zero || set == new IntPtr(-1))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "SetupDiGetClassDevs failed.");
 
@@ -38,11 +33,7 @@ internal sealed class K15HidLightingController : IDisposable
         {
             for (uint index = 0; ; index++)
             {
-                var iface = new SpDeviceInterfaceData
-                {
-                    cbSize = Marshal.SizeOf<SpDeviceInterfaceData>()
-                };
-
+                var iface = new SpDeviceInterfaceData { cbSize = Marshal.SizeOf<SpDeviceInterfaceData>() };
                 if (!SetupDiEnumDeviceInterfaces(set, IntPtr.Zero, ref hidGuid, index, ref iface))
                 {
                     var error = Marshal.GetLastWin32Error();
@@ -51,14 +42,7 @@ internal sealed class K15HidLightingController : IDisposable
                     continue;
                 }
 
-                SetupDiGetDeviceInterfaceDetail(
-                    set,
-                    ref iface,
-                    IntPtr.Zero,
-                    0,
-                    out var required,
-                    IntPtr.Zero);
-
+                SetupDiGetDeviceInterfaceDetail(set, ref iface, IntPtr.Zero, 0, out var required, IntPtr.Zero);
                 if (required == 0)
                     continue;
 
@@ -66,49 +50,25 @@ internal sealed class K15HidLightingController : IDisposable
                 try
                 {
                     Marshal.WriteInt32(buffer, IntPtr.Size == 8 ? 8 : 6);
-                    if (!SetupDiGetDeviceInterfaceDetail(
-                            set,
-                            ref iface,
-                            buffer,
-                            required,
-                            out _,
-                            IntPtr.Zero))
-                    {
+                    if (!SetupDiGetDeviceInterfaceDetail(set, ref iface, buffer, required, out _, IntPtr.Zero))
                         continue;
-                    }
 
                     var path = Marshal.PtrToStringUni(IntPtr.Add(buffer, 4));
                     if (string.IsNullOrWhiteSpace(path))
                         continue;
 
-                    var handle = CreateFile(
-                        path,
-                        GenericRead | GenericWrite,
-                        FileShareRead | FileShareWrite,
-                        IntPtr.Zero,
-                        OpenExisting,
-                        0,
-                        IntPtr.Zero);
-
+                    var handle = CreateFile(path, GenericRead | GenericWrite, FileShareRead | FileShareWrite,
+                        IntPtr.Zero, OpenExisting, 0, IntPtr.Zero);
                     if (handle.IsInvalid)
                     {
                         handle.Dispose();
                         continue;
                     }
 
-                    var attr = new HiddAttributes
-                    {
-                        Size = Marshal.SizeOf<HiddAttributes>()
-                    };
-
+                    var attr = new HiddAttributes { Size = Marshal.SizeOf<HiddAttributes>() };
                     if (!HidD_GetAttributes(handle, ref attr) ||
-                        !K15HidProtocol.IsSupportedDevice(attr.VendorID, attr.ProductID))
-                    {
-                        handle.Dispose();
-                        continue;
-                    }
-
-                    if (!MatchesVendorConfigurationCollection(handle))
+                        !K15HidProtocol.IsSupportedDevice(attr.VendorID, attr.ProductID) ||
+                        !MatchesVendorConfigurationCollection(handle))
                     {
                         handle.Dispose();
                         continue;
@@ -134,16 +94,13 @@ internal sealed class K15HidLightingController : IDisposable
     public byte ReadActiveSlot()
     {
         var invalidValues = new List<byte>();
-
         for (var attempt = 0; attempt < 6; attempt++)
         {
             var data = Query(K15HidProtocol.DeviceReadCommand, K15HidProtocol.ActiveSlotSelector, 0, 1);
             if (data.Length == 1 && data[0] <= 1)
                 return data[0];
-
             if (data.Length == 1)
                 invalidValues.Add(data[0]);
-
             Thread.Sleep(60);
         }
 
@@ -158,13 +115,8 @@ internal sealed class K15HidLightingController : IDisposable
         if (slot > 1)
             throw new ArgumentOutOfRangeException(nameof(slot));
 
-        Write(
-            K15HidProtocol.DeviceWriteCommand,
-            K15HidProtocol.ActiveSlotSelector,
-            0,
-            new byte[] { slot });
+        Write(K15HidProtocol.DeviceWriteCommand, K15HidProtocol.ActiveSlotSelector, 0, new byte[] { slot });
         Thread.Sleep(70);
-
         var selected = ReadActiveSlot();
         if (selected != slot)
             throw new TimeoutException($"K15 did not settle on requested onboard slot {slot}; observed {selected}.");
@@ -172,28 +124,22 @@ internal sealed class K15HidLightingController : IDisposable
 
     public LightingSnapshot PrepareProfileSnapshot(StatusLabConfig config)
     {
+        // Snapshot is rollback authority. Nothing is written before header + touched records are captured.
         var slot = ReadActiveSlot();
-        var headerTemplate = ReadLightingHeader();
-        var profile = config.GetProfile(slot);
-
-        // The editable profile normal is authoritative. This intentionally repairs any old
-        // persisted notifier mode (for example the historical Profile B breathing residue) before
-        // taking the baseline snapshot used for exact restoration during this process lifetime.
-        ApplyEffectCore(slot, headerTemplate, profile.Normal, config.WireColorOrder, "configured profile normal");
-
         var baselineHeader = ReadLightingHeader();
+        var modes = EnumerateModesTouchedByNotifier(config).ToHashSet();
+        if (TryModeFromCode(baselineHeader[0], out var baselineMode))
+            modes.Add(baselineMode);
+
         var records = new Dictionary<byte, byte[]>();
-        foreach (var mode in EnumerateModesTouchedByNotifier(config, slot).Distinct())
+        foreach (var mode in modes)
         {
             if (mode == K15LightingMode.Off)
                 continue;
 
             var code = K15HidProtocol.ModeCode(mode);
-            var record = Query(
-                K15HidProtocol.LightingReadCommand,
-                0,
-                K15HidProtocol.ModeRecordAddress(mode),
-                K15HidProtocol.LightingRecordSize);
+            var record = Query(K15HidProtocol.LightingReadCommand, 0,
+                K15HidProtocol.ModeRecordAddress(mode), K15HidProtocol.LightingRecordSize);
             RequireLength(record, K15HidProtocol.LightingRecordSize, $"{mode} lighting record");
             records[code] = record;
         }
@@ -201,11 +147,8 @@ internal sealed class K15HidLightingController : IDisposable
         return new LightingSnapshot(slot, baselineHeader, records);
     }
 
-    public void ApplyEffect(
-        LightingSnapshot snapshot,
-        LightingEffectConfig effect,
-        WireColorOrder wireColorOrder,
-        string label)
+    public void ApplyEffect(LightingSnapshot snapshot, LightingEffectConfig effect,
+        WireColorOrder wireColorOrder, string label)
     {
         RequireSameActiveSlot(snapshot);
         ApplyEffectCore(snapshot.OnboardSlot, snapshot.Header, effect, wireColorOrder, label);
@@ -214,119 +157,86 @@ internal sealed class K15HidLightingController : IDisposable
     public void Restore(LightingSnapshot snapshot)
     {
         RequireSameActiveSlot(snapshot);
-
         var baselineMode = snapshot.Header[0];
 
-        // Restore the detail record of the visible baseline mode before selecting the header. This
-        // avoids a visible one-frame color leak if that mode was also used as a notification mode.
-        if (snapshot.ModeRecords.TryGetValue(baselineMode, out var baselineRecord))
+        if (snapshot.ModeRecords.TryGetValue(baselineMode, out var baselineRecord) &&
+            TryModeFromCode(baselineMode, out var baselineModeEnum))
         {
-            var mode = ModeFromCode(baselineMode);
-            WriteAndVerify(
-                K15HidProtocol.LightingWriteCommand,
-                K15HidProtocol.LightingReadCommand,
-                0,
-                K15HidProtocol.ModeRecordAddress(mode),
-                baselineRecord,
+            WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0,
+                K15HidProtocol.ModeRecordAddress(baselineModeEnum), baselineRecord,
                 "restore baseline mode record");
         }
 
-        WriteAndVerify(
-            K15HidProtocol.LightingWriteCommand,
-            K15HidProtocol.LightingReadCommand,
-            0,
-            0,
-            snapshot.Header,
-            "restore lighting header");
+        WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, 0,
+            snapshot.Header, "restore lighting header");
 
-        // Remaining mode records are hidden while the baseline header is active, so restoring them
-        // after the header is visually quiet and leaves no notifier residue in other effects.
         foreach (var pair in snapshot.ModeRecords)
         {
-            if (pair.Key == baselineMode)
+            if (pair.Key == baselineMode || !TryModeFromCode(pair.Key, out var mode))
                 continue;
-
-            var mode = ModeFromCode(pair.Key);
-            WriteAndVerify(
-                K15HidProtocol.LightingWriteCommand,
-                K15HidProtocol.LightingReadCommand,
-                0,
-                K15HidProtocol.ModeRecordAddress(mode),
-                pair.Value,
-                $"restore {mode} record");
+            WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0,
+                K15HidProtocol.ModeRecordAddress(mode), pair.Value, $"restore {mode} record");
         }
     }
 
-    private void ApplyEffectCore(
-        byte expectedSlot,
-        ReadOnlySpan<byte> headerTemplate,
-        LightingEffectConfig effect,
-        WireColorOrder wireColorOrder,
-        string label)
+    private void ApplyEffectCore(byte expectedSlot, ReadOnlySpan<byte> headerTemplate,
+        LightingEffectConfig effect, WireColorOrder wireColorOrder, string label)
     {
         var current = ReadActiveSlot();
         if (current != expectedSlot)
             throw new K15ProfileChangedException(expectedSlot, current);
 
         var header = K15HidProtocol.CreateEffectHeader(headerTemplate, effect);
-
         if (effect.Mode != K15LightingMode.Off)
         {
             var detail = K15HidProtocol.CreateEffectRecord(effect, wireColorOrder);
-            WriteAndVerify(
-                K15HidProtocol.LightingWriteCommand,
-                K15HidProtocol.LightingReadCommand,
-                0,
-                K15HidProtocol.ModeRecordAddress(effect.Mode),
-                detail,
-                $"{label} {effect.Mode} record");
+            WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0,
+                K15HidProtocol.ModeRecordAddress(effect.Mode), detail, $"{label} {effect.Mode} record");
         }
 
-        WriteAndVerify(
-            K15HidProtocol.LightingWriteCommand,
-            K15HidProtocol.LightingReadCommand,
-            0,
-            0,
-            header,
-            $"{label} lighting header");
+        WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, 0,
+            header, $"{label} lighting header");
     }
 
     private byte[] ReadLightingHeader()
     {
-        var header = Query(
-            K15HidProtocol.LightingReadCommand,
-            0,
-            0,
-            K15HidProtocol.LightingRecordSize);
+        var header = Query(K15HidProtocol.LightingReadCommand, 0, 0, K15HidProtocol.LightingRecordSize);
         RequireLength(header, K15HidProtocol.LightingRecordSize, "lighting header");
         return header;
     }
 
-    private static IEnumerable<K15LightingMode> EnumerateModesTouchedByNotifier(StatusLabConfig config, byte slot)
+    private static IEnumerable<K15LightingMode> EnumerateModesTouchedByNotifier(StatusLabConfig config)
     {
-        var profile = config.GetProfile(slot);
-        yield return profile.Normal.Mode;
-        yield return profile.SwitchSignal.Mode;
+        yield return config.ProfileSwitch.Mode;
+        yield return config.StopSignal.Mode;
         yield return config.ActivationSignal.Mode;
         yield return config.States.Running.Mode;
         yield return config.States.Waiting.Mode;
         yield return config.States.Done.Mode;
         yield return config.States.Error.Mode;
+        yield return K15LightingMode.Constant; // Quick Effect Test control.
+        yield return K15LightingMode.SingleColorBreathing;
+        yield return K15LightingMode.FlowingWater;
+        yield return K15LightingMode.CycleBreathing;
     }
 
-    private static K15LightingMode ModeFromCode(byte code) => code switch
+    private static bool TryModeFromCode(byte code, out K15LightingMode mode)
     {
-        K15HidProtocol.ConstantMode => K15LightingMode.Constant,
-        K15HidProtocol.FlowingWaterMode => K15LightingMode.FlowingWater,
-        K15HidProtocol.MonoWaterMode => K15LightingMode.MonoWater,
-        K15HidProtocol.SingleColorBreathingMode => K15LightingMode.SingleColorBreathing,
-        K15HidProtocol.CycleBreathingMode => K15LightingMode.CycleBreathing,
-        K15HidProtocol.TetrisMode => K15LightingMode.TetrisBlocks,
-        K15HidProtocol.NeonMode => K15LightingMode.Neon,
-        K15HidProtocol.AmbilightMode => K15LightingMode.Ambilight,
-        K15HidProtocol.OffMode => K15LightingMode.Off,
-        _ => throw new InvalidDataException($"Unknown K15 lighting mode 0x{code:X2}.")
-    };
+        mode = code switch
+        {
+            K15HidProtocol.ConstantMode => K15LightingMode.Constant,
+            K15HidProtocol.FlowingWaterMode => K15LightingMode.FlowingWater,
+            K15HidProtocol.MonoWaterMode => K15LightingMode.MonoWater,
+            K15HidProtocol.SingleColorBreathingMode => K15LightingMode.SingleColorBreathing,
+            K15HidProtocol.CycleBreathingMode => K15LightingMode.CycleBreathing,
+            K15HidProtocol.TetrisMode => K15LightingMode.TetrisBlocks,
+            K15HidProtocol.NeonMode => K15LightingMode.Neon,
+            K15HidProtocol.AmbilightMode => K15LightingMode.Ambilight,
+            K15HidProtocol.OffMode => K15LightingMode.Off,
+            _ => default
+        };
+        return code is >= K15HidProtocol.ConstantMode and <= K15HidProtocol.OffMode;
+    }
 
     private void RequireSameActiveSlot(LightingSnapshot snapshot)
     {
@@ -335,13 +245,8 @@ internal sealed class K15HidLightingController : IDisposable
             throw new K15ProfileChangedException(snapshot.OnboardSlot, current);
     }
 
-    private void WriteAndVerify(
-        byte writeCommand,
-        byte readCommand,
-        byte selector,
-        ushort address,
-        ReadOnlySpan<byte> data,
-        string label)
+    private void WriteAndVerify(byte writeCommand, byte readCommand, byte selector, ushort address,
+        ReadOnlySpan<byte> data, string label)
     {
         Write(writeCommand, selector, address, data);
         var actual = Query(readCommand, selector, address, (byte)data.Length);
@@ -367,7 +272,6 @@ internal sealed class K15HidLightingController : IDisposable
             {
                 if (requestAttempt == 2)
                     throw new Win32Exception(Marshal.GetLastWin32Error(), $"HID read request 0x{command:X2} failed.");
-
                 Thread.Sleep(35);
                 continue;
             }
@@ -386,13 +290,11 @@ internal sealed class K15HidLightingController : IDisposable
 
                 var responseLength = response[8];
                 if (responseLength is > 0 and <= K15HidProtocol.MaxData &&
-                    response[3] == command &&
-                    response[4] == sequence)
+                    response[3] == command && response[4] == sequence)
                 {
                     return response.AsSpan(9, responseLength).ToArray();
                 }
             }
-
             Thread.Sleep(35);
         }
 
@@ -401,10 +303,7 @@ internal sealed class K15HidLightingController : IDisposable
 
     private byte NextSequence()
     {
-        unchecked
-        {
-            _sequence++;
-        }
+        unchecked { _sequence++; }
         return _sequence;
     }
 
@@ -415,14 +314,9 @@ internal sealed class K15HidLightingController : IDisposable
 
         try
         {
-            var caps = new HidpCaps
-            {
-                Reserved = new ushort[17]
-            };
+            var caps = new HidpCaps { Reserved = new ushort[17] };
             var status = HidP_GetCaps(preparsed, ref caps);
-            return status >= 0 &&
-                   caps.UsagePage == 0xFF01 &&
-                   caps.Usage == 0x0001 &&
+            return status >= 0 && caps.UsagePage == 0xFF01 && caps.Usage == 0x0001 &&
                    caps.FeatureReportByteLength == K15HidProtocol.ReportSize;
         }
         finally
@@ -439,9 +333,7 @@ internal sealed class K15HidLightingController : IDisposable
 
     public void Dispose() => _handle.Dispose();
 
-    internal sealed record LightingSnapshot(
-        byte OnboardSlot,
-        byte[] Header,
+    internal sealed record LightingSnapshot(byte OnboardSlot, byte[] Header,
         IReadOnlyDictionary<byte, byte[]> ModeRecords);
 
     internal sealed class K15ProfileChangedException : InvalidOperationException
@@ -483,10 +375,7 @@ internal sealed class K15HidLightingController : IDisposable
         public ushort InputReportByteLength;
         public ushort OutputReportByteLength;
         public ushort FeatureReportByteLength;
-
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 17)]
-        public ushort[] Reserved;
-
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 17)] public ushort[] Reserved;
         public ushort NumberLinkCollectionNodes;
         public ushort NumberInputButtonCaps;
         public ushort NumberInputValueCaps;
@@ -499,61 +388,24 @@ internal sealed class K15HidLightingController : IDisposable
         public ushort NumberFeatureDataIndices;
     }
 
-    [DllImport("hid.dll")]
-    private static extern void HidD_GetHidGuid(out Guid hidGuid);
-
-    [DllImport("hid.dll", SetLastError = true)]
-    private static extern bool HidD_GetAttributes(SafeFileHandle hidDeviceObject, ref HiddAttributes attributes);
-
-    [DllImport("hid.dll", SetLastError = true)]
-    private static extern bool HidD_SetFeature(SafeFileHandle hidDeviceObject, byte[] reportBuffer, int reportBufferLength);
-
-    [DllImport("hid.dll", SetLastError = true)]
-    private static extern bool HidD_GetFeature(SafeFileHandle hidDeviceObject, byte[] reportBuffer, int reportBufferLength);
-
-    [DllImport("hid.dll", SetLastError = true)]
-    private static extern bool HidD_GetPreparsedData(SafeFileHandle hidDeviceObject, out IntPtr preparsedData);
-
-    [DllImport("hid.dll", SetLastError = true)]
-    private static extern bool HidD_FreePreparsedData(IntPtr preparsedData);
-
-    [DllImport("hid.dll")]
-    private static extern int HidP_GetCaps(IntPtr preparsedData, ref HidpCaps capabilities);
-
+    [DllImport("hid.dll")] private static extern void HidD_GetHidGuid(out Guid hidGuid);
+    [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_GetAttributes(SafeFileHandle hidDeviceObject, ref HiddAttributes attributes);
+    [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_SetFeature(SafeFileHandle hidDeviceObject, byte[] reportBuffer, int reportBufferLength);
+    [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_GetFeature(SafeFileHandle hidDeviceObject, byte[] reportBuffer, int reportBufferLength);
+    [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_GetPreparsedData(SafeFileHandle hidDeviceObject, out IntPtr preparsedData);
+    [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_FreePreparsedData(IntPtr preparsedData);
+    [DllImport("hid.dll")] private static extern int HidP_GetCaps(IntPtr preparsedData, ref HidpCaps capabilities);
     [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr SetupDiGetClassDevs(
-        ref Guid classGuid,
-        IntPtr enumerator,
-        IntPtr hwndParent,
-        uint flags);
-
+    private static extern IntPtr SetupDiGetClassDevs(ref Guid classGuid, IntPtr enumerator, IntPtr hwndParent, uint flags);
     [DllImport("setupapi.dll", SetLastError = true)]
-    private static extern bool SetupDiEnumDeviceInterfaces(
-        IntPtr deviceInfoSet,
-        IntPtr deviceInfoData,
-        ref Guid interfaceClassGuid,
-        uint memberIndex,
-        ref SpDeviceInterfaceData deviceInterfaceData);
-
+    private static extern bool SetupDiEnumDeviceInterfaces(IntPtr deviceInfoSet, IntPtr deviceInfoData,
+        ref Guid interfaceClassGuid, uint memberIndex, ref SpDeviceInterfaceData deviceInterfaceData);
     [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool SetupDiGetDeviceInterfaceDetail(
-        IntPtr deviceInfoSet,
-        ref SpDeviceInterfaceData deviceInterfaceData,
-        IntPtr deviceInterfaceDetailData,
-        uint deviceInterfaceDetailDataSize,
-        out uint requiredSize,
-        IntPtr deviceInfoData);
-
-    [DllImport("setupapi.dll", SetLastError = true)]
-    private static extern bool SetupDiDestroyDeviceInfoList(IntPtr deviceInfoSet);
-
+    private static extern bool SetupDiGetDeviceInterfaceDetail(IntPtr deviceInfoSet,
+        ref SpDeviceInterfaceData deviceInterfaceData, IntPtr deviceInterfaceDetailData,
+        uint deviceInterfaceDetailDataSize, out uint requiredSize, IntPtr deviceInfoData);
+    [DllImport("setupapi.dll", SetLastError = true)] private static extern bool SetupDiDestroyDeviceInfoList(IntPtr deviceInfoSet);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFile(
-        string fileName,
-        uint desiredAccess,
-        uint shareMode,
-        IntPtr securityAttributes,
-        uint creationDisposition,
-        uint flagsAndAttributes,
-        IntPtr templateFile);
+    private static extern SafeFileHandle CreateFile(string fileName, uint desiredAccess, uint shareMode,
+        IntPtr securityAttributes, uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
 }

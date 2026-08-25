@@ -2,152 +2,180 @@ using Vorotex.K15.StatusLab;
 
 static void Require(bool condition, string message)
 {
-    if (!condition)
-        throw new InvalidOperationException(message);
+    if (!condition) throw new InvalidOperationException(message);
 }
 
-static StatusInputEvent Hook(DateTimeOffset t, string name) =>
-    new(t, "codex_hook", name);
-
+static StatusInputEvent Hook(DateTimeOffset t, string name, string session = "session-main", string cwd = @"C:\work\main") =>
+    new(t, "codex_hook", name, SessionId: session, Cwd: cwd);
 static StatusInputEvent Notification(DateTimeOffset t, string name, uint id, bool error = false) =>
     new(t, "windows_notification", name, id, "OpenAI.Codex_test", error);
 
-var t = DateTimeOffset.Parse("2026-08-24T17:30:00Z");
+var t = DateTimeOffset.Parse("2026-08-25T00:00:00Z");
 var reducer = new StateReducer();
-
 Require(reducer.State == K15NormalizedState.Normal, "Initial state must be NORMAL.");
-
 reducer.Apply(Hook(t, "UserPromptSubmit"));
 Require(reducer.State == K15NormalizedState.Running, "UserPromptSubmit must enter RUNNING.");
-
+Require(reducer.FocusedSessionId == "session-main", "Main task session must become focused.");
 reducer.Apply(Hook(t.AddSeconds(1), "PermissionRequest"));
 Require(reducer.State == K15NormalizedState.Waiting, "PermissionRequest must enter WAITING.");
+reducer.Apply(Hook(t.AddSeconds(2), "PostToolUse"));
+Require(reducer.State == K15NormalizedState.Running, "PostToolUse must resume RUNNING after approval.");
+reducer.Apply(Hook(t.AddSeconds(3), "Stop"));
+Require(reducer.State == K15NormalizedState.DonePendingAttention, "Stop must enter DONE.");
+reducer.Apply(Notification(t.AddSeconds(4), "windows_notification_added", 101, error: true));
+Require(reducer.State == K15NormalizedState.DonePendingAttention, "Toast keywords must not create semantic ERROR.");
+reducer.Apply(Notification(t.AddSeconds(5), "windows_notification_removed", 101));
+Require(reducer.State == K15NormalizedState.Normal, "Removing tracked completion notification must restore NORMAL.");
 
-reducer.Apply(Hook(t.AddSeconds(1.2), "PermissionRequest"));
-Require(reducer.State == K15NormalizedState.Waiting, "Repeated PermissionRequest must stay WAITING.");
+var preStop = new StateReducer(15);
+preStop.Apply(Hook(t, "UserPromptSubmit", "pre-stop"));
+preStop.Apply(Notification(t.AddSeconds(5), "windows_notification_added", 202));
+preStop.Apply(Hook(t.AddSeconds(5.1), "Stop", "pre-stop"));
+Require(preStop.State == K15NormalizedState.DonePendingAttention,
+    "Completion toast arriving immediately before Stop must still correlate to DONE.");
+preStop.Apply(Notification(t.AddSeconds(8), "windows_notification_removed", 202));
+Require(preStop.State == K15NormalizedState.Normal,
+    "Removing a pre-Stop completion toast must resolve DONE to NORMAL.");
 
-reducer.Apply(Notification(t.AddSeconds(2), "windows_notification_added", 100));
-Require(reducer.State == K15NormalizedState.Waiting, "Tracked permission notification must not change WAITING.");
+var timeout = new StateReducer(15);
+timeout.Apply(Hook(t, "UserPromptSubmit", "timeout-main"));
+timeout.Apply(Hook(t.AddSeconds(1), "Stop", "timeout-main"));
+Require(timeout.Tick(t.AddSeconds(15.9)) is null, "DONE fallback must not fire before 15 seconds.");
+var timeoutTransition = timeout.Tick(t.AddSeconds(16.1));
+Require(timeoutTransition?.Current == K15NormalizedState.Normal && timeoutTransition.Reason == "done_attention_timeout",
+    "DONE must fall back to NORMAL after configured timeout.");
 
-reducer.Apply(Notification(t.AddSeconds(4), "windows_notification_removed", 100));
-Require(reducer.State == K15NormalizedState.Running, "Resolved permission notification must return to RUNNING.");
+var parallel = new StateReducer();
+parallel.Apply(Hook(t, "UserPromptSubmit", "main-A", @"D:\AI_AGENT_PROJECTS\agentloop-exchange-manual-win-001"));
+Require(parallel.State == K15NormalizedState.Running, "Main A must be RUNNING.");
+parallel.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "memory-B", @"C:\Users\Desktop\.codex-agentloop\memories"));
+parallel.Apply(Hook(t.AddSeconds(2), "SessionEnd", "memory-B", @"C:\Users\Desktop\.codex-agentloop\memories"));
+Require(parallel.State == K15NormalizedState.Running,
+    "Background memories SessionEnd must not reset the foreground main session.");
+Require(parallel.FocusedSessionId == "main-A", "Internal memories session must never steal focus.");
 
-reducer.Apply(Hook(t.AddSeconds(5), "Stop"));
-Require(reducer.State == K15NormalizedState.DonePendingAttention, "Stop must enter DONE_PENDING_ATTENTION.");
+parallel.Apply(Hook(t.AddSeconds(3), "UserPromptSubmit", "main-C", @"D:\AI_AGENT_PROJECTS\other-task"));
+Require(parallel.FocusedSessionId == "main-C", "Newest real task activity must take focus.");
+parallel.Apply(Hook(t.AddSeconds(4), "SessionEnd", "main-C", @"D:\AI_AGENT_PROJECTS\other-task"));
+Require(parallel.State == K15NormalizedState.Running && parallel.FocusedSessionId == "main-A",
+    "Ending focused session C must fall back to still-active session A.");
 
-reducer.Apply(Notification(t.AddSeconds(6), "windows_notification_added", 101));
-Require(reducer.State == K15NormalizedState.DonePendingAttention, "Post-Stop completion notification keeps DONE.");
-
-reducer.Apply(Notification(t.AddSeconds(8), "windows_notification_removed", 101));
-Require(reducer.State == K15NormalizedState.Normal, "Removing tracked completion notification must acknowledge DONE.");
-
-var postToolReducer = new StateReducer();
-postToolReducer.Apply(Hook(t.AddSeconds(10), "UserPromptSubmit"));
-postToolReducer.Apply(Hook(t.AddSeconds(11), "PermissionRequest"));
-Require(postToolReducer.State == K15NormalizedState.Waiting, "PermissionRequest must enter WAITING before PostToolUse.");
-postToolReducer.Apply(Hook(t.AddSeconds(12), "PostToolUse"));
-Require(postToolReducer.State == K15NormalizedState.Running,
-    "PostToolUse after an approval must resume RUNNING even when the Windows toast remains.");
-
-var errorHintReducer = new StateReducer();
-errorHintReducer.Apply(Hook(t.AddSeconds(14), "UserPromptSubmit"));
-errorHintReducer.Apply(Hook(t.AddSeconds(15), "Stop"));
-errorHintReducer.Apply(Notification(t.AddSeconds(16), "windows_notification_added", 102, error: true));
-Require(errorHintReducer.State == K15NormalizedState.DonePendingAttention,
-    "Toast error keywords must not create semantic ERROR without a high-confidence source.");
-errorHintReducer.Apply(Notification(t.AddSeconds(17), "windows_notification_removed", 102, error: true));
-Require(errorHintReducer.State == K15NormalizedState.Normal,
-    "Removing the tracked post-Stop notification must still return to NORMAL.");
-
-reducer.Apply(Hook(t.AddSeconds(20), "UserPromptSubmit"));
-reducer.Apply(new StatusInputEvent(
-    t.AddSeconds(21),
-    "windows_notification",
-    "windows_notification_added",
-    103,
-    "Microsoft.OtherApp_test"));
-Require(reducer.State == K15NormalizedState.Running, "Unrelated notifications must not affect state.");
-
-reducer.Apply(Hook(t.AddSeconds(22), "SessionEnd"));
-Require(reducer.State == K15NormalizedState.Normal, "SessionEnd must return to NORMAL.");
-
-var earlyToastReducer = new StateReducer();
-earlyToastReducer.Apply(Hook(t.AddSeconds(30), "UserPromptSubmit"));
-earlyToastReducer.Apply(Notification(t.AddSeconds(31.000), "windows_notification_added", 200));
-earlyToastReducer.Apply(Hook(t.AddSeconds(31.100), "PermissionRequest"));
-Require(earlyToastReducer.State == K15NormalizedState.Waiting,
-    "PermissionRequest must enter WAITING when a toast arrived just before the hook.");
-earlyToastReducer.Apply(Notification(t.AddSeconds(33), "windows_notification_removed", 200));
-Require(earlyToastReducer.State == K15NormalizedState.Running,
-    "A pre-hook correlated permission toast must resolve WAITING when removed.");
-
-var timeoutReducer = new StateReducer();
-timeoutReducer.Apply(Hook(t.AddSeconds(40), "UserPromptSubmit"));
-timeoutReducer.Apply(Hook(t.AddSeconds(41), "Stop"));
-timeoutReducer.Apply(Notification(t.AddSeconds(42), "windows_notification_added", 201));
-Require(timeoutReducer.State == K15NormalizedState.DonePendingAttention,
-    "Post-Stop notification must keep DONE pending.");
-Require(timeoutReducer.Tick(t.AddSeconds(55)) is null,
-    "DONE must remain visible before the 15-second timeout.");
-var timeoutTransition = timeoutReducer.Tick(t.AddSeconds(56.1));
-Require(timeoutTransition is not null &&
-        timeoutReducer.State == K15NormalizedState.Normal &&
-        timeoutTransition.Reason == "done_attention_timeout",
-    "DONE must auto-restore to NORMAL after the attention timeout.");
-
-var report = K15HidProtocol.FrameReport(0x09, 0x12, 0, 0x0064, new byte[] { 1, 2, 3 });
-Require(report.Length == 41, "HID report must be 41 bytes.");
-Require(report[0] == 0x06 && report[3] == 0x09 && report[4] == 0x12, "HID report header mismatch.");
-Require(report[6] == 0x64 && report[7] == 0x00 && report[8] == 3, "HID report address/length mismatch.");
+var rehydrated = new StateReducer();
+rehydrated.Rehydrate(new[]
+{
+    Hook(t, "UserPromptSubmit", "rehydrate-main", @"D:\AI_AGENT_PROJECTS\rehydrate"),
+    Hook(t.AddSeconds(2), "PostToolUse", "rehydrate-main", @"D:\AI_AGENT_PROJECTS\rehydrate"),
+    Hook(t.AddSeconds(3), "UserPromptSubmit", "rehydrate-memory", @"C:\Users\Desktop\.codex-agentloop\memories"),
+    Hook(t.AddSeconds(4), "SessionEnd", "rehydrate-memory", @"C:\Users\Desktop\.codex-agentloop\memories")
+});
+Require(rehydrated.State == K15NormalizedState.Running,
+    "Startup replay must recover a still-running main Codex session.");
+Require(rehydrated.FocusedSessionId == "rehydrate-main", "Rehydrate must recover foreground main session focus.");
+Require(StateReducer.IsInternalCwd(@"C:\Users\Desktop\.codex-agentloop\memories"),
+    "AgentLoop memories cwd must be classified internal.");
+Require(!StateReducer.IsInternalCwd(@"D:\AI_AGENT_PROJECTS\task"), "Normal project cwd must not be internal.");
 
 var config = StatusLabConfig.CreateDefault();
-Require(config.WireColorOrder == WireColorOrder.RGB,
-    "Physical K15 default must use RGB order after owner canary calibration.");
-Require(config.ActivationSignal.Mode == K15LightingMode.FlowingWater &&
-        config.ActivationSignal.Brightness == 4 &&
-        config.ActivationSignal.Speed == 7 &&
-        config.ActivationSignal.Colors.SequenceEqual(new[] { "red", "blue" }),
-    "Activation signal must default to fast red+blue Flowing Water at brightness 4.");
-Require(config.States.Running.Mode == K15LightingMode.TetrisBlocks,
-    "RUNNING must default to Tetris blocks.");
-Require(config.Profiles.A.Normal.Mode == K15LightingMode.Constant &&
-        config.Profiles.A.Normal.Colors.SequenceEqual(new[] { "red" }),
-    "Profile A configured normal must be constant red.");
-Require(config.Profiles.B.Normal.Mode == K15LightingMode.Constant &&
-        config.Profiles.B.Normal.Colors.SequenceEqual(new[] { "blue" }),
-    "Profile B configured normal must be constant blue.");
+config.Validate();
+Require(config.SchemaVersion == 3, "Canonical TOML schema must be v3.");
+Require(config.WireColorOrder == WireColorOrder.RGB, "Physical K15 default must use RGB.");
+Require(config.DoneAttentionTimeoutSeconds == 15, "DONE fallback timeout default must be 15 seconds.");
+Require(config.Profiles.A.Color == "#FF0000" && config.Profiles.B.Color == "#0000FF", "Profile identity colors changed.");
+Require(config.States.Running.Mode == K15LightingMode.FlowingWater, "RUNNING default must use Flowing Water.");
+Require(config.States.Running.Palette == PaletteSource.Profile, "RUNNING must use active profile color.");
+Require(config.States.Waiting.Mode == K15LightingMode.SingleColorBreathing && config.States.Waiting.Speed == 7,
+    "WAITING must use fast single-color breathing speed 7.");
+Require(config.States.Done.Mode == K15LightingMode.SingleColorBreathing && config.States.Done.Speed == 5,
+    "DONE must use slower single-color breathing speed 5.");
+Require(config.StopSignal.Mode == K15LightingMode.CycleBreathing &&
+        config.StopSignal.Palette == PaletteSource.ProfilePair,
+    "STOP signal must use two-color Cycle breathing.");
+Require(config.ActivationSignal.Enabled && config.ActivationSignal.Mode == K15LightingMode.FlowingWater &&
+        config.ActivationSignal.Palette == PaletteSource.ProfilePair,
+    "RGB activation must use two-color Flowing Water.");
+Require(config.ProfileSwitch.Palette == PaletteSource.Profile && config.ProfileSwitch.DurationSeconds == 4,
+    "Profile switch must remain one active-profile color and account for native K15 flashes.");
+Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.CycleBreathing),
+    "Physically accepted Cycle breathing must be notifier-safe.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.MonoWater), "Native 0x83/Horse race must remain research-only.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.TetrisBlocks), "Tetris must remain research-only for now.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Neon), "Neon must remain research-only.");
+Require(!StatusLabConfig.IsControlledPaletteMode(K15LightingMode.Ambilight), "Ambilight must remain research-only.");
 
-Require(K15HidProtocol.ModeCode(K15LightingMode.FlowingWater) == 0x82,
-    "Flowing Water must map to native mode 0x82.");
-Require(K15HidProtocol.ModeCode(K15LightingMode.TetrisBlocks) == 0x86,
-    "Tetris blocks must map to native mode 0x86.");
-Require(K15HidProtocol.ModeRecordAddress(K15LightingMode.FlowingWater) == 50,
-    "Flowing Water detail record must use address 2*25.");
-Require(K15HidProtocol.ModeRecordAddress(K15LightingMode.TetrisBlocks) == 150,
-    "Tetris detail record must use address 6*25.");
+var runningA = config.RenderForProfile(0, config.States.Running);
+var runningB = config.RenderForProfile(1, config.States.Running);
+var stop = config.RenderForProfile(1, config.StopSignal);
+Require(runningA.Colors.SequenceEqual(new[] { "#FF0000" }), "Profile A state renderer must use red only.");
+Require(runningB.Colors.SequenceEqual(new[] { "#0000FF" }), "Profile B state renderer must use blue only.");
+Require(stop.Colors.SequenceEqual(new[] { "#FF0000", "#0000FF" }),
+    "profile_pair renderer must use canonical A then B colors.");
 
-var activationRecord = K15HidProtocol.CreateEffectRecord(config.ActivationSignal, WireColorOrder.RGB);
-Require(activationRecord[0] == 7 && activationRecord[2] == 2,
-    "Activation speed/brightness encoding mismatch.");
-Require(activationRecord[3] == 0x03,
-    "Two activation colors must enable the first two palette slots.");
-Require(activationRecord[4] == 0xFF && activationRecord[5] == 0x00 && activationRecord[6] == 0x00,
-    "Physical red must be encoded as R,G,B after owner calibration.");
-Require(activationRecord[7] == 0x00 && activationRecord[8] == 0x00 && activationRecord[9] == 0xFF,
-    "Physical blue must be the second activation palette color.");
+var pairRecord = K15HidProtocol.CreateEffectRecord(stop, WireColorOrder.RGB);
+Require(pairRecord[3] == 0b00000011, "Two-color profile_pair must set palette mask 0x03.");
+Require(pairRecord[4] == 0xFF && pairRecord[5] == 0 && pairRecord[6] == 0,
+    "profile_pair slot 1 must encode profile A red.");
+Require(pairRecord[7] == 0 && pairRecord[8] == 0 && pairRecord[9] == 0xFF,
+    "profile_pair slot 2 must encode profile B blue.");
 
-var legacyOrderRecord = K15HidProtocol.CreateEffectRecord(config.Profiles.A.SwitchSignal, WireColorOrder.GRB);
-Require(legacyOrderRecord[4] == 0x00 && legacyOrderRecord[5] == 0xFF,
-    "GRB compatibility option must remain explicitly available.");
+var toml = ConfigToml.Serialize(config);
+Require(toml.Contains("schema_version = 3", StringComparison.Ordinal), "Canonical TOML must use schema v3.");
+Require(toml.Contains("[behavior]", StringComparison.Ordinal) &&
+        toml.Contains("done_attention_timeout_seconds = 15", StringComparison.Ordinal),
+    "Canonical TOML must expose DONE fallback behavior.");
+Require(toml.Contains("[stop_signal]", StringComparison.Ordinal), "Canonical TOML must include STOP overlay section.");
+Require(toml.Contains("palette = \"profile_pair\"", StringComparison.Ordinal),
+    "Canonical TOML must expose profile_pair palette source.");
+Require(toml.Contains("effect = \"cycle_breathing\"", StringComparison.Ordinal),
+    "Canonical TOML must expose physically accepted Cycle breathing.");
+Require(toml.Contains("НИКОГДА программно не переключает", StringComparison.Ordinal),
+    "Canonical TOML must document observe-only profile policy.");
+Require(!toml.Contains("[states.running]\ncolor", StringComparison.Ordinal), "State TOML must not own colors.");
+var roundTrip = ConfigToml.Parse(toml);
+Require(roundTrip.StopSignal.Palette == PaletteSource.ProfilePair, "TOML round-trip lost STOP palette source.");
+Require(roundTrip.DoneAttentionTimeoutSeconds == 15, "TOML round-trip lost DONE timeout.");
 
-var originalHeader = Enumerable.Range(0, 25).Select(value => (byte)value).ToArray();
-var runningHeader = K15HidProtocol.CreateEffectHeader(originalHeader, config.States.Running);
-Require(runningHeader[0] == K15HidProtocol.TetrisMode,
-    "Configured RUNNING effect must select Tetris/Enraptured mode.");
-Require(runningHeader.Skip(1).SequenceEqual(originalHeader.Skip(1)),
-    "Configured effect header must preserve non-mode bytes.");
+var existingV3WithoutBehavior = ConfigToml.Parse("schema_version = 3\n[states.done]\neffect = \"single_color_breathing\"\npalette = \"profile\"\n");
+Require(existingV3WithoutBehavior.DoneAttentionTimeoutSeconds == 15,
+    "Existing schema-v3 config without [behavior] must inherit safe 15s fallback without file rewrite.");
 
+var legacyV2 = ConfigToml.Parse("schema_version = 2\n[states.running]\neffect = \"flowing_water\"\n");
+Require(legacyV2.SchemaVersion == 3, "Legacy schema v2 must migrate in memory without rewriting the file.");
+
+var unsafeRejected = false;
+try
+{
+    var unsafeConfig = StatusLabConfig.CreateDefault();
+    unsafeConfig.ProfileSwitch.Mode = K15LightingMode.MonoWater;
+    unsafeConfig.Validate();
+}
+catch (InvalidDataException ex)
+{
+    unsafeRejected = ex.Message.Contains("Lighting Lab", StringComparison.OrdinalIgnoreCase);
+}
+Require(unsafeRejected, "Research-only mode must fail notifier validation with a Lighting Lab hint.");
+
+Require(K15HidProtocol.HorseRaceMode == 0x83 && K15HidProtocol.MonoWaterMode == 0x83,
+    "Native 0x83 must preserve historical alias while using OEM Horse race naming.");
+Require(K15HidProtocol.ModeCode(K15LightingMode.FlowingWater) == 0x82, "Flowing Water mode code changed.");
+Require(K15HidProtocol.ModeCode(K15LightingMode.CycleBreathing) == 0x85, "Cycle breathing mode code changed.");
+
+var palette = new LightingEffectConfig
+{
+    Mode = K15LightingMode.FlowingWater,
+    Brightness = 6,
+    Speed = 7,
+    Direction = 0,
+    Colors = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#800080", "#00FFFF", "#FFFFFF"],
+    PaletteMask = 0b00000101
+};
+var paletteRecord = K15HidProtocol.CreateEffectRecord(palette, WireColorOrder.RGB);
+Require(paletteRecord[3] == 0b00000101, "Lighting Lab explicit palette mask must be written verbatim.");
+Require(paletteRecord[4] == 0xFF && paletteRecord[5] == 0 && paletteRecord[6] == 0, "Palette slot 1 RGB encoding changed.");
+Require(paletteRecord[10] == 0 && paletteRecord[11] == 0 && paletteRecord[12] == 0xFF, "Palette slot 3 RGB encoding changed.");
+
+var framed = K15HidProtocol.FrameReport(0x09, 0x12, 0, 0x0064, new byte[] { 1, 2, 3 });
+Require(framed.Length == 41 && framed[0] == 0x06, "HID report framing changed.");
 Require(K15HidProtocol.IsSupportedDevice(0xB6A4, 0x4100), "Physical K15 VID/PID must be accepted.");
 Require(!K15HidProtocol.IsSupportedDevice(0x1234, 0x4100), "Unrelated VID must be rejected.");
 
-Console.WriteLine("State reducer + editable RGB config + HID protocol smoke tests: PASS");
+Console.WriteLine("Session-aware reducer + bounded DONE + profile-pair RGB policy + HID tests: PASS");

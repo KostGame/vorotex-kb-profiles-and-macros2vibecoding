@@ -1,0 +1,102 @@
+# VOROTEX K15 Status Lab
+#
+# Цвета принадлежат аппаратным профилям A/B. NORMAL восстанавливает exact baseline.
+# palette = "profile"      -> цвет физически активного профиля
+# palette = "profile_pair" -> два основных цвета: A затем B
+#
+# Production notifier modes:
+# constant, flowing_water, single_color_breathing, cycle_breathing, off.
+# Horse race / native 0x83, Tetris, Neon и Ambilight остаются в K15 Lighting Lab.
+# Status Lab НИКОГДА программно не переключает hardware Profile A/B.
+
+schema_version = 3
+
+[device]
+wire_color_order = "rgb"
+
+[behavior]
+# Safety fallback: DONE_PENDING_ATTENTION не должен мигать бесконечно.
+# 0 = отключить fallback; default = 15 секунд.
+done_attention_timeout_seconds = 15
+
+[profiles.A]
+# RED / TOOLS-AUTH
+color = "#FF0000"
+
+[profiles.B]
+# BLUE / MAIN-VIBECODING
+color = "#0000FF"
+
+[states.running]
+# Работа Codex: спокойный Flowing Water в цвете активного профиля.
+enabled = true
+effect = "flowing_water"
+palette = "profile"
+brightness = 4
+speed = 3
+direction = 0
+duration_seconds = 0
+
+[states.waiting]
+# Запрос/ожидание: быстрое мигание, сразу заметно.
+enabled = true
+effect = "single_color_breathing"
+palette = "profile"
+brightness = 6
+speed = 7
+direction = 0
+duration_seconds = 0
+
+[states.done]
+# После STOP-сигнала: медленное напоминание. Semantic timeout задаётся в [behavior].
+enabled = true
+effect = "single_color_breathing"
+palette = "profile"
+brightness = 6
+speed = 5
+direction = 0
+duration_seconds = 0
+
+[states.error]
+# Зарезервировано до появления high-confidence semantic ERROR source.
+enabled = false
+effect = "single_color_breathing"
+palette = "profile"
+brightness = 6
+speed = 7
+direction = 0
+duration_seconds = 0
+
+[profile_switch]
+# У K15 есть собственная тройная flash-анимация при физическом A/B switch.
+# Поэтому default 4s оставляет наш Flowing Water видимым после штатных flashes.
+enabled = true
+effect = "flowing_water"
+palette = "profile"
+brightness = 5
+speed = 5
+direction = 0
+duration_seconds = 4
+
+[stop_signal]
+# Момент Stop: RED <-> BLUE, затем states.done.
+enabled = true
+effect = "cycle_breathing"
+palette = "profile_pair"
+brightness = 6
+speed = 7
+direction = 0
+duration_seconds = 3
+
+[activation]
+# Включение RGB-индикации: Flowing Water двумя основными цветами A/B.
+enabled = true
+effect = "flowing_water"
+palette = "profile_pair"
+brightness = 5
+speed = 5
+direction = 0
+duration_seconds = 3
+
+[effect_lab]
+test_duration_seconds = 4

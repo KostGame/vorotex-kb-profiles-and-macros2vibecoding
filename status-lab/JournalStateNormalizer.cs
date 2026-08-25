@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace Vorotex.K15.StatusLab;
@@ -6,12 +7,15 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan ReorderDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan StartupReplayWindow = TimeSpan.FromMinutes(30);
+    private const int StartupReplayMaxLines = 5000;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly StateReducer _reducer;
     private readonly List<StatusInputEvent> _pending = new();
     private Task? _loopTask;
-    private int _processedLineCount;
+    private long _readOffset;
+    private string _tailRemainder = string.Empty;
 
     public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 15)
     {
@@ -21,6 +25,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     public event Action<K15NormalizedState, StateTransition?>? StateChanged;
 
     public K15NormalizedState State => _reducer.State;
+    public string? FocusedSessionId => _reducer.FocusedSessionId;
+    public string FocusedCwd => _reducer.FocusedCwd;
 
     public void Start()
     {
@@ -28,7 +34,22 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             return;
 
         EventJournal.EnsureExists();
-        _processedLineCount = SafeReadAllLines().Length;
+        var replayLines = SafeReadReplayLines();
+        RehydrateFromRecentJournal(replayLines);
+        _readOffset = SafeCurrentLength();
+
+        EventJournal.Append(new
+        {
+            timestampUtc = DateTimeOffset.UtcNow,
+            source = "state_normalizer",
+            @event = "state_rehydrated",
+            current = ToWireName(_reducer.State),
+            focusedSessionId = _reducer.FocusedSessionId,
+            focusedCwd = _reducer.FocusedCwd,
+            activeTaskSessions = _reducer.ActiveTaskSessionCount,
+            replayWindowMinutes = StartupReplayWindow.TotalMinutes
+        });
+
         StateChanged?.Invoke(_reducer.State, null);
         _loopTask = Task.Run(ProcessLoopAsync);
     }
@@ -38,6 +59,28 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         var transition = _reducer.Acknowledge(DateTimeOffset.UtcNow);
         if (transition is not null)
             PublishTransition(transition);
+    }
+
+    private void RehydrateFromRecentJournal(string[] lines)
+    {
+        var cutoff = DateTimeOffset.UtcNow - StartupReplayWindow;
+        var start = Math.Max(0, lines.Length - StartupReplayMaxLines);
+        var events = new List<StatusInputEvent>();
+
+        for (var index = start; index < lines.Length; index++)
+        {
+            var input = ParseInput(lines[index]);
+            if (input is null ||
+                !input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
+                input.TimestampUtc < cutoff)
+            {
+                continue;
+            }
+
+            events.Add(input);
+        }
+
+        _reducer.Rehydrate(events);
     }
 
     private async Task ProcessLoopAsync()
@@ -80,21 +123,71 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 
     private void CollectNewEvents()
     {
-        var lines = SafeReadAllLines();
-        if (lines.Length < _processedLineCount)
+        EventJournal.EnsureExists();
+        var length = SafeCurrentLength();
+        if (length < _readOffset)
         {
-            _processedLineCount = 0;
+            _readOffset = 0;
+            _tailRemainder = string.Empty;
             _pending.Clear();
         }
 
-        for (var index = _processedLineCount; index < lines.Length; index++)
+        if (length <= _readOffset)
+            return;
+
+        byte[] delta;
+        try
         {
-            var input = ParseInput(lines[index]);
+            using var stream = new FileStream(
+                EventJournal.FilePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length < _readOffset)
+            {
+                _readOffset = 0;
+                _tailRemainder = string.Empty;
+            }
+
+            stream.Seek(_readOffset, SeekOrigin.Begin);
+            var remaining = checked((int)(stream.Length - _readOffset));
+            delta = new byte[remaining];
+            var total = 0;
+            while (total < delta.Length)
+            {
+                var read = stream.Read(delta, total, delta.Length - total);
+                if (read == 0)
+                    break;
+                total += read;
+            }
+
+            if (total != delta.Length)
+                Array.Resize(ref delta, total);
+            _readOffset = stream.Position;
+        }
+        catch (IOException)
+        {
+            return;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        if (delta.Length == 0)
+            return;
+
+        var text = _tailRemainder + Encoding.UTF8.GetString(delta);
+        var lines = text.Split('\n');
+        var completeCount = lines.Length - 1;
+        for (var index = 0; index < completeCount; index++)
+        {
+            var input = ParseInput(lines[index].TrimEnd('\r'));
             if (input is not null)
                 _pending.Add(input);
         }
 
-        _processedLineCount = lines.Length;
+        _tailRemainder = text.EndsWith('\n') ? string.Empty : lines[^1];
     }
 
     private void FlushReadyEvents(DateTimeOffset watermark)
@@ -129,13 +222,16 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             previous = ToWireName(transition.Previous),
             current = ToWireName(transition.Current),
             reason = transition.Reason,
-            sourceTimestampUtc = transition.TimestampUtc
+            sourceTimestampUtc = transition.TimestampUtc,
+            focusedSessionId = _reducer.FocusedSessionId,
+            focusedCwd = _reducer.FocusedCwd,
+            activeTaskSessions = _reducer.ActiveTaskSessionCount
         });
 
         StateChanged?.Invoke(transition.Current, transition);
     }
 
-    private static StatusInputEvent? ParseInput(string line)
+    internal static StatusInputEvent? ParseInput(string line)
     {
         if (string.IsNullOrWhiteSpace(line))
             return null;
@@ -173,7 +269,10 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 eventName,
                 notificationId,
                 packageFamilyName,
-                errorHint);
+                errorHint,
+                GetString(root, "sessionId"),
+                GetString(root, "turnId"),
+                GetString(root, "cwd"));
         }
         catch (JsonException)
         {
@@ -181,19 +280,42 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         }
     }
 
-    private static string[] SafeReadAllLines()
+    private static string[] SafeReadReplayLines()
+    {
+        var lines = new List<string>();
+        foreach (var path in new[] { EventJournal.ArchivePath(1), EventJournal.FilePath })
+        {
+            try
+            {
+                if (File.Exists(path))
+                    lines.AddRange(File.ReadLines(path));
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return lines.Count <= StartupReplayMaxLines
+            ? lines.ToArray()
+            : lines.Skip(lines.Count - StartupReplayMaxLines).ToArray();
+    }
+
+    private static long SafeCurrentLength()
     {
         try
         {
-            return File.ReadAllLines(EventJournal.FilePath);
+            return File.Exists(EventJournal.FilePath) ? new FileInfo(EventJournal.FilePath).Length : 0;
         }
         catch (IOException)
         {
-            return Array.Empty<string>();
+            return 0;
         }
         catch (UnauthorizedAccessException)
         {
-            return Array.Empty<string>();
+            return 0;
         }
     }
 
