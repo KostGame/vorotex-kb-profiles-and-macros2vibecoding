@@ -57,8 +57,10 @@ internal static class ConfigToml
         config.NormalizeLegacySchema();
         config.Validate();
         var b = new StringBuilder();
-        b.AppendLine("# VOROTEX K15 Status Lab RC1");
-        b.AppendLine("# Цвета принадлежат аппаратным профилям A/B. NORMAL восстанавливает exact baseline.");
+        b.AppendLine("# VOROTEX K15 Status Lab RC2");
+        b.AppendLine("# Цвета принадлежат физическим профилям A/B.");
+        b.AppendLine("# managed_normal = true делает NORMAL детерминированным: Constant в цвете профиля.");
+        b.AppendLine("# Exact hardware snapshot остаётся rollback-данными, но не является единственным источником NORMAL.");
         b.AppendLine("# palette = profile      -> цвет физически активного профиля");
         b.AppendLine("# palette = profile_pair -> два основных цвета: A затем B");
         b.AppendLine("# Production notifier modes: constant, flowing_water, single_color_breathing,");
@@ -73,7 +75,7 @@ internal static class ConfigToml
         b.AppendLine();
         b.AppendLine("[behavior]");
         b.AppendLine("# Safety fallback для DONE_PENDING_ATTENTION, независимо от визуального effect duration.");
-        b.AppendLine("# 0 = отключить fallback timeout; RC1 default = 30 секунд.");
+        b.AppendLine("# 0 = отключить fallback timeout; RC2 default = 30 секунд.");
         b.AppendLine($"done_attention_timeout_seconds = {Format(config.DoneAttentionTimeoutSeconds)}");
         b.AppendLine();
         WriteProfile(b, "A", config.Profiles.A, "RED / TOOLS-AUTH");
@@ -87,7 +89,7 @@ internal static class ConfigToml
         WriteEffect(b, "states.error", config.States.Error,
             "ERROR зарезервирован для high-confidence semantic source; default disabled.");
         WriteEffect(b, "profile_switch", config.ProfileSwitch,
-            "RC1 default OFF: K15 уже показывает собственную native A/B flash-анимацию.");
+            "RC2 default OFF: K15 уже показывает собственную native A/B flash-анимацию.");
         WriteEffect(b, "stop_signal", config.StopSignal,
             "Момент STOP: короткий Cycle breathing RED <-> BLUE, затем states.done.");
         WriteEffect(b, "activation", config.ActivationSignal,
@@ -126,9 +128,14 @@ internal static class ConfigToml
 
         if (section is "profiles.A" or "profiles.B")
         {
-            if (key != "color")
-                throw new InvalidDataException($"unknown key '{section}.{key}'");
-            (section.EndsWith(".A", StringComparison.Ordinal) ? config.Profiles.A : config.Profiles.B).Color = ParseString(value);
+            var profile = section.EndsWith(".A", StringComparison.Ordinal) ? config.Profiles.A : config.Profiles.B;
+            switch (key)
+            {
+                case "color": profile.Color = ParseString(value); break;
+                case "managed_normal": profile.ManagedNormal = ParseBool(value); break;
+                case "normal_brightness": profile.NormalBrightness = ParseInt(value); break;
+                default: throw new InvalidDataException($"unknown key '{section}.{key}'");
+            }
             return;
         }
 
@@ -170,6 +177,9 @@ internal static class ConfigToml
         b.AppendLine($"[profiles.{name}]");
         b.AppendLine($"# {hint}");
         b.AppendLine($"color = \"{profile.Color}\"");
+        b.AppendLine("# managed_normal=true: NORMAL/repair = Constant этого цвета; false: exact captured snapshot.");
+        b.AppendLine($"managed_normal = {profile.ManagedNormal.ToString().ToLowerInvariant()}");
+        b.AppendLine($"normal_brightness = {profile.NormalBrightness}      # 1..6");
         b.AppendLine();
     }
 

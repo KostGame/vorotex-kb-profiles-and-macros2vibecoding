@@ -1,0 +1,41 @@
+name: Status Lab canonical NORMAL
+
+on:
+  pull_request:
+    paths:
+      - 'status-lab/**'
+      - '.github/workflows/status-lab-canonical-normal.yml'
+  push:
+    branches:
+      - 'agent/**'
+    paths:
+      - 'status-lab/**'
+      - '.github/workflows/status-lab-canonical-normal.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-normal:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Canonical NORMAL controller safety smoke
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/canonical-normal-controller-smoke.ps1
+
+      - name: Canonical NORMAL config and protocol smoke
+        run: dotnet run --project status-lab/tests/CanonicalNormalSmoke.csproj -c Release
+
+      - name: Restore Status Tray
+        run: dotnet restore status-lab/Vorotex.K15.StatusLab.csproj
+
+      - name: Build Status Tray
+        run: dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release --no-restore

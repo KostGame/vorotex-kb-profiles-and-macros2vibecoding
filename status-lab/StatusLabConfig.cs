@@ -57,6 +57,8 @@ internal sealed class LightingEffectConfig
 internal sealed class ProfileLightingConfig
 {
     public string Color { get; set; } = "#FFFFFF";
+    public bool ManagedNormal { get; set; } = true;
+    public int NormalBrightness { get; set; } = 6;
 }
 
 internal sealed class StateLightingConfig
@@ -97,8 +99,8 @@ internal sealed class StatusLabConfig
         DoneAttentionTimeoutSeconds = 30,
         Profiles = new ProfileSetConfig
         {
-            A = new ProfileLightingConfig { Color = "#FF0000" },
-            B = new ProfileLightingConfig { Color = "#0000FF" }
+            A = new ProfileLightingConfig { Color = "#FF0000", ManagedNormal = true, NormalBrightness = 6 },
+            B = new ProfileLightingConfig { Color = "#0000FF", ManagedNormal = true, NormalBrightness = 6 }
         },
         States = new StateLightingConfig
         {
@@ -158,13 +160,30 @@ internal sealed class StatusLabConfig
         _ => throw new ArgumentOutOfRangeException(nameof(onboardSlot))
     };
 
+    public LightingEffectConfig GetCanonicalNormal(byte onboardSlot)
+    {
+        var profile = GetProfile(onboardSlot);
+        return new LightingEffectConfig
+        {
+            Enabled = profile.ManagedNormal,
+            Mode = K15LightingMode.Constant,
+            Palette = PaletteSource.Profile,
+            Brightness = profile.NormalBrightness,
+            Speed = 4,
+            Direction = 0,
+            DurationSeconds = 0,
+            Colors = [profile.Color],
+            PaletteMask = 0x01
+        };
+    }
+
     public LightingEffectConfig GetState(K15NormalizedState state) => state switch
     {
         K15NormalizedState.Running => States.Running,
         K15NormalizedState.Waiting => States.Waiting,
         K15NormalizedState.DonePendingAttention => States.Done,
         K15NormalizedState.Error => States.Error,
-        _ => throw new ArgumentOutOfRangeException(nameof(state), "NORMAL restores the exact device baseline.")
+        _ => throw new ArgumentOutOfRangeException(nameof(state), "NORMAL restores the managed profile baseline or exact snapshot.")
     };
 
     public LightingEffectConfig RenderForProfile(byte onboardSlot, LightingEffectConfig source)
@@ -190,6 +209,8 @@ internal sealed class StatusLabConfig
 
         _ = ParseColor(Profiles.A.Color);
         _ = ParseColor(Profiles.B.Color);
+        ValidateProfile(Profiles.A, "profiles.A");
+        ValidateProfile(Profiles.B, "profiles.B");
         ValidateEffect(States.Running, "states.running");
         ValidateEffect(States.Waiting, "states.waiting");
         ValidateEffect(States.Done, "states.done");
@@ -257,6 +278,12 @@ internal sealed class StatusLabConfig
         K15LightingMode.SingleColorBreathing or
         K15LightingMode.CycleBreathing or
         K15LightingMode.Off;
+
+    private static void ValidateProfile(ProfileLightingConfig profile, string path)
+    {
+        if (profile.NormalBrightness is < 1 or > 6)
+            throw new InvalidDataException($"{path}.normal_brightness must be 1..6.");
+    }
 
     private static void ValidateEffect(LightingEffectConfig effect, string path)
     {
