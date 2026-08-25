@@ -1,0 +1,178 @@
+name: Publish Status Lab RC2 split prerelease
+
+on:
+  push:
+    branches:
+      - agent/k15-status-lab-rc2-release-publish
+    paths:
+      - .github/workflows/status-lab-rc2-release-once.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: KostGame/vorotex-kb-profiles-and-macros2vibecoding
+      PR_NUMBER: "26"
+      RUN_ID: "32860790425"
+      TARGET_SHA: 235ed1fdff8e1e5fc801807d717b4ee5983ca86a
+      TAG: status-lab-rc2
+    steps:
+      - name: Fail-closed preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$REPO"
+
+          pr_state="$(gh api "/repos/$REPO/pulls/$PR_NUMBER" --jq '.state')"
+          pr_head="$(gh api "/repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+          pr_merged="$(gh api "/repos/$REPO/pulls/$PR_NUMBER" --jq '.merged')"
+          test "$pr_state" = "open"
+          test "$pr_head" = "$TARGET_SHA"
+          test "$pr_merged" = "false"
+
+          run_state="$(gh api "/repos/$REPO/actions/runs/$RUN_ID" --jq '.status')"
+          run_result="$(gh api "/repos/$REPO/actions/runs/$RUN_ID" --jq '.conclusion')"
+          run_head="$(gh api "/repos/$REPO/actions/runs/$RUN_ID" --jq '.head_sha')"
+          test "$run_state" = "completed"
+          test "$run_result" = "success"
+          test "$run_head" = "$TARGET_SHA"
+
+          if gh api "/repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Ref refs/tags/$TAG already exists; refusing to overwrite."
+            exit 20
+          fi
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to overwrite."
+            exit 21
+          fi
+
+      - name: Download and verify the four approved artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          download_and_verify() {
+            local artifact_id="$1"
+            local expected_name="$2"
+            local expected_digest="$3"
+            local output_name="$4"
+
+            local name digest run_id head_sha
+            name="$(gh api "/repos/$REPO/actions/artifacts/$artifact_id" --jq '.name')"
+            digest="$(gh api "/repos/$REPO/actions/artifacts/$artifact_id" --jq '.digest')"
+            run_id="$(gh api "/repos/$REPO/actions/artifacts/$artifact_id" --jq '.workflow_run.id')"
+            head_sha="$(gh api "/repos/$REPO/actions/artifacts/$artifact_id" --jq '.workflow_run.head_sha')"
+
+            test "$name" = "$expected_name"
+            test "$digest" = "sha256:$expected_digest"
+            test "$run_id" = "$RUN_ID"
+            test "$head_sha" = "$TARGET_SHA"
+
+            curl --fail --silent --show-error --location \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$REPO/actions/artifacts/$artifact_id/zip" \
+              --output "release/$output_name"
+
+            echo "$expected_digest  release/$output_name" | sha256sum --check --strict
+          }
+
+          download_and_verify 9568104252 \
+            vorotex-k15-status-tray-win-x64 \
+            13a57fcc721ed421cfa3d4822df8aaeea2e0487d849b2b9d267bb7b95bfe9576 \
+            Vorotex.K15.StatusTray-win-x64.zip
+
+          download_and_verify 9568108865 \
+            vorotex-k15-control-center-win-x64 \
+            af2b73e8b5ea226225a47b538e254c12d8616c7cb3618b1d986a0aada89577c9 \
+            Vorotex.K15.ControlCenter-win-x64.zip
+
+          download_and_verify 9568113441 \
+            vorotex-k15-lighting-lab-win-x64 \
+            2ee4b10dc4688528dd34eae96f6a897b8266b77b75e87ff7f060984fb2f46fbb \
+            Vorotex.K15.LightingLab-win-x64.zip
+
+          download_and_verify 9568118134 \
+            vorotex-k15-hid-research-lab-win-x64 \
+            bf3407169793d84c9571a92f4d74b8ec4a374f954f1d9326630c90930bbad83a \
+            Vorotex.K15.HidResearchLab-win-x64.zip
+
+          test "$(find release -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 4
+          sha256sum release/*.zip
+
+      - name: Publish RC2 prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'EOF'
+          # VOROTEX K15 Status Lab RC2
+
+          RC2 splits the former combined package into four independent Windows applications so each tool can be downloaded and used separately.
+
+          ## Applications
+
+          - **Vorotex.K15.StatusTray.exe** — background Codex/notification state tracker, tray runtime and the only normal product process allowed to write the proven K15 RGB lighting area.
+          - **Vorotex.K15.ControlCenter.exe** — standalone dark GUI for state, RGB, hooks, logging, autostart, diagnostics and recovery; it talks to Status Tray over current-user named-pipe IPC and performs no direct K15 HID writes.
+          - **Vorotex.K15.LightingLab.exe** — isolated lighting/effect research tool for the already proven RGB protocol and exact restore.
+          - **Vorotex.K15.HidResearchLab.exe** — consolidated read-only HID/static research lab for sleep/power reverse engineering; no unknown device writes are enabled.
+
+          ## Safety boundary
+
+          This RC2 does **not** programmatically switch Profile A/B and does not add unknown power, firmware, reset, keymap or macro HID writes. Opening/foregrounding Codex is still not treated as DONE acknowledgement.
+
+          ## Build provenance
+
+          - Source head: `235ed1fdff8e1e5fc801807d717b4ee5983ca86a`
+          - CI run: `32860790425`
+          - Result: PASS
+          - Distribution: four independent win-x64 ZIP assets
+
+          This is a **prerelease for owner acceptance**. PR #26 remains open and `main` remains on the accepted RC1 baseline until a separate merge decision.
+          EOF
+
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --target "$TARGET_SHA" \
+            --title "VOROTEX K15 Status Lab RC2 — 4-app split" \
+            --notes-file release-notes.md \
+            --prerelease \
+            release/Vorotex.K15.StatusTray-win-x64.zip \
+            release/Vorotex.K15.ControlCenter-win-x64.zip \
+            release/Vorotex.K15.LightingLab-win-x64.zip \
+            release/Vorotex.K15.HidResearchLab-win-x64.zip
+
+      - name: Verify published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(gh release view "$TAG" --repo "$REPO" --json tagName --jq '.tagName')"
+          prerelease="$(gh release view "$TAG" --repo "$REPO" --json isPrerelease --jq '.isPrerelease')"
+          asset_count="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | length')"
+          target="$(gh release view "$TAG" --repo "$REPO" --json targetCommitish --jq '.targetCommitish')"
+          url="$(gh release view "$TAG" --repo "$REPO" --json url --jq '.url')"
+
+          test "$tag" = "$TAG"
+          test "$prerelease" = "true"
+          test "$asset_count" = "4"
+          test "$target" = "$TARGET_SHA"
+
+          gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | sort > actual-assets.txt
+          printf '%s\n' \
+            Vorotex.K15.ControlCenter-win-x64.zip \
+            Vorotex.K15.HidResearchLab-win-x64.zip \
+            Vorotex.K15.LightingLab-win-x64.zip \
+            Vorotex.K15.StatusTray-win-x64.zip | sort > expected-assets.txt
+          diff -u expected-assets.txt actual-assets.txt
+
+          echo "RELEASE_STATUS=PASS"
+          echo "RELEASE_TAG=$TAG"
+          echo "RELEASE_TARGET=$TARGET_SHA"
+          echo "RELEASE_ASSETS=4"
+          echo "RELEASE_URL=$url"
