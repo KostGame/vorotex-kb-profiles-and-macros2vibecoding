@@ -1,0 +1,595 @@
+name: RC2 Codex attention implementation once
+
+on:
+  push:
+    branches:
+      - 'agent/k15-rc2-codex-unread-probe'
+    paths:
+      - '.github/workflows/rc2-codex-attention-implement-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/k15-rc2-codex-unread-probe
+          fetch-depth: 2
+
+      - name: Verify implementation base
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git branch --show-current) -ne 'agent/k15-rc2-codex-unread-probe') { throw 'Unexpected branch.' }
+          if ((git rev-parse HEAD^) -ne '235ed1fdff8e1e5fc801807d717b4ee5983ca86a') { throw 'Temporary workflow commit is not directly on the approved RC2 head.' }
+          if (-not (Test-Path '.github/workflows/rc2-codex-attention-implement-once.yml')) { throw 'One-shot workflow file is missing.' }
+
+      - name: Apply exact RC2 implementation
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          def replace_exact(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exact fragment once, got {count}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          # State reducer: Codex process exit is a first-class lifecycle input.
+          replace_exact('status-lab/StateReducer.cs',
+          '''        if (input.Source.Equals("codex_hook", StringComparison.Ordinal))
+              return ApplyCodex(input);
+
+          if (input.Source.Equals("windows_notification", StringComparison.Ordinal))
+              return ApplyNotification(input);
+
+          return null;''',
+          '''        if (input.Source.Equals("codex_hook", StringComparison.Ordinal))
+              return ApplyCodex(input);
+
+          if (input.Source.Equals("codex_process", StringComparison.Ordinal))
+              return ApplyCodexProcess(input);
+
+          if (input.Source.Equals("windows_notification", StringComparison.Ordinal))
+              return ApplyNotification(input);
+
+          return null;''')
+
+          replace_exact('status-lab/StateReducer.cs',
+          '''        foreach (var input in events
+                       .Where(input => input.Source.Equals("codex_hook", StringComparison.Ordinal))
+                       .OrderBy(input => input.TimestampUtc))
+          {
+              ApplyCodex(input);
+          }
+
+          ResetNotificationTracking();''',
+          '''        foreach (var input in events
+                       .Where(input => input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
+                                       input.Source.Equals("codex_process", StringComparison.Ordinal))
+                       .OrderBy(input => input.TimestampUtc))
+          {
+              Apply(input);
+          }
+
+          ResetNotificationTracking();''')
+
+          replace_exact('status-lab/StateReducer.cs',
+          '''    private StateTransition? ApplyNotification(StatusInputEvent input)
+      {''',
+          '''    private StateTransition? ApplyCodexProcess(StatusInputEvent input)
+      {
+          if (!input.EventName.Equals("codex_process_exited", StringComparison.Ordinal))
+              return null;
+
+          var previous = State;
+          var hadFocus = FocusedSessionId is not null;
+          ResetAll();
+          return previous != K15NormalizedState.Normal || hadFocus
+              ? new StateTransition(previous, K15NormalizedState.Normal, "codex_process_exit", input.TimestampUtc)
+              : null;
+      }
+
+      private StateTransition? ApplyNotification(StatusInputEvent input)
+      {''')
+
+          # Journal normalizer must parse/replay the rare process lifecycle event.
+          replace_exact('status-lab/JournalStateNormalizer.cs',
+          '''            if (input is null ||
+                  !input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
+                  input.TimestampUtc < cutoff)''',
+          '''            if (input is null ||
+                  !(input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
+                    input.Source.Equals("codex_process", StringComparison.Ordinal)) ||
+                  input.TimestampUtc < cutoff)''')
+
+          replace_exact('status-lab/JournalStateNormalizer.cs',
+          '''            if (source is not ("codex_hook" or "windows_notification"))
+                  return null;''',
+          '''            if (source is not ("codex_hook" or "codex_process" or "windows_notification"))
+                  return null;''')
+
+          # Detailed logging OFF still keeps the minimal Codex lifecycle needed for correctness.
+          replace_exact('status-lab/EventJournal.cs',
+          '''            if (source == "codex_hook")
+                  return true;
+
+              if (source != "windows_notification")''',
+          '''            if (source is "codex_hook" or "codex_process")
+                  return true;
+
+              if (source != "windows_notification")''')
+
+          # IPC snapshot adds diagnostic-only Codex process/unread fields at the end for compatibility.
+          replace_exact('status-lab/shared/StatusTrayIpc.cs',
+          '''    bool Autostart,
+          string ConfigPath,
+          int ConfigSchema);''',
+          '''    bool Autostart,
+          string ConfigPath,
+          int ConfigSchema,
+          bool CodexRunning = false,
+          int CodexProcessCount = 0,
+          string CodexProcessDetection = "not_checked",
+          string CodexUnreadStatus = "UNKNOWN",
+          string CodexUnreadDetail = "");''')
+
+          # Tray owns the monitor; unread is exposed but does not drive reducer/RGB.
+          replace_exact('status-lab/StatusTrayApplicationContext.cs',
+          '''    private readonly K15RgbCanary _rgbCanary;
+          private readonly NotifyIcon _trayIcon;''',
+          '''    private readonly K15RgbCanary _rgbCanary;
+          private readonly CodexDesktopAttentionService _codexAttention = new();
+          private readonly NotifyIcon _trayIcon;''')
+
+          replace_exact('status-lab/StatusTrayApplicationContext.cs',
+          '''        _stateNormalizer.Start();
+          _ = StartNotificationPollingAsync();''',
+          '''        _stateNormalizer.Start();
+          _codexAttention.Start();
+          _ = StartNotificationPollingAsync();''')
+
+          replace_exact('status-lab/StatusTrayApplicationContext.cs',
+          '''        return new StatusTraySnapshot(
+              JournalStateNormalizer.ToWireName(_stateNormalizer.State),''',
+          '''        var codex = _codexAttention.Snapshot;
+          return new StatusTraySnapshot(
+              JournalStateNormalizer.ToWireName(_stateNormalizer.State),''')
+
+          replace_exact('status-lab/StatusTrayApplicationContext.cs',
+          '''            StartupManager.IsEnabled(),
+              StatusLabConfig.FilePath,
+              _config.SchemaVersion);''',
+          '''            StartupManager.IsEnabled(),
+              StatusLabConfig.FilePath,
+              _config.SchemaVersion,
+              codex.Process.IsRunning,
+              codex.Process.ProcessCount,
+              codex.Process.Detection,
+              codex.Unread.State.ToString().ToUpperInvariant(),
+              codex.Unread.Detail);''')
+
+          replace_exact('status-lab/StatusTrayApplicationContext.cs',
+          '''        _ipcCancellation.Cancel();
+          await _notificationPoller.DisposeAsync();
+          await _stateNormalizer.DisposeAsync();''',
+          '''        _ipcCancellation.Cancel();
+          await _codexAttention.DisposeAsync();
+          await _notificationPoller.DisposeAsync();
+          await _stateNormalizer.DisposeAsync();''')
+
+          # Standalone Control Center exposes process/unread diagnostics without becoming hardware owner.
+          replace_exact('status-lab/control-center/ControlCenterForm.cs',
+          '''    private readonly Label _cwd = ValueLabel();
+          private readonly Label _rgb = ValueLabel();''',
+          '''    private readonly Label _cwd = ValueLabel();
+          private readonly Label _codexProcess = ValueLabel();
+          private readonly Label _codexUnread = ValueLabel();
+          private readonly Label _rgb = ValueLabel();''')
+
+          replace_exact('status-lab/control-center/ControlCenterForm.cs',
+          '''        AddRow(grid, "Codex session", _session);
+          AddRow(grid, "Рабочая папка", _cwd);
+          AddRow(grid, "RGB", _rgb);''',
+          '''        AddRow(grid, "Codex session", _session);
+          AddRow(grid, "Рабочая папка", _cwd);
+          AddRow(grid, "Codex desktop", _codexProcess);
+          AddRow(grid, "Codex unread probe", _codexUnread);
+          AddRow(grid, "RGB", _rgb);''')
+
+          replace_exact('status-lab/control-center/ControlCenterForm.cs',
+          '''        _cwd.Text = string.IsNullOrWhiteSpace(s.Cwd) ? "—" : s.Cwd;
+          _rgb.Text = s.RgbStatus;''',
+          '''        _cwd.Text = string.IsNullOrWhiteSpace(s.Cwd) ? "—" : s.Cwd;
+          _codexProcess.Text = s.CodexRunning
+              ? $"RUNNING · processes={s.CodexProcessCount} · {s.CodexProcessDetection}"
+              : $"CLOSED · {s.CodexProcessDetection}";
+          _codexProcess.ForeColor = s.CodexRunning ? Color.FromArgb(121, 217, 154) : Color.FromArgb(170, 181, 198);
+          _codexUnread.Text = $"{s.CodexUnreadStatus} · {s.CodexUnreadDetail}";
+          _codexUnread.ForeColor = s.CodexUnreadStatus == "HASUNREAD"
+              ? Color.FromArgb(244, 198, 106)
+              : Color.FromArgb(170, 181, 198);
+          _rgb.Text = s.RgbStatus;''')
+
+          replace_exact('status-lab/control-center/ControlCenterForm.cs',
+          '''            Text = "Lighting Lab и HID Research Lab теперь отдельные приложения. Control Center сам не открывает K15 и не пишет HID.",''',
+          '''            Text = "Codex unread probe пока диагностический и не управляет RGB. Lighting Lab и HID Research Lab — отдельные приложения; Control Center сам не открывает K15 и не пишет HID.",''')
+
+          # New read-only process/unread implementation.
+          Path('status-lab/CodexDesktopAttention.cs').write_text(r'''using System.Diagnostics;
+          using System.Runtime.InteropServices;
+          using System.Security.Cryptography;
+          using System.Text;
+
+          namespace Vorotex.K15.StatusLab;
+
+          internal enum CodexUnreadState
+          {
+              Unavailable,
+              Unknown,
+              NoUnread,
+              HasUnread
+          }
+
+          internal sealed record CodexProcessSnapshot(bool IsRunning, int ProcessCount, string Detection, DateTimeOffset TimestampUtc);
+          internal sealed record CodexUnreadSnapshot(CodexUnreadState State, string Source, string Detail, DateTimeOffset TimestampUtc);
+          internal sealed record CodexDesktopAttentionSnapshot(CodexProcessSnapshot Process, CodexUnreadSnapshot Unread);
+
+          internal enum CodexLifecycleSignal { None, Started, Exited }
+
+          internal sealed class CodexLifecycleMonitor
+          {
+              private readonly TimeSpan _absenceDebounce;
+              private DateTimeOffset? _absentSinceUtc;
+              private bool _lastRunning;
+              private bool _exitEmitted;
+
+              public CodexLifecycleMonitor(TimeSpan absenceDebounce)
+              {
+                  if (absenceDebounce < TimeSpan.Zero || absenceDebounce > TimeSpan.FromSeconds(30))
+                      throw new ArgumentOutOfRangeException(nameof(absenceDebounce));
+                  _absenceDebounce = absenceDebounce;
+              }
+
+              public CodexLifecycleSignal Observe(bool isRunning, DateTimeOffset nowUtc)
+              {
+                  if (isRunning)
+                  {
+                      _absentSinceUtc = null;
+                      _exitEmitted = false;
+                      if (!_lastRunning)
+                      {
+                          _lastRunning = true;
+                          return CodexLifecycleSignal.Started;
+                      }
+                      return CodexLifecycleSignal.None;
+                  }
+
+                  _lastRunning = false;
+                  _absentSinceUtc ??= nowUtc;
+                  if (_exitEmitted || nowUtc - _absentSinceUtc.Value < _absenceDebounce)
+                      return CodexLifecycleSignal.None;
+                  _exitEmitted = true;
+                  return CodexLifecycleSignal.Exited;
+              }
+          }
+
+          internal static class CodexProcessProbe
+          {
+              private const uint ProcessQueryLimitedInformation = 0x1000;
+              private const int ErrorInsufficientBuffer = 122;
+
+              public static CodexProcessSnapshot Inspect()
+              {
+                  var count = 0;
+                  foreach (var process in Process.GetProcesses())
+                  {
+                      using (process)
+                      {
+                          try
+                          {
+                              if (TryGetPackageFamilyName(process.Id, out var packageFamilyName) && IsCodexPackageFamily(packageFamilyName))
+                                  count++;
+                          }
+                          catch (InvalidOperationException)
+                          {
+                          }
+                      }
+                  }
+
+                  return new CodexProcessSnapshot(count > 0, count,
+                      count > 0 ? "package_family_name" : "package_family_name_none", DateTimeOffset.UtcNow);
+              }
+
+              internal static bool IsCodexPackageFamily(string? packageFamilyName) =>
+                  !string.IsNullOrWhiteSpace(packageFamilyName) &&
+                  packageFamilyName.StartsWith("OpenAI.Codex_", StringComparison.OrdinalIgnoreCase);
+
+              private static bool TryGetPackageFamilyName(int processId, out string packageFamilyName)
+              {
+                  packageFamilyName = string.Empty;
+                  var handle = OpenProcess(ProcessQueryLimitedInformation, false, processId);
+                  if (handle == IntPtr.Zero) return false;
+                  try
+                  {
+                      uint length = 0;
+                      var first = GetPackageFamilyName(handle, ref length, null);
+                      if (first != ErrorInsufficientBuffer || length == 0 || length > 1024) return false;
+                      var buffer = new StringBuilder((int)length);
+                      if (GetPackageFamilyName(handle, ref length, buffer) != 0) return false;
+                      packageFamilyName = buffer.ToString();
+                      return packageFamilyName.Length > 0;
+                  }
+                  catch { return false; }
+                  finally { CloseHandle(handle); }
+              }
+
+              [DllImport("kernel32.dll", SetLastError = true)]
+              private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, int processId);
+              [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+              private static extern int GetPackageFamilyName(IntPtr process, ref uint packageFamilyNameLength, StringBuilder? packageFamilyName);
+              [DllImport("kernel32.dll")]
+              [return: MarshalAs(UnmanagedType.Bool)]
+              private static extern bool CloseHandle(IntPtr handle);
+          }
+
+          internal static class CodexUnreadProbe
+          {
+              private const int MaxCandidates = 128;
+              private const int MaxRecursionDepth = 4;
+
+              public static CodexUnreadSnapshot Inspect(bool codexRunning)
+              {
+                  var now = DateTimeOffset.UtcNow;
+                  if (!codexRunning)
+                      return new CodexUnreadSnapshot(CodexUnreadState.Unavailable, "process_absent", "Codex desktop closed", now);
+                  return CreateMetadataDiagnostic(true, CollectCandidateMetadata(), now);
+              }
+
+              internal static CodexUnreadSnapshot CreateMetadataDiagnostic(bool codexRunning, IEnumerable<string> metadata, DateTimeOffset? timestampUtc = null)
+              {
+                  var now = timestampUtc ?? DateTimeOffset.UtcNow;
+                  if (!codexRunning)
+                      return new CodexUnreadSnapshot(CodexUnreadState.Unavailable, "process_absent", "Codex desktop closed", now);
+                  var ordered = metadata.Where(v => !string.IsNullOrWhiteSpace(v)).OrderBy(v => v, StringComparer.Ordinal).Take(MaxCandidates).ToArray();
+                  var fingerprint = ordered.Length == 0 ? "none" : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", ordered))))[..12];
+                  return new CodexUnreadSnapshot(CodexUnreadState.Unknown, "metadata_only",
+                      $"candidateMetadata={ordered.Length}; fingerprint={fingerprint}; RGB authority=NO", now);
+              }
+
+              private static IEnumerable<string> CollectCandidateMetadata()
+              {
+                  var items = new List<string>();
+                  var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                  var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                  var packageRoot = Path.Combine(localAppData, "Packages");
+                  if (Directory.Exists(packageRoot))
+                  {
+                      try
+                      {
+                          foreach (var package in Directory.EnumerateDirectories(packageRoot, "OpenAI.Codex_*", SearchOption.TopDirectoryOnly))
+                          {
+                              CollectRoot(Path.Combine(package, "LocalState"), "package:LocalState", items);
+                              CollectRoot(Path.Combine(package, "LocalCache"), "package:LocalCache", items);
+                              if (items.Count >= MaxCandidates) break;
+                          }
+                      }
+                      catch (IOException) { }
+                      catch (UnauthorizedAccessException) { }
+                  }
+                  if (items.Count < MaxCandidates) CollectRoot(Path.Combine(userProfile, ".codex"), "codex-home", items);
+                  return items.Take(MaxCandidates);
+              }
+
+              private static void CollectRoot(string root, string rootKind, List<string> items)
+              {
+                  if (!Directory.Exists(root) || items.Count >= MaxCandidates) return;
+                  var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, MaxRecursionDepth = MaxRecursionDepth };
+                  try
+                  {
+                      foreach (var path in Directory.EnumerateFiles(root, "*", options))
+                      {
+                          if (items.Count >= MaxCandidates) break;
+                          if (!LooksLikeStateFile(path)) continue;
+                          try
+                          {
+                              var info = new FileInfo(path);
+                              var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+                              var nameHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(relative)))[..12];
+                              items.Add($"{rootKind}|name={nameHash}|length={info.Length}|mtime={info.LastWriteTimeUtc.Ticks}");
+                          }
+                          catch (IOException) { }
+                          catch (UnauthorizedAccessException) { }
+                      }
+                  }
+                  catch (IOException) { }
+                  catch (UnauthorizedAccessException) { }
+              }
+
+              private static bool LooksLikeStateFile(string path)
+              {
+                  var name = Path.GetFileName(path);
+                  var ext = Path.GetExtension(path);
+                  return ext.Equals(".db", StringComparison.OrdinalIgnoreCase) || ext.Equals(".sqlite", StringComparison.OrdinalIgnoreCase) ||
+                         ext.Equals(".json", StringComparison.OrdinalIgnoreCase) || ext.Equals(".ldb", StringComparison.OrdinalIgnoreCase) ||
+                         ext.Equals(".log", StringComparison.OrdinalIgnoreCase) || name.Equals("CURRENT", StringComparison.OrdinalIgnoreCase) ||
+                         name.StartsWith("MANIFEST-", StringComparison.OrdinalIgnoreCase);
+              }
+          }
+
+          internal sealed class CodexDesktopAttentionService : IAsyncDisposable
+          {
+              private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
+              private static readonly TimeSpan UnreadPollInterval = TimeSpan.FromSeconds(5);
+              private static readonly TimeSpan ExitDebounce = TimeSpan.FromSeconds(1);
+              private readonly CancellationTokenSource _cts = new();
+              private readonly CodexLifecycleMonitor _lifecycle = new(ExitDebounce);
+              private Task? _loopTask;
+              private DateTimeOffset _lastUnreadProbeUtc = DateTimeOffset.MinValue;
+              private bool? _lastCodexRunning;
+              private CodexDesktopAttentionSnapshot _latest = new(
+                  new CodexProcessSnapshot(false, 0, "not_checked", DateTimeOffset.UtcNow),
+                  new CodexUnreadSnapshot(CodexUnreadState.Unknown, "not_checked", "Probe has not run yet", DateTimeOffset.UtcNow));
+              private string _lastUnreadKey = string.Empty;
+
+              public CodexDesktopAttentionSnapshot Snapshot => Volatile.Read(ref _latest);
+              public void Start() { if (_loopTask is null) _loopTask = Task.Run(ProcessLoopAsync); }
+
+              private async Task ProcessLoopAsync()
+              {
+                  while (!_cts.IsCancellationRequested)
+                  {
+                      try
+                      {
+                          var process = CodexProcessProbe.Inspect();
+                          var signal = _lifecycle.Observe(process.IsRunning, process.TimestampUtc);
+                          var previous = Volatile.Read(ref _latest);
+                          var unread = previous.Unread;
+                          if (_lastCodexRunning != process.IsRunning || process.TimestampUtc - _lastUnreadProbeUtc >= UnreadPollInterval)
+                          {
+                              unread = CodexUnreadProbe.Inspect(process.IsRunning);
+                              _lastUnreadProbeUtc = process.TimestampUtc;
+                              _lastCodexRunning = process.IsRunning;
+                          }
+                          Volatile.Write(ref _latest, new CodexDesktopAttentionSnapshot(process, unread));
+
+                          if (signal == CodexLifecycleSignal.Started)
+                              EventJournal.Append(new { timestampUtc = process.TimestampUtc, source = "codex_process", @event = "codex_process_started", processCount = process.ProcessCount, detection = process.Detection });
+                          else if (signal == CodexLifecycleSignal.Exited)
+                              EventJournal.Append(new { timestampUtc = process.TimestampUtc, source = "codex_process", @event = "codex_process_exited", debounceMs = (int)ExitDebounce.TotalMilliseconds, detection = process.Detection });
+
+                          var unreadKey = $"{unread.State}|{unread.Source}|{unread.Detail}";
+                          if (!string.Equals(unreadKey, _lastUnreadKey, StringComparison.Ordinal))
+                          {
+                              _lastUnreadKey = unreadKey;
+                              EventJournal.Append(new { timestampUtc = unread.TimestampUtc, source = "codex_unread_probe", @event = "diagnostic_changed", state = unread.State.ToString().ToUpperInvariant(), sourceKind = unread.Source, detail = unread.Detail, rgbAuthority = false });
+                          }
+                      }
+                      catch (Exception ex)
+                      {
+                          EventJournal.Append(new { timestampUtc = DateTimeOffset.UtcNow, source = "codex_unread_probe", @event = "probe_error", exception = ex.GetType().FullName, hresult = ex.HResult, rgbAuthority = false });
+                      }
+                      try { await Task.Delay(PollInterval, _cts.Token); } catch (OperationCanceledException) { break; }
+                  }
+              }
+
+              public async ValueTask DisposeAsync()
+              {
+                  _cts.Cancel();
+                  if (_loopTask is not null) try { await _loopTask; } catch (OperationCanceledException) { }
+                  _cts.Dispose();
+              }
+          }
+          ''', encoding='utf-8')
+
+          Path('status-lab/tests/CodexAttentionSmoke.csproj').write_text('''<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>\n    <ImplicitUsings>enable</ImplicitUsings>\n    <Nullable>enable</Nullable>\n  </PropertyGroup>\n  <ItemGroup>\n    <Compile Include="..\\StateReducer.cs" Link="StateReducer.cs" />\n    <Compile Include="..\\CodexDesktopAttention.cs" Link="CodexDesktopAttention.cs" />\n    <Compile Include="..\\EventJournal.cs" Link="EventJournal.cs" />\n  </ItemGroup>\n</Project>\n''', encoding='utf-8')
+
+          Path('status-lab/tests/CodexAttentionSmokeProgram.cs').write_text(r'''using Vorotex.K15.StatusLab;
+
+          static void Require(bool condition, string message)
+          {
+              if (!condition) throw new InvalidOperationException(message);
+          }
+
+          static StatusInputEvent Hook(DateTimeOffset t, string name, string session = "main") =>
+              new(t, "codex_hook", name, SessionId: session, Cwd: @"C:\work\main");
+          static StatusInputEvent Exit(DateTimeOffset t) => new(t, "codex_process", "codex_process_exited");
+
+          var t = DateTimeOffset.Parse("2026-08-25T00:00:00Z");
+
+          var running = new StateReducer();
+          running.Apply(Hook(t, "UserPromptSubmit"));
+          var runningExit = running.Apply(Exit(t.AddSeconds(2)));
+          Require(running.State == K15NormalizedState.Normal && runningExit?.Reason == "codex_process_exit",
+              "RUNNING + Codex exit must return NORMAL.");
+          Require(running.FocusedSessionId is null, "Codex exit must clear stale session focus.");
+
+          var waiting = new StateReducer();
+          waiting.Apply(Hook(t, "UserPromptSubmit"));
+          waiting.Apply(Hook(t.AddSeconds(1), "PermissionRequest"));
+          waiting.Apply(Exit(t.AddSeconds(2)));
+          Require(waiting.State == K15NormalizedState.Normal, "WAITING + Codex exit must return NORMAL.");
+
+          var done = new StateReducer();
+          done.Apply(Hook(t, "UserPromptSubmit"));
+          done.Apply(Hook(t.AddSeconds(1), "Stop"));
+          done.Apply(Exit(t.AddSeconds(2)));
+          Require(done.State == K15NormalizedState.Normal, "DONE + Codex exit must return NORMAL.");
+
+          var lifecycle = new CodexLifecycleMonitor(TimeSpan.FromSeconds(1));
+          Require(lifecycle.Observe(false, t) == CodexLifecycleSignal.None, "Absence must debounce.");
+          Require(lifecycle.Observe(false, t.AddMilliseconds(900)) == CodexLifecycleSignal.None, "Absence under debounce must not reset.");
+          Require(lifecycle.Observe(false, t.AddMilliseconds(1100)) == CodexLifecycleSignal.Exited, "Debounced absence must emit exit once.");
+          Require(lifecycle.Observe(false, t.AddSeconds(2)) == CodexLifecycleSignal.None, "Continuous absence must not emit duplicate exits.");
+          Require(lifecycle.Observe(true, t.AddSeconds(3)) == CodexLifecycleSignal.Started, "Running process must reset exit latch.");
+          Require(lifecycle.Observe(false, t.AddSeconds(3.2)) == CodexLifecycleSignal.None, "Short churn after running must debounce.");
+          Require(lifecycle.Observe(true, t.AddSeconds(3.8)) == CodexLifecycleSignal.Started, "Transient absence must not become exit.");
+
+          Require(CodexProcessProbe.IsCodexPackageFamily("OpenAI.Codex_test"), "Codex PFN prefix must match.");
+          Require(!CodexProcessProbe.IsCodexPackageFamily("OpenAI.ChatGPT_test"), "Non-Codex PFN must not match.");
+
+          var unread = CodexUnreadProbe.CreateMetadataDiagnostic(true, new[] { "one", "two" }, t);
+          Require(unread.State == CodexUnreadState.Unknown && unread.Source == "metadata_only",
+              "Metadata-only unread research must remain UNKNOWN.");
+          Require(!unread.Detail.Contains("one", StringComparison.Ordinal) && !unread.Detail.Contains("two", StringComparison.Ordinal),
+              "Unread diagnostics must not expose raw candidate metadata.");
+
+          var reducer = new StateReducer();
+          reducer.Apply(Hook(t, "UserPromptSubmit"));
+          var ignored = reducer.Apply(new StatusInputEvent(t.AddSeconds(1), "codex_unread_probe", "diagnostic_changed"));
+          Require(ignored is null && reducer.State == K15NormalizedState.Running,
+              "Unread diagnostic alone must not drive reducer/RGB state.");
+
+          Console.WriteLine("CODEX_ATTENTION_SMOKE=PASS");
+          ''', encoding='utf-8')
+
+          # Standard CI must execute the new regression test.
+          replace_exact('.github/workflows/status-lab-build.yml',
+          '''      - name: State reducer and RGB protocol smoke tests
+              run: dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
+
+            - name: Restore Status Tray''',
+          '''      - name: State reducer and RGB protocol smoke tests
+              run: dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
+
+            - name: Codex desktop attention smoke tests
+              run: dotnet run --project status-lab/tests/CodexAttentionSmoke.csproj -c Release
+
+            - name: Restore Status Tray''')
+          '@ | python -
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Validate implementation before commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/rc2-smoke.ps1
+          dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
+          dotnet run --project status-lab/tests/CodexAttentionSmoke.csproj -c Release
+          dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release
+          dotnet build status-lab/control-center/Vorotex.K15.ControlCenter.csproj -c Release
+
+      - name: Commit implementation and remove one-shot workflow
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git rm .github/workflows/rc2-codex-attention-implement-once.yml
+          git config user.name 'KostGame'
+          git config user.email '22446683+KostGame@users.noreply.github.com'
+          git add status-lab .github/workflows/status-lab-build.yml
+          $changed = git diff --cached --name-only
+          if (-not ($changed -contains 'status-lab/CodexDesktopAttention.cs')) { throw 'CodexDesktopAttention.cs missing from staged diff.' }
+          if (-not ($changed -contains 'status-lab/tests/CodexAttentionSmokeProgram.cs')) { throw 'Codex attention smoke missing from staged diff.' }
+          git commit -m 'feat(status-lab): add Codex desktop attention probe'
+          git push origin HEAD:agent/k15-rc2-codex-unread-probe
