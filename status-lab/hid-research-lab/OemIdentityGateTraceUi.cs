@@ -35,7 +35,7 @@ internal sealed class OemIdentityGateTraceForm : Form
         AutoSize = false,
         Size = new Size(810, 105),
         ForeColor = Color.FromArgb(190, 210, 235),
-        Location = new Point(24, 304)
+        Location = new Point(24, 342)
     };
     private string? _lastOutput;
 
@@ -43,7 +43,7 @@ internal sealed class OemIdentityGateTraceForm : Form
     {
         Text = "VOROTEX K15 · OEM Identity Gate Trace";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(860, 430);
+        ClientSize = new Size(860, 470);
         BackColor = Color.FromArgb(13, 17, 23);
         ForeColor = Color.Gainsboro;
         Font = new Font("Segoe UI", 9.5f);
@@ -58,7 +58,7 @@ internal sealed class OemIdentityGateTraceForm : Form
         });
         Controls.Add(new Label
         {
-            Text = "Read-only: Ndevice.json + ProductString + static xrefs + bounded x86 compare/branch trace. Никаких HID запросов.",
+            Text = "Read-only: Ndevice.json + ProductString + static xrefs + bounded x86 data-flow. Никаких HID запросов.",
             AutoSize = false,
             Size = new Size(810, 44),
             ForeColor = Color.FromArgb(145, 175, 225),
@@ -91,7 +91,13 @@ internal sealed class OemIdentityGateTraceForm : Form
         compare.Click += async (_, _) => await RunCompareAsync(compare);
         Controls.Add(compare);
 
-        var open = ActionButton("Открыть результат", 478, 230, 170);
+        var guarded = ActionButton("Run guarded block trace", 24, 270, 210);
+        guarded.BackColor = Color.FromArgb(54, 72, 145);
+        guarded.FlatAppearance.BorderColor = Color.FromArgb(84, 106, 190);
+        guarded.Click += async (_, _) => await RunGuardedAsync(guarded);
+        Controls.Add(guarded);
+
+        var open = ActionButton("Открыть результат", 246, 270, 170);
         open.Click += (_, _) => OpenOutput();
         Controls.Add(open);
 
@@ -100,10 +106,10 @@ internal sealed class OemIdentityGateTraceForm : Form
             Text = "Safety: static read-only · no HID handle · no process launch/attach/debug · no patching/spoofing.",
             AutoSize = true,
             ForeColor = Color.FromArgb(145, 158, 180),
-            Location = new Point(24, 274)
+            Location = new Point(24, 314)
         });
 
-        _status.Text = "Готово. Identity trace уже подтверждает likely-gate; compare branch trace ищет точный helper/Jcc.";
+        _status.Text = "Готово. Guarded block trace раскрывает DevCmpStr==1 path, loop +0x84 и runtime-member mapping DevName.";
         Controls.Add(_status);
     }
 
@@ -183,6 +189,40 @@ internal sealed class OemIdentityGateTraceForm : Form
         {
             _status.Text = "Compare branch trace не завершён: " + ex.Message;
             MessageBox.Show(ex.Message, "OEM Product Compare Branch Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            button.Enabled = true;
+        }
+    }
+
+    private async Task RunGuardedAsync(Button button)
+    {
+        if (!ValidateInputs("OEM DevCmpStr Guarded Block Trace"))
+            return;
+
+        button.Enabled = false;
+        _status.Text = "Раскрываю полный DevCmpStr==1 guarded block и трассирую DevName → runtime member…";
+        try
+        {
+            var report = await Task.Run(() => OemDevCmpGuardedBlockAnalyzer.Analyze(_exeA.Text, _exeB.Text));
+            var root = ResearchRoot("oem-devcmp-guarded-block");
+            File.WriteAllText(
+                Path.Combine(root, "oem-devcmp-guarded-block.json"),
+                JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+            File.WriteAllText(
+                Path.Combine(root, "oem-devcmp-guarded-block.txt"),
+                OemDevCmpGuardedBlockAnalyzer.ToText(report),
+                new UTF8Encoding(false));
+            _lastOutput = root;
+            _status.Text = $"GUARDED VERDICT: {report.Verdict}\n{root}";
+            OpenOutput();
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Guarded block trace не завершён: " + ex.Message;
+            MessageBox.Show(ex.Message, "OEM DevCmpStr Guarded Block Trace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         finally
         {
