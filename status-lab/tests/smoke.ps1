@@ -10,7 +10,7 @@ $trayIconFactory = Join-Path $projectRoot 'TrayIconFactory.cs'
 $stateReducer = Join-Path $projectRoot 'StateReducer.cs'
 $normalizer = Join-Path $projectRoot 'JournalStateNormalizer.cs'
 $eventJournal = Join-Path $projectRoot 'EventJournal.cs'
-$appContext = Join-Path $projectRoot 'StatusLabApplicationContext.cs'
+$appContext = Join-Path $projectRoot 'StatusTrayApplicationContext.cs'
 $lightingLabProject = Join-Path $projectRoot 'lighting-lab\Vorotex.K15.LightingLab.csproj'
 $lightingLabForm = Join-Path $projectRoot 'lighting-lab\LightingLabForm.cs'
 $lightingLabSession = Join-Path $projectRoot 'lighting-lab\LightingLabSession.cs'
@@ -116,6 +116,9 @@ if ($appSource -notmatch 'ManualResetAttention' -or $appSource -notmatch 'Restor
     $appSource -notmatch 'manual_attention_reset') {
     throw 'Tray must expose manual WAITING/DONE reset and exact baseline recovery.'
 }
+if ($appSource -notmatch 'StatusTrayIpc' -or $appSource -notmatch 'OpenControlCenterProcess') {
+    throw 'Split tray must expose local IPC and launch the standalone Control Center.'
+}
 
 $labSource = (Get-Content -LiteralPath $lightingLabForm -Raw -Encoding UTF8) + (Get-Content -LiteralPath $lightingLabSession -Raw -Encoding UTF8)
 if ($labSource -notmatch 'PaletteMask' -or $labSource -notmatch 'lighting-lab\.jsonl' -or $labSource -notmatch 'Restore exact baseline') {
@@ -219,7 +222,7 @@ try {
         if (@($agentLoopInstalled.hooks.$eventName).Count -lt 1) { throw "Missing $eventName in .codex-agentloop hooks.json." }
     }
 
-    Write-Output 'Status Lab RC1 approval + restore + config + Lighting Lab smoke tests: PASS'
+    Write-Output 'Status Tray approval + restore + config + Lighting Lab smoke tests: PASS'
 }
 finally {
     $env:LOCALAPPDATA = $oldLocalAppData
