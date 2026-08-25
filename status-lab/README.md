@@ -1,8 +1,10 @@
 # VOROTEX K15 Status Lab
 
-Windows tray helper для RGB-индикации состояний Codex на VOROTEX K15 Pro.
+Windows tray helper и Control Center для RGB-индикации состояний Codex на VOROTEX K15 Pro.
 
-## Продуктовая модель
+## Текущий baseline
+
+RC1 уже принят в `main`. RC2 развивает его как обычный маленький Windows-продукт, не переписывая физически проверенные HID/state слои.
 
 ```text
 PROFILE A = RED
@@ -12,21 +14,20 @@ PROFILE B = BLUE
 эффект -> что сейчас делает агент
 ```
 
-`NORMAL` не является notification-effect. Он восстанавливает точный onboard baseline, считанный до первой записи Status Lab. Status Lab наблюдает физический A/B и никогда не переключает hardware profile программно.
+`NORMAL` не является notification-effect. Он восстанавливает exact onboard baseline. Status Lab наблюдает физический A/B и никогда не переключает hardware profile программно.
 
-Текущие physically accepted defaults:
+Текущие defaults:
 
 ```text
-RGB-индикация ON -> Flowing Water RED <-> BLUE, короткий сигнал
+RGB-индикация ON -> быстрый Cycle breathing RED <-> BLUE
 RUNNING           -> Flowing Water, цвет активного профиля
 WAITING           -> Single-color breathing, speed 7, цвет профиля
 STOP event        -> Cycle breathing RED <-> BLUE, короткий overlay
 DONE              -> Single-color breathing, speed 5, цвет профиля
 NORMAL            -> exact device baseline
 ERROR             -> reserved / disabled
+profile switch    -> собственная штатная анимация K15; overlay Status Lab default OFF
 ```
-
-У физической K15 также обнаружена собственная тройная flash-анимация при переключении A/B. Она не создаётся Status Lab. Поэтому default `profile_switch.duration_seconds = 4`, чтобы наш Flowing Water оставался видимым после штатных flashes клавиатуры.
 
 ## Источники состояния
 
@@ -35,29 +36,89 @@ Primary semantic source: Codex lifecycle hooks.
 ```text
 UserPromptSubmit  -> RUNNING
 PermissionRequest -> WAITING
-PostToolUse       -> RUNNING после approval
+PreToolUse        -> RUNNING после Approve, когда tool реально стартовал
+PostToolUse       -> RUNNING fallback
 Stop              -> DONE_PENDING_ATTENTION
 SessionEnd        -> завершает только свою session
 ```
 
-Reducer session-aware: хранит `sessionId`, `turnId`, `cwd`, не даёт `.codex-agentloop\memories` / `.codex\memories` перехватывать foreground и при завершении focused session выбирает последнюю живую task-session. При запуске Status Lab recent hooks переигрываются для восстановления текущего состояния.
+Reducer session-aware: хранит `sessionId`, `turnId`, `cwd`, игнорирует internal `.codex-agentloop\memories` / `.codex\memories` как foreground и переигрывает recent hooks при запуске.
 
-Windows `UserNotificationListener` остаётся supplemental attention channel. Toast keyword heuristics не имеют права самостоятельно создавать semantic `ERROR`.
+Windows `UserNotificationListener` остаётся supplemental attention channel. Toast keyword heuristics не создают semantic `ERROR`.
 
-## DONE и автоматический возврат в NORMAL
+### DONE -> NORMAL
 
-Visual duration эффекта и semantic DONE timeout разделены.
+Current semantic fallback default = 30 секунд. DONE также завершается при удалении сопоставленного Windows completion-notification или ручным `✓ Сбросить WAITING / DONE`.
 
-```toml
-[behavior]
-done_attention_timeout_seconds = 15
+Простое открытие/foreground окна Codex **пока не считается acknowledgement**. RC2 сознательно не меняет эту семантику до дополнительного owner-теста.
+
+## RC2 Control Center
+
+Открывается первым пунктом tray или двойным кликом по tray icon.
+
+Control Center показывает:
+
+- текущий normalized state;
+- причину последнего перехода;
+- сколько времени состояние активно;
+- focused Codex session и cwd;
+- RGB status;
+- Windows notification listener status;
+- Codex hooks health;
+- detailed logging status;
+- Windows autostart status;
+- путь/schema текущего config.
+
+Быстрые действия:
+
+- RGB ВКЛ/ВЫКЛ;
+- сброс WAITING/DONE;
+- exact baseline restore текущего физического профиля;
+- install/update Codex hooks;
+- Advanced RGB configurator;
+- Lighting Lab;
+- журнал/диагностика;
+- per-user Windows autostart через `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
+## Sleep / standby research
+
+Управление sleep/power K15 ещё не имеет доказанного протокола. Поэтому RC2 **не отправляет неизвестных HID power-команд** и не выдаёт эксперимент за готовую настройку.
+
+В Control Center добавлен evidence-first workflow:
+
+```text
+Capture BEFORE
+    -> в официальном VOROTEX изменить ТОЛЬКО sleep/standby
+Capture AFTER + diff
+    -> локальный report
 ```
 
-DONE завершается при удалении сопоставленного completion-notification либо по этому safety timeout. `0` отключает fallback.
+Research output хранится только локально:
 
-В owner trace был обнаружен реальный race: completion toast появился примерно за 0.1 секунды **до** `Stop`. Reducer теперь умеет привязывать recent OpenAI notification и к WAITING, и к DONE, поэтому последующее удаление такого toast возвращает состояние в NORMAL.
+```text
+%LOCALAPPDATA%\VOROTEX\K15 Status Lab\device-settings-research\<timestamp>\
+```
 
-Существующий schema-v3 `config.toml` без `[behavior]` автоматически получает safe default 15 секунд в памяти и не переписывается.
+Он содержит private before/after copies и локальный `report.json`/`report.txt`. Ничего не публикуется автоматически.
+
+Проверяются кандидаты:
+
+```text
+DeviceFeature.ini   -> volatile_candidate
+KBconfig.ini        -> stable_candidate
+Profile0.json       -> stable_candidate
+Profile1.json       -> stable_candidate
+```
+
+Для JSON report сохраняет изменившиеся JSON paths; для INI line diff. `DeviceFeature.ini` специально помечается volatile, потому что прежние controlled diffs показали его самостоятельные служебные изменения.
+
+После физического доказательства sleep field/protocol следующий bounded step сможет добавить реальные presets:
+
+```text
+5 / 10 / 15 / 30 / 60 min / Never
+```
+
+и только после этого policy вроде `RUNNING/WAITING = Never`, `NORMAL = configurable`.
 
 ## Конфигурация
 
@@ -67,14 +128,7 @@ Canonical config:
 %LOCALAPPDATA%\VOROTEX\K15 Status Lab\config.toml
 ```
 
-TOML сохраняет комментарии. Невалидный пользовательский файл не перезаписывается, для текущего запуска используются безопасные defaults с предупреждением.
-
-Palette sources:
-
-```text
-profile      -> цвет физически активного Profile A/B
-profile_pair -> два canonical цвета A + B
-```
+Schema v4 сохраняет profile-color model, 30-second DONE fallback, profile-switch overlay OFF и accepted RGB modes.
 
 Production notifier modes:
 
@@ -90,71 +144,41 @@ Horse race/native `0x83`, Tetris, Neon и Ambilight остаются иссле�
 
 ## HTML configurator
 
-Bundled offline configurator находится в `configurator/index.html` и открывается из tray.
+Bundled offline configurator находится в `configurator/index.html` и открывается как Advanced RGB config. Status Lab передаёт ему текущий path + содержимое `config.toml`; browser не получает прямой write-доступ в `%LOCALAPPDATA%`.
 
-При открытии через Status Lab ему передаются путь и содержимое текущего `config.toml`, поэтому редактор сразу начинает с активной конфигурации. Браузер намеренно не получает прямой write-доступ в `%LOCALAPPDATA%`.
+Configurator умеет load, timestamped backup, restore backup, validation и download нового `config.toml`.
 
-Configurator умеет:
+## Логирование
 
-- показывать путь текущего config;
-- загрузить другой `config.toml`;
-- скачать timestamped backup текущего config;
-- загрузить backup обратно в редактор;
-- редактировать profile colors, states, palettes, brightness/speed/direction/duration;
-- менять `DONE fallback timeout`;
-- генерировать и скачать новый `config.toml` для ручной замены.
+Tray/Control Center показывают `Подробный журнал: ВКЛ / ВЫКЛ`.
 
-## Логирование и лимиты
-
-Tray содержит:
-
-```text
-Подробный журнал: ВКЛ / ВЫКЛ
-```
-
-Выключение подробного журнала не отключает минимальный transport, нужный самому reducer: Codex lifecycle hooks и OpenAI notification events продолжают попадать в operational journal. Опциональные Status Lab diagnostics отбрасываются.
-
-`events.jsonl` ограничен ротацией:
+Даже при OFF минимальные Codex/notification lifecycle events сохраняются, потому что нужны reducer. Journal bounded rotation:
 
 ```text
 events.jsonl    ~ до 5 MiB
-events.jsonl.1  предыдущий сегмент
-events.jsonl.2  ещё один сегмент
+events.jsonl.1
+events.jsonl.2
 ```
 
-Итого устойчивый footprint около 15 MiB плюс небольшой overshoot одной записи. Файл не растёт бесконечно.
+Runtime normalizer читает только новые байты, startup rehydrate ограничен recent window.
 
-Во время работы normalizer читает только новые байты с последней позиции, а не перечитывает весь журнал каждые 200 мс. Startup rehydrate ограничен recent window 30 минут / максимум 5000 строк и использует новый архив + текущий journal.
+## Lighting Lab
 
-## RGB Effect Test и Lighting Lab
-
-Quick tray test:
-
-```text
-Constant
-Flowing Water
-Single-color breathing
-Cycle breathing
-Restore exact baseline
-```
-
-Отдельный `Vorotex.K15.LightingLab.exe` поставляется в том же portable artifact. Он предназначен для low-level исследований native modes, brightness/speed/direction, 7 palette slots + selection mask, user notes и exact restore. Лог лаборатории: `lighting-lab.jsonl`.
+`Vorotex.K15.LightingLab.exe` остаётся отдельным low-level исследовательским инструментом с palette mask, brightness/speed/direction, user notes и exact restore.
 
 Physical classification:
 
 ```text
-Flowing Water          controlled, 1/2 selected colors работают
+Flowing Water          controlled
 Single-color breathing controlled
-Cycle breathing        controlled, 1/2 selected colors работают
-Horse race / 0x83      uncontrolled rainbow, research-only
-Tetris                 работает, но сильно отвлекает, future/research
+Cycle breathing        controlled
+Horse race / 0x83      uncontrolled rainbow
+Tetris                 работает, но сильно отвлекает
 Neon                   uncontrolled multicolor
-Ambilight              uncontrolled multicolor, возможный future idle/charging
+Ambilight              uncontrolled multicolor
 ```
 
 ## Hardware safety
-
-K15 lighting path:
 
 ```text
 VID        B6A4 / 36A4
@@ -168,7 +192,7 @@ lighting read  89
 active slot    82 selector 2
 ```
 
-Status Lab и Lighting Lab не пишут firmware, reset, key mappings, macros или power settings. Every touched lighting record основывается на exact rollback snapshot. Если active slot transient/unknown, программа не угадывает профиль и не пишет в неизвестный bank.
+Status Lab runtime не пишет firmware, reset, key mappings, macros или unknown power settings. Every touched lighting record основывается на exact rollback snapshot. Нет programmatic A/B switching.
 
 Current physical K15 channel order:
 
@@ -177,43 +201,14 @@ Current physical K15 channel order:
 wire_color_order = "rgb"
 ```
 
-## Tray
-
-Основные пункты:
-
-```text
-Состояние: ... · Codex <session>
-RGB-индикация: ВКЛ/ВЫКЛ
-Уведомления: ...
-RGB: ...
-Сбросить состояние в NORMAL
-
-Включить/Выключить RGB-индикацию статусов
-Открыть RGB config.toml
-Открыть RGB configurator
-RGB Effect Test · quick >
-Открыть K15 Lighting Lab
-Установить Codex hooks
-Подробный журнал: ВКЛ/ВЫКЛ
-Открыть журнал событий
-Открыть папку журнала
-Очистить журнал
-Выход
-```
-
-Tray icon имеет разные OFF/ON варианты, поэтому RGB-индикацию видно без открытия меню.
-
 ## Build / tests
 
 ```text
 powershell -ExecutionPolicy Bypass -File status-lab/tests/smoke.ps1
+powershell -ExecutionPolicy Bypass -File status-lab/tests/rc2-smoke.ps1
 dotnet run --project status-lab/tests/StateReducerSmoke.csproj -c Release
 dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release
 dotnet build status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj -c Release
 ```
 
-Latest fully green implementation head before this documentation-only metadata update: `d3bb249e39226ddfeb0e5d55e30ff40e5ead21de`.
-
-GitHub Actions run `32790878529`: all smoke, reducer/HID regression, both builds/publishes, portable assembly and artifact upload PASS. Artifact `9543099849`, SHA-256 `6326c6c7aae859eec2b8821b46b51a5861f6f54eb656abf5e37c21257d0c153e`.
-
-PR #22 остаётся unmerged до финального owner canary на реальной K15.
+RC2 tracking: Issue #25. Merge is gated by CI and owner canary.
