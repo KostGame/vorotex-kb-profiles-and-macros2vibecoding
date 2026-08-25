@@ -74,9 +74,9 @@ internal static class ConfigToml
         b.AppendLine($"wire_color_order = \"{config.WireColorOrder.ToString().ToLowerInvariant()}\"");
         b.AppendLine();
         b.AppendLine("[behavior]");
-        b.AppendLine("# Safety fallback для DONE_PENDING_ATTENTION, независимо от визуального effect duration.");
-        b.AppendLine("# 0 = отключить fallback timeout; RC2 default = 30 секунд.");
-        b.AppendLine($"done_attention_timeout_seconds = {Format(config.DoneAttentionTimeoutSeconds)}");
+        b.AppendLine("# Safety reset only for stale Codex attention after no RUNNING sessions remain.");
+        b.AppendLine("# 0 = disabled; default = 18000 seconds (5 hours). This is not an acknowledgement.");
+        b.AppendLine($"stale_attention_timeout_seconds = {Format(config.StaleAttentionTimeoutSeconds)}");
         b.AppendLine();
         WriteProfile(b, "A", config.Profiles.A, "RED / TOOLS-AUTH");
         WriteProfile(b, "B", config.Profiles.B, "BLUE / MAIN-VIBECODING");
@@ -120,9 +120,19 @@ internal static class ConfigToml
 
         if (section == "behavior")
         {
-            if (key != "done_attention_timeout_seconds")
-                throw new InvalidDataException($"unknown key '{section}.{key}'");
-            config.DoneAttentionTimeoutSeconds = ParseDouble(value);
+            switch (key)
+            {
+                case "stale_attention_timeout_seconds":
+                    config.StaleAttentionTimeoutSeconds = ParseDouble(value);
+                    break;
+                case "done_attention_timeout_seconds":
+                    // Legacy setting is accepted for non-destructive migration,
+                    // but is intentionally not mapped to stale attention.
+                    config.DoneAttentionTimeoutSeconds = ParseDouble(value);
+                    break;
+                default:
+                    throw new InvalidDataException($"unknown key '{section}.{key}'");
+            }
             return;
         }
 

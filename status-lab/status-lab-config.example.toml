@@ -11,15 +11,15 @@
 # Horse race / native 0x83, Tetris, Neon и Ambilight остаются в K15 Lighting Lab.
 # Status Lab НИКОГДА программно не переключает hardware Profile A/B.
 
-schema_version = 4
+schema_version = 5
 
 [device]
 wire_color_order = "rgb"
 
 [behavior]
-# Safety fallback: DONE_PENDING_ATTENTION не должен мигать бесконечно.
-# 0 = отключить fallback; RC2 default = 30 секунд.
-done_attention_timeout_seconds = 30
+# Safety reset only for stale attention after zero RUNNING sessions.
+# 0 = disabled; default 18000 seconds (5 hours). This is not an acknowledgement.
+stale_attention_timeout_seconds = 18000
 
 [profiles.A]
 # RED / TOOLS-AUTH
@@ -56,7 +56,7 @@ direction = 0
 duration_seconds = 0
 
 [states.done]
-# После STOP-сигнала: медленное напоминание. Semantic timeout задаётся в [behavior].
+# После STOP-сигнала: медленное напоминание до explicit ACK или stale safety reset.
 enabled = true
 effect = "single_color_breathing"
 palette = "profile"

@@ -32,7 +32,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     {
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
-        _stateNormalizer = new JournalStateNormalizer(_config.DoneAttentionTimeoutSeconds);
+        _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds);
         _rgbCanary = new K15RgbCanary(_config);
         _trackingOnIcon = TrayIconFactory.Create(trackingEnabled: true);
         _trackingOffIcon = TrayIconFactory.Create(trackingEnabled: false);
@@ -45,7 +45,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             version = typeof(StatusTrayApplicationContext).Assembly.GetName().Version?.ToString(),
             productSurface = "status_tray_rc2_split",
             configSchema = _config.SchemaVersion,
-            doneAttentionTimeoutSeconds = _config.DoneAttentionTimeoutSeconds,
+            staleAttentionTimeoutSeconds = _config.StaleAttentionTimeoutSeconds,
             hardwareProfileSelectionPolicy = "observe_only",
             unknownPowerWrites = false,
             ipc = StatusTrayIpc.PipeName

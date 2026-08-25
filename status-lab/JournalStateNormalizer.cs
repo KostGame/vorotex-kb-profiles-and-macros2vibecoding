@@ -17,9 +17,9 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private long _readOffset;
     private string _tailRemainder = string.Empty;
 
-    public JournalStateNormalizer(double doneAttentionTimeoutSeconds = 30)
+    public JournalStateNormalizer(double staleAttentionTimeoutSeconds = 18000)
     {
-        _reducer = new StateReducer(doneAttentionTimeoutSeconds);
+        _reducer = new StateReducer(staleAttentionTimeoutSeconds);
     }
 
     public event Action<K15NormalizedState, StateTransition?>? StateChanged;
@@ -27,6 +27,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     public K15NormalizedState State => _reducer.State;
     public string? FocusedSessionId => _reducer.FocusedSessionId;
     public string FocusedCwd => _reducer.FocusedCwd;
+    public CodexAttentionSnapshot AttentionSnapshot => _reducer.Snapshot;
 
     public void Start()
     {
@@ -47,6 +48,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             focusedSessionId = _reducer.FocusedSessionId,
             focusedCwd = _reducer.FocusedCwd,
             activeTaskSessions = _reducer.ActiveTaskSessionCount,
+            attention = _reducer.Snapshot,
             replayWindowMinutes = StartupReplayWindow.TotalMinutes
         });
 
@@ -225,7 +227,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             sourceTimestampUtc = transition.TimestampUtc,
             focusedSessionId = _reducer.FocusedSessionId,
             focusedCwd = _reducer.FocusedCwd,
-            activeTaskSessions = _reducer.ActiveTaskSessionCount
+            activeTaskSessions = _reducer.ActiveTaskSessionCount,
+            attention = _reducer.Snapshot
         });
 
         StateChanged?.Invoke(transition.Current, transition);
