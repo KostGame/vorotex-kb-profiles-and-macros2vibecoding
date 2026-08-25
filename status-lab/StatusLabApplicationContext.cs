@@ -31,7 +31,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     {
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
-        _stateNormalizer = new JournalStateNormalizer(_config.DoneAttentionTimeoutSeconds);
+        _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds);
         _rgbCanary = new K15RgbCanary(_config);
         _trackingOnIcon = TrayIconFactory.Create(trackingEnabled: true);
         _trackingOffIcon = TrayIconFactory.Create(trackingEnabled: false);
@@ -46,7 +46,7 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
             rgbConfigPath = StatusLabConfig.FilePath,
             configSchema = _config.SchemaVersion,
             wireColorOrder = _config.WireColorOrder.ToString(),
-            doneAttentionTimeoutSeconds = _config.DoneAttentionTimeoutSeconds,
+            staleAttentionTimeoutSeconds = _config.StaleAttentionTimeoutSeconds,
             detailedLogging = EventJournal.DetailedLoggingEnabled,
             configWarning = _config.LoadWarning,
             hardwareProfileSelectionPolicy = "observe_only",

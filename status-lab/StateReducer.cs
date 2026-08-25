@@ -9,6 +9,20 @@ internal enum K15NormalizedState
     Error
 }
 
+internal enum CodexLivenessState
+{
+    Alive,
+    NotRunning,
+    Unknown
+}
+
+// Reserved for a future proven Codex host signal. Unknown deliberately has no
+// destructive effect on the attention ledger.
+internal interface ICodexLivenessProvider
+{
+    CodexLivenessState GetLiveness();
+}
+
 internal sealed record StatusInputEvent(
     DateTimeOffset TimestampUtc,
     string Source,
@@ -26,15 +40,24 @@ internal sealed record StateTransition(
     string Reason,
     DateTimeOffset TimestampUtc);
 
+internal sealed record CodexAttentionSnapshot(
+    int RunningCount,
+    int ApprovalWaitingCount,
+    int DoneUnreadCount,
+    int ActiveTaskSessionCount,
+    int EndedSessionCount,
+    K15NormalizedState AggregateState,
+    DateTimeOffset? NoRunningSinceUtc,
+    DateTimeOffset? StaleResetDueUtc);
+
 internal sealed class StateReducer
 {
-    private static readonly TimeSpan NotificationCorrelationWindow = TimeSpan.FromSeconds(8);
-    private static readonly TimeSpan PreHookNotificationWindow = TimeSpan.FromSeconds(2);
     private const string LegacySessionId = "__legacy__";
 
     private sealed class SessionRuntime
     {
         public required string Id { get; init; }
+        public string TurnId { get; set; } = string.Empty;
         public string Cwd { get; set; } = string.Empty;
         public bool Internal { get; set; }
         public bool Ended { get; set; }
@@ -43,22 +66,21 @@ internal sealed class StateReducer
         public DateTimeOffset? LastPermissionUtc { get; set; }
         public DateTimeOffset? LastStopUtc { get; set; }
         public DateTimeOffset? DoneEnteredUtc { get; set; }
+        public DateTimeOffset? AcknowledgedUtc { get; set; }
     }
 
-    private readonly TimeSpan? _doneAttentionTimeout;
-    private readonly HashSet<uint> _waitingNotificationIds = new();
-    private readonly HashSet<uint> _doneNotificationIds = new();
-    private readonly Dictionary<uint, DateTimeOffset> _recentOpenAiAdds = new();
+    private readonly TimeSpan? _staleAttentionTimeout;
     private readonly Dictionary<string, SessionRuntime> _sessions = new(StringComparer.Ordinal);
+    private DateTimeOffset? _noRunningSinceUtc;
 
-    public StateReducer(double doneAttentionTimeoutSeconds = 30)
+    public StateReducer(double staleAttentionTimeoutSeconds = 18000)
     {
-        if (doneAttentionTimeoutSeconds < 0 || doneAttentionTimeoutSeconds > 3600)
-            throw new ArgumentOutOfRangeException(nameof(doneAttentionTimeoutSeconds));
+        if (staleAttentionTimeoutSeconds < 0 || staleAttentionTimeoutSeconds > 259200)
+            throw new ArgumentOutOfRangeException(nameof(staleAttentionTimeoutSeconds));
 
-        _doneAttentionTimeout = doneAttentionTimeoutSeconds == 0
+        _staleAttentionTimeout = staleAttentionTimeoutSeconds == 0
             ? null
-            : TimeSpan.FromSeconds(doneAttentionTimeoutSeconds);
+            : TimeSpan.FromSeconds(staleAttentionTimeoutSeconds);
     }
 
     public K15NormalizedState State { get; private set; } = K15NormalizedState.Normal;
@@ -66,19 +88,18 @@ internal sealed class StateReducer
     public string FocusedCwd => FocusedSessionId is not null && _sessions.TryGetValue(FocusedSessionId, out var session)
         ? session.Cwd
         : string.Empty;
-
     public int ActiveTaskSessionCount => _sessions.Values.Count(session => !session.Internal && !session.Ended);
+    public CodexLivenessState Liveness => CodexLivenessState.Unknown;
+
+    public CodexAttentionSnapshot Snapshot => CreateSnapshot();
 
     public StateTransition? Apply(StatusInputEvent input)
     {
-        PruneRecentNotifications(input.TimestampUtc);
-
         if (input.Source.Equals("codex_hook", StringComparison.Ordinal))
             return ApplyCodex(input);
 
-        if (input.Source.Equals("windows_notification", StringComparison.Ordinal))
-            return ApplyNotification(input);
-
+        // Windows toasts are retained as diagnostics only. They are not an ACK
+        // signal and must never erase session attention.
         return null;
     }
 
@@ -91,41 +112,65 @@ internal sealed class StateReducer
         {
             ApplyCodex(input);
         }
-
-        ResetNotificationTracking();
     }
 
     public StateTransition? Tick(DateTimeOffset nowUtc)
     {
-        PruneRecentNotifications(nowUtc);
-        if (_doneAttentionTimeout is not TimeSpan timeout ||
-            State is not (K15NormalizedState.DonePendingAttention or K15NormalizedState.Error) ||
-            GetFocusedSession() is not SessionRuntime focused ||
-            focused.DoneEnteredUtc is not DateTimeOffset entered ||
-            nowUtc - entered < timeout)
+        var snapshot = CreateSnapshot();
+        if (_staleAttentionTimeout is not TimeSpan timeout ||
+            snapshot.RunningCount != 0 ||
+            (snapshot.ApprovalWaitingCount == 0 && snapshot.DoneUnreadCount == 0) ||
+            _noRunningSinceUtc is not DateTimeOffset idleSince ||
+            nowUtc - idleSince < timeout)
         {
             return null;
         }
 
-        focused.State = K15NormalizedState.Normal;
-        focused.LastStopUtc = null;
-        focused.DoneEnteredUtc = null;
-        ResetNotificationTracking();
-        return SetState(K15NormalizedState.Normal, "done_attention_timeout", nowUtc);
-    }
-
-    public StateTransition? Acknowledge(DateTimeOffset timestampUtc, string reason = "manual_acknowledge")
-    {
-        if (GetFocusedSession() is SessionRuntime focused)
+        foreach (var session in _sessions.Values.Where(session => !session.Internal &&
+                     session.State is K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
         {
-            focused.State = K15NormalizedState.Normal;
-            focused.LastPermissionUtc = null;
-            focused.LastStopUtc = null;
-            focused.DoneEnteredUtc = null;
+            session.State = K15NormalizedState.Normal;
+            session.LastPermissionUtc = null;
+            session.LastStopUtc = null;
+            session.DoneEnteredUtc = null;
+            session.AcknowledgedUtc = nowUtc;
         }
 
-        ResetNotificationTracking();
-        return SetState(K15NormalizedState.Normal, reason, timestampUtc);
+        _noRunningSinceUtc = null;
+        return RecomputeAggregate("stale_attention_timeout", nowUtc);
+    }
+
+    // MVP tray/control-center ACK clears all outstanding attention. The session
+    // ledger remains intentionally ready for a future Acknowledge(sessionId).
+    public StateTransition? Acknowledge(DateTimeOffset timestampUtc, string reason = "manual_acknowledge")
+    {
+        foreach (var session in _sessions.Values.Where(session => !session.Internal &&
+                     session.State is K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
+        {
+            session.State = K15NormalizedState.Normal;
+            session.LastPermissionUtc = null;
+            session.LastStopUtc = null;
+            session.DoneEnteredUtc = null;
+            session.AcknowledgedUtc = timestampUtc;
+        }
+
+        return RecomputeAggregate(reason, timestampUtc);
+    }
+
+    public StateTransition? Acknowledge(string sessionId, DateTimeOffset timestampUtc, string reason = "session_acknowledge")
+    {
+        if (!_sessions.TryGetValue(sessionId, out var session) || session.Internal ||
+            session.State is not (K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
+        {
+            return null;
+        }
+
+        session.State = K15NormalizedState.Normal;
+        session.LastPermissionUtc = null;
+        session.LastStopUtc = null;
+        session.DoneEnteredUtc = null;
+        session.AcknowledgedUtc = timestampUtc;
+        return RecomputeAggregate(reason, timestampUtc);
     }
 
     private StateTransition? ApplyCodex(StatusInputEvent input)
@@ -133,21 +178,24 @@ internal sealed class StateReducer
         var session = GetOrCreateSession(input);
         if (!string.IsNullOrWhiteSpace(input.Cwd))
             session.Cwd = input.Cwd;
+        if (!string.IsNullOrWhiteSpace(input.TurnId))
+            session.TurnId = input.TurnId;
         session.Internal = session.Internal || IsInternalCwd(session.Cwd);
         session.LastActivityUtc = input.TimestampUtc;
 
         if (input.EventName == "SessionEnd")
         {
             session.Ended = true;
-            session.State = K15NormalizedState.Normal;
-            session.LastPermissionUtc = null;
-            session.LastStopUtc = null;
-            session.DoneEnteredUtc = null;
+            // Completion is not a read receipt: retain DONE_UNREAD across end.
+            if (session.State is not K15NormalizedState.DonePendingAttention)
+            {
+                session.State = K15NormalizedState.Normal;
+                session.LastPermissionUtc = null;
+            }
 
-            if (!string.Equals(FocusedSessionId, session.Id, StringComparison.Ordinal))
-                return null;
-
-            return SelectFallbackFocus(input.TimestampUtc, "codex_session_end");
+            if (string.Equals(FocusedSessionId, session.Id, StringComparison.Ordinal))
+                SelectFallbackFocus();
+            return RecomputeAggregate("codex_session_end", input.TimestampUtc);
         }
 
         if (session.Internal)
@@ -157,18 +205,22 @@ internal sealed class StateReducer
         switch (input.EventName)
         {
             case "UserPromptSubmit":
-                ResetSessionTransient(session);
+                // A prompt in this same session is the MVP explicit return/ACK.
                 session.State = K15NormalizedState.Running;
-                return FocusSession(session, "codex_user_prompt_submit", input.TimestampUtc);
+                session.LastPermissionUtc = null;
+                session.LastStopUtc = null;
+                session.DoneEnteredUtc = null;
+                session.AcknowledgedUtc = input.TimestampUtc;
+                FocusedSessionId = session.Id;
+                return RecomputeAggregate("codex_user_prompt_submit", input.TimestampUtc);
 
             case "PermissionRequest":
                 session.State = K15NormalizedState.Waiting;
                 session.LastPermissionUtc = input.TimestampUtc;
                 session.LastStopUtc = null;
                 session.DoneEnteredUtc = null;
-                var waitingTransition = FocusSession(session, "codex_permission_request", input.TimestampUtc);
-                BindRecentNotificationToWaiting(input.TimestampUtc);
-                return waitingTransition;
+                FocusedSessionId = session.Id;
+                return RecomputeAggregate("codex_permission_request", input.TimestampUtc);
 
             case "PreToolUse":
             case "PostToolUse":
@@ -176,80 +228,20 @@ internal sealed class StateReducer
                 session.LastPermissionUtc = null;
                 session.LastStopUtc = null;
                 session.DoneEnteredUtc = null;
-                _waitingNotificationIds.Clear();
-                return FocusSession(session,
-                    input.EventName == "PreToolUse" ? "codex_pre_tool_use" : "codex_post_tool_use",
-                    input.TimestampUtc);
+                FocusedSessionId = session.Id;
+                return RecomputeAggregate(input.EventName == "PreToolUse" ? "codex_pre_tool_use" : "codex_post_tool_use", input.TimestampUtc);
 
             case "Stop":
                 session.State = K15NormalizedState.DonePendingAttention;
                 session.LastPermissionUtc = null;
                 session.LastStopUtc = input.TimestampUtc;
                 session.DoneEnteredUtc = input.TimestampUtc;
-                _waitingNotificationIds.Clear();
-                var doneTransition = FocusSession(session, "codex_stop", input.TimestampUtc);
-                BindRecentNotificationToDone(input.TimestampUtc);
-                return doneTransition;
+                FocusedSessionId = session.Id;
+                return RecomputeAggregate("codex_stop", input.TimestampUtc);
 
             default:
                 return null;
         }
-    }
-
-    private StateTransition? ApplyNotification(StatusInputEvent input)
-    {
-        if (!IsOpenAiPackage(input.PackageFamilyName) || input.NotificationId is not uint notificationId)
-            return null;
-
-        var focused = GetFocusedSession();
-        if (input.EventName == "windows_notification_added")
-        {
-            _recentOpenAiAdds[notificationId] = input.TimestampUtc;
-
-            if (focused is not null && State == K15NormalizedState.Waiting &&
-                focused.LastPermissionUtc is DateTimeOffset permissionUtc &&
-                WithinWindow(permissionUtc, input.TimestampUtc))
-            {
-                _waitingNotificationIds.Add(notificationId);
-                return null;
-            }
-
-            if (focused is not null &&
-                (State is K15NormalizedState.DonePendingAttention or K15NormalizedState.Error) &&
-                focused.LastStopUtc is DateTimeOffset stopUtc &&
-                WithinWindow(stopUtc, input.TimestampUtc))
-            {
-                _doneNotificationIds.Add(notificationId);
-                return null;
-            }
-
-            return null;
-        }
-
-        if (input.EventName == "windows_notification_removed")
-        {
-            _recentOpenAiAdds.Remove(notificationId);
-
-            if (_waitingNotificationIds.Remove(notificationId) &&
-                State == K15NormalizedState.Waiting && _waitingNotificationIds.Count == 0 && focused is not null)
-            {
-                focused.State = K15NormalizedState.Running;
-                focused.LastPermissionUtc = null;
-                return SetState(K15NormalizedState.Running, "waiting_notification_resolved", input.TimestampUtc);
-            }
-
-            if (_doneNotificationIds.Remove(notificationId) &&
-                (State is K15NormalizedState.DonePendingAttention or K15NormalizedState.Error) &&
-                _doneNotificationIds.Count == 0 && focused is not null)
-            {
-                focused.State = K15NormalizedState.Normal;
-                focused.LastStopUtc = null;
-                focused.DoneEnteredUtc = null;
-                return SetState(K15NormalizedState.Normal, "done_notification_resolved", input.TimestampUtc);
-            }
-        }
-
-        return null;
     }
 
     private SessionRuntime GetOrCreateSession(StatusInputEvent input)
@@ -269,113 +261,50 @@ internal sealed class StateReducer
         return created;
     }
 
-    private StateTransition? FocusSession(SessionRuntime session, string reason, DateTimeOffset timestampUtc)
+    private void SelectFallbackFocus()
     {
-        var focusChanged = !string.Equals(FocusedSessionId, session.Id, StringComparison.Ordinal);
-        if (focusChanged)
-        {
-            FocusedSessionId = session.Id;
-            ClearBoundNotifications();
-        }
-
-        var transition = SetState(session.State, reason, timestampUtc);
-        if (transition is not null)
-            return transition;
-
-        return focusChanged
-            ? new StateTransition(State, State, "codex_focus_changed", timestampUtc)
-            : null;
-    }
-
-    private StateTransition? SelectFallbackFocus(DateTimeOffset timestampUtc, string reason)
-    {
-        var candidate = _sessions.Values
+        FocusedSessionId = _sessions.Values
             .Where(session => !session.Internal && !session.Ended)
             .OrderByDescending(session => session.LastActivityUtc)
+            .Select(session => session.Id)
             .FirstOrDefault();
-
-        ResetNotificationTracking();
-        if (candidate is null)
-        {
-            var hadFocus = FocusedSessionId is not null;
-            FocusedSessionId = null;
-            var transition = SetState(K15NormalizedState.Normal, reason, timestampUtc);
-            if (transition is not null)
-                return transition;
-            return hadFocus
-                ? new StateTransition(State, State, reason, timestampUtc)
-                : null;
-        }
-
-        var previousFocus = FocusedSessionId;
-        FocusedSessionId = candidate.Id;
-        var fallbackTransition = SetState(candidate.State, "codex_focus_fallback", timestampUtc);
-        if (fallbackTransition is not null)
-            return fallbackTransition;
-        return !string.Equals(previousFocus, candidate.Id, StringComparison.Ordinal)
-            ? new StateTransition(State, State, "codex_focus_fallback", timestampUtc)
-            : null;
     }
 
-    private SessionRuntime? GetFocusedSession() =>
-        FocusedSessionId is not null && _sessions.TryGetValue(FocusedSessionId, out var session)
-            ? session
-            : null;
-
-    private void BindRecentNotificationToWaiting(DateTimeOffset permissionUtc)
+    private CodexAttentionSnapshot CreateSnapshot()
     {
-        var candidateId = FindRecentUnboundNotification(permissionUtc);
-        if (candidateId is uint id)
-            _waitingNotificationIds.Add(id);
+        var sessions = _sessions.Values.Where(session => !session.Internal).ToArray();
+        var running = sessions.Count(session => !session.Ended && session.State == K15NormalizedState.Running);
+        var waiting = sessions.Count(session => !session.Ended && session.State == K15NormalizedState.Waiting);
+        var done = sessions.Count(session => session.State == K15NormalizedState.DonePendingAttention);
+        var aggregate = waiting > 0 ? K15NormalizedState.Waiting :
+            done > 0 ? K15NormalizedState.DonePendingAttention :
+            running > 0 ? K15NormalizedState.Running : K15NormalizedState.Normal;
+        return new CodexAttentionSnapshot(
+            running,
+            waiting,
+            done,
+            sessions.Count(session => !session.Ended),
+            sessions.Count(session => session.Ended),
+            aggregate,
+            _noRunningSinceUtc,
+            _staleAttentionTimeout is TimeSpan timeout && _noRunningSinceUtc is DateTimeOffset since
+                ? since + timeout
+                : null);
     }
 
-    private void BindRecentNotificationToDone(DateTimeOffset stopUtc)
+    private StateTransition? RecomputeAggregate(string reason, DateTimeOffset timestampUtc)
     {
-        var candidateId = FindRecentUnboundNotification(stopUtc);
-        if (candidateId is uint id)
-            _doneNotificationIds.Add(id);
-    }
+        var before = State;
+        var running = _sessions.Values.Count(session => !session.Internal && !session.Ended && session.State == K15NormalizedState.Running);
+        if (running > 0)
+            _noRunningSinceUtc = null;
+        else if (_noRunningSinceUtc is null && _sessions.Values.Any(session => !session.Internal &&
+                     session.State is K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
+            _noRunningSinceUtc = timestampUtc;
 
-    private uint? FindRecentUnboundNotification(DateTimeOffset hookUtc) =>
-        _recentOpenAiAdds
-            .Where(pair =>
-                !_waitingNotificationIds.Contains(pair.Key) &&
-                !_doneNotificationIds.Contains(pair.Key) &&
-                pair.Value <= hookUtc &&
-                hookUtc - pair.Value <= PreHookNotificationWindow)
-            .OrderByDescending(pair => pair.Value)
-            .Select(pair => (uint?)pair.Key)
-            .FirstOrDefault();
-
-    private void PruneRecentNotifications(DateTimeOffset nowUtc)
-    {
-        foreach (var id in _recentOpenAiAdds
-                     .Where(pair => nowUtc - pair.Value > NotificationCorrelationWindow)
-                     .Select(pair => pair.Key)
-                     .ToArray())
-        {
-            _recentOpenAiAdds.Remove(id);
-        }
-    }
-
-    private void ResetSessionTransient(SessionRuntime session)
-    {
-        session.LastPermissionUtc = null;
-        session.LastStopUtc = null;
-        session.DoneEnteredUtc = null;
-        ResetNotificationTracking();
-    }
-
-    private void ClearBoundNotifications()
-    {
-        _waitingNotificationIds.Clear();
-        _doneNotificationIds.Clear();
-    }
-
-    private void ResetNotificationTracking()
-    {
-        ClearBoundNotifications();
-        _recentOpenAiAdds.Clear();
+        var next = CreateSnapshot().AggregateState;
+        State = next;
+        return before == next ? null : new StateTransition(before, next, reason, timestampUtc);
     }
 
     private void ResetAll()
@@ -383,17 +312,7 @@ internal sealed class StateReducer
         _sessions.Clear();
         FocusedSessionId = null;
         State = K15NormalizedState.Normal;
-        ResetNotificationTracking();
-    }
-
-    private StateTransition? SetState(K15NormalizedState next, string reason, DateTimeOffset timestampUtc)
-    {
-        if (State == next)
-            return null;
-
-        var previous = State;
-        State = next;
-        return new StateTransition(previous, next, reason, timestampUtc);
+        _noRunningSinceUtc = null;
     }
 
     internal static bool IsInternalCwd(string cwd)
@@ -404,14 +323,5 @@ internal sealed class StateReducer
         var normalized = cwd.Replace('/', '\\').TrimEnd('\\');
         return normalized.Contains("\\.codex-agentloop\\memories", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("\\.codex\\memories", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsOpenAiPackage(string packageFamilyName) =>
-        packageFamilyName.StartsWith("OpenAI.Codex_", StringComparison.OrdinalIgnoreCase);
-
-    private static bool WithinWindow(DateTimeOffset earlier, DateTimeOffset later)
-    {
-        var delta = later - earlier;
-        return delta >= TimeSpan.Zero && delta <= NotificationCorrelationWindow;
     }
 }

@@ -77,14 +77,17 @@ internal sealed class ProfileSetConfig
 
 internal sealed class StatusLabConfig
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
     public const int MaxNotifierColors = 2;
     public static string FilePath { get; } = Path.Combine(EventJournal.DirectoryPath, "config.toml");
 
     public string? LoadWarning { get; private set; }
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public WireColorOrder WireColorOrder { get; set; } = WireColorOrder.RGB;
+    // Kept only to parse legacy RC1/RC2 config. It is never reinterpreted as
+    // stale attention: legacy 30 seconds must not clear unread work.
     public double DoneAttentionTimeoutSeconds { get; set; } = 30;
+    public double StaleAttentionTimeoutSeconds { get; set; } = 18000;
     public ProfileSetConfig Profiles { get; set; } = new();
     public StateLightingConfig States { get; set; } = new();
     public LightingEffectConfig ProfileSwitch { get; set; } = new();
@@ -97,6 +100,7 @@ internal sealed class StatusLabConfig
         SchemaVersion = CurrentSchemaVersion,
         WireColorOrder = WireColorOrder.RGB,
         DoneAttentionTimeoutSeconds = 30,
+        StaleAttentionTimeoutSeconds = 18000,
         Profiles = new ProfileSetConfig
         {
             A = new ProfileLightingConfig { Color = "#FF0000", ManagedNormal = true, NormalBrightness = 6 },
@@ -221,6 +225,8 @@ internal sealed class StatusLabConfig
 
         if (DoneAttentionTimeoutSeconds is < 0 or > 3600)
             throw new InvalidDataException("behavior.done_attention_timeout_seconds must be 0..3600.");
+        if (StaleAttentionTimeoutSeconds is < 0 or > 259200)
+            throw new InvalidDataException("behavior.stale_attention_timeout_seconds must be 0..259200.");
         if (EffectLabDurationSeconds is < 0.5 or > 30)
             throw new InvalidDataException("effect_lab.test_duration_seconds must be 0.5..30.");
     }

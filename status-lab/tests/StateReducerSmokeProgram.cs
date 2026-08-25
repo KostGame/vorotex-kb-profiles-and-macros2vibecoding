@@ -30,7 +30,8 @@ Require(reducer.State == K15NormalizedState.DonePendingAttention, "Stop must ent
 reducer.Apply(Notification(t.AddSeconds(6), "windows_notification_added", 101, error: true));
 Require(reducer.State == K15NormalizedState.DonePendingAttention, "Toast keywords must not create semantic ERROR.");
 reducer.Apply(Notification(t.AddSeconds(7), "windows_notification_removed", 101));
-Require(reducer.State == K15NormalizedState.Normal, "Removing tracked completion notification must restore NORMAL.");
+Require(reducer.State == K15NormalizedState.DonePendingAttention,
+    "Removing a completion toast must never acknowledge DONE_UNREAD.");
 
 var manual = new StateReducer();
 manual.Apply(Hook(t, "UserPromptSubmit", "manual-main"));
@@ -47,16 +48,16 @@ preStop.Apply(Hook(t.AddSeconds(5.1), "Stop", "pre-stop"));
 Require(preStop.State == K15NormalizedState.DonePendingAttention,
     "Completion toast arriving immediately before Stop must still correlate to DONE.");
 preStop.Apply(Notification(t.AddSeconds(8), "windows_notification_removed", 202));
-Require(preStop.State == K15NormalizedState.Normal,
-    "Removing a pre-Stop completion toast must resolve DONE to NORMAL.");
+Require(preStop.State == K15NormalizedState.DonePendingAttention,
+    "Removing a pre-Stop completion toast must not resolve DONE_UNREAD.");
 
 var timeout = new StateReducer(30);
 timeout.Apply(Hook(t, "UserPromptSubmit", "timeout-main"));
 timeout.Apply(Hook(t.AddSeconds(1), "Stop", "timeout-main"));
 Require(timeout.Tick(t.AddSeconds(30.9)) is null, "DONE fallback must not fire before 30 seconds from Stop.");
 var timeoutTransition = timeout.Tick(t.AddSeconds(31.1));
-Require(timeoutTransition?.Current == K15NormalizedState.Normal && timeoutTransition.Reason == "done_attention_timeout",
-    "DONE must fall back to NORMAL after configured 30-second timeout.");
+Require(timeoutTransition?.Current == K15NormalizedState.Normal && timeoutTransition.Reason == "stale_attention_timeout",
+    "Configured stale reset must use an explicit stale_attention_timeout reason.");
 
 var parallel = new StateReducer();
 parallel.Apply(Hook(t, "UserPromptSubmit", "main-A", @"D:\AI_AGENT_PROJECTS\agentloop-exchange-manual-win-001"));
@@ -89,11 +90,79 @@ Require(StateReducer.IsInternalCwd(@"C:\Users\Desktop\.codex-agentloop\memories"
     "AgentLoop memories cwd must be classified internal.");
 Require(!StateReducer.IsInternalCwd(@"D:\AI_AGENT_PROJECTS\task"), "Normal project cwd must not be internal.");
 
+var ledger = new StateReducer(30);
+ledger.Apply(Hook(t, "UserPromptSubmit", "A"));
+ledger.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "B"));
+ledger.Apply(Hook(t.AddSeconds(2), "Stop", "B"));
+ledger.Apply(Hook(t.AddSeconds(3), "UserPromptSubmit", "C"));
+ledger.Apply(Hook(t.AddSeconds(4), "PermissionRequest", "C"));
+var snapshot = ledger.Snapshot;
+Require(snapshot.RunningCount == 1 && snapshot.DoneUnreadCount == 1 && snapshot.ApprovalWaitingCount == 1 &&
+        snapshot.AggregateState == K15NormalizedState.Waiting,
+    "Scenario A: WAITING must outrank DONE and RUNNING across sessions.");
+ledger.Apply(Hook(t.AddSeconds(5), "PreToolUse", "C"));
+snapshot = ledger.Snapshot;
+Require(snapshot.ApprovalWaitingCount == 0 && snapshot.DoneUnreadCount == 1 && snapshot.RunningCount == 2 &&
+        snapshot.AggregateState == K15NormalizedState.DonePendingAttention,
+    "Scenario A: resolved approval must reveal remaining DONE_UNREAD.");
+ledger.Apply(Hook(t.AddSeconds(6), "UserPromptSubmit", "B"));
+Require(ledger.Snapshot.DoneUnreadCount == 0 && ledger.State == K15NormalizedState.Running,
+    "Scenario A: same-session UserPromptSubmit must acknowledge its old DONE.");
+
+var unrelated = new StateReducer();
+unrelated.Apply(Hook(t, "Stop", "A"));
+unrelated.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "B"));
+Require(unrelated.Snapshot.DoneUnreadCount == 1 && unrelated.State == K15NormalizedState.DonePendingAttention,
+    "Scenarios B/D: RUNNING or a prompt in another session must not clear DONE_UNREAD.");
+
+var priority = new StateReducer();
+for (var i = 0; i < 10; i++) priority.Apply(Hook(t.AddSeconds(i), "UserPromptSubmit", $"run-{i}"));
+for (var i = 0; i < 3; i++) priority.Apply(Hook(t.AddSeconds(11 + i), "Stop", $"done-{i}"));
+priority.Apply(Hook(t.AddSeconds(20), "PermissionRequest", "approval"));
+Require(priority.State == K15NormalizedState.Waiting, "Scenario C: approval must outrank all other attention.");
+
+var blockedTimer = new StateReducer(30);
+blockedTimer.Apply(Hook(t, "Stop", "done"));
+blockedTimer.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "running"));
+Require(blockedTimer.Tick(t.AddSeconds(40)) is null && blockedTimer.Snapshot.DoneUnreadCount == 1,
+    "Scenario F: stale reset must be blocked while any session RUNS.");
+blockedTimer.Apply(Hook(t.AddSeconds(41), "Stop", "running"));
+Require(blockedTimer.Tick(t.AddSeconds(70)) is null && blockedTimer.Snapshot.DoneUnreadCount == 2,
+    "Scenario H: a new zero-running interval must start a fresh timer.");
+Require(blockedTimer.Tick(t.AddSeconds(72))?.Reason == "stale_attention_timeout" && blockedTimer.State == K15NormalizedState.Normal,
+    "Scenarios G/H: stale reset must occur only after the fresh idle interval.");
+
+var disabledTimer = new StateReducer(0);
+disabledTimer.Apply(Hook(t, "Stop", "done"));
+Require(disabledTimer.Tick(t.AddDays(2)) is null && disabledTimer.State == K15NormalizedState.DonePendingAttention,
+    "Scenario J: zero must disable automatic stale reset.");
+
+var ended = new StateReducer();
+ended.Apply(Hook(t, "Stop", "A"));
+ended.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "C"));
+ended.Apply(Hook(t.AddSeconds(2), "SessionEnd", "C"));
+Require(ended.Snapshot.DoneUnreadCount == 1 && ended.State == K15NormalizedState.DonePendingAttention,
+    "Scenario K: SessionEnd must not erase other-session attention.");
+
+var replayLedger = new StateReducer();
+replayLedger.Rehydrate(new[]
+{
+    Hook(t, "UserPromptSubmit", "A"),
+    Hook(t.AddSeconds(1), "UserPromptSubmit", "B"),
+    Hook(t.AddSeconds(2), "Stop", "B"),
+    Hook(t.AddSeconds(3), "UserPromptSubmit", "C"),
+    Hook(t.AddSeconds(4), "PermissionRequest", "C")
+});
+Require(replayLedger.Snapshot.RunningCount == 1 && replayLedger.Snapshot.DoneUnreadCount == 1 &&
+        replayLedger.Snapshot.ApprovalWaitingCount == 1 && replayLedger.State == K15NormalizedState.Waiting,
+    "Scenario L: journal replay must restore multi-session aggregate attention.");
+
 var config = StatusLabConfig.CreateDefault();
 config.Validate();
-Require(config.SchemaVersion == 4, "Canonical TOML schema must be v4.");
+Require(config.SchemaVersion == 5, "Canonical TOML schema must be v5.");
 Require(config.WireColorOrder == WireColorOrder.RGB, "Physical K15 default must use RGB.");
 Require(config.DoneAttentionTimeoutSeconds == 30, "DONE fallback timeout default must be 30 seconds.");
+Require(config.StaleAttentionTimeoutSeconds == 18000, "Stale attention timeout default must be five hours.");
 Require(config.Profiles.A.Color == "#FF0000" && config.Profiles.B.Color == "#0000FF", "Profile identity colors changed.");
 Require(config.States.Running.Mode == K15LightingMode.FlowingWater, "RUNNING default must use Flowing Water.");
 Require(config.States.Running.Palette == PaletteSource.Profile, "RUNNING must use active profile color.");
@@ -131,10 +200,10 @@ Require(pairRecord[7] == 0 && pairRecord[8] == 0 && pairRecord[9] == 0xFF,
     "profile_pair slot 2 must encode profile B blue.");
 
 var toml = ConfigToml.Serialize(config);
-Require(toml.Contains("schema_version = 4", StringComparison.Ordinal), "Canonical TOML must use schema v4.");
+Require(toml.Contains("schema_version = 5", StringComparison.Ordinal), "Canonical TOML must use schema v5.");
 Require(toml.Contains("[behavior]", StringComparison.Ordinal) &&
-        toml.Contains("done_attention_timeout_seconds = 30", StringComparison.Ordinal),
-    "Canonical TOML must expose 30-second DONE fallback behavior.");
+        toml.Contains("stale_attention_timeout_seconds = 18000", StringComparison.Ordinal),
+    "Canonical TOML must expose five-hour stale attention behavior.");
 Require(toml.Contains("[stop_signal]", StringComparison.Ordinal), "Canonical TOML must include STOP overlay section.");
 Require(toml.Contains("palette = \"profile_pair\"", StringComparison.Ordinal),
     "Canonical TOML must expose profile_pair palette source.");
@@ -145,11 +214,11 @@ Require(toml.Contains("НИКОГДА программно не переключ
 Require(!toml.Contains("[states.running]\ncolor", StringComparison.Ordinal), "State TOML must not own colors.");
 var roundTrip = ConfigToml.Parse(toml);
 Require(roundTrip.StopSignal.Palette == PaletteSource.ProfilePair, "TOML round-trip lost STOP palette source.");
-Require(roundTrip.DoneAttentionTimeoutSeconds == 30, "TOML round-trip lost DONE timeout.");
+Require(roundTrip.StaleAttentionTimeoutSeconds == 18000, "TOML round-trip lost stale timeout.");
 
 var existingV3WithoutBehavior = ConfigToml.Parse("schema_version = 3\n[states.done]\neffect = \"single_color_breathing\"\npalette = \"profile\"\n");
-Require(existingV3WithoutBehavior.SchemaVersion == 4 && existingV3WithoutBehavior.DoneAttentionTimeoutSeconds == 30,
-    "Existing schema-v3 config without [behavior] must inherit RC1 30s fallback in memory.");
+Require(existingV3WithoutBehavior.SchemaVersion == 5 && existingV3WithoutBehavior.StaleAttentionTimeoutSeconds == 18000,
+    "Existing schema-v3 config without [behavior] must inherit the safe five-hour stale default.");
 
 var oldV3 = ConfigToml.Parse("""
 schema_version = 3
@@ -172,8 +241,8 @@ speed = 5
 direction = 0
 duration_seconds = 3
 """);
-Require(oldV3.SchemaVersion == 4 && oldV3.DoneAttentionTimeoutSeconds == 30,
-    "Exact beta timeout default must migrate in memory to RC1.");
+Require(oldV3.SchemaVersion == 5 && oldV3.StaleAttentionTimeoutSeconds == 18000,
+    "Legacy DONE timeout must not be silently reinterpreted as stale attention.");
 Require(!oldV3.ProfileSwitch.Enabled && oldV3.ProfileSwitch.DurationSeconds == 0,
     "Exact beta profile-switch default must migrate to OFF in memory.");
 Require(oldV3.ActivationSignal.Mode == K15LightingMode.CycleBreathing && oldV3.ActivationSignal.Speed == 7,
@@ -192,11 +261,12 @@ speed = 3
 direction = 1
 duration_seconds = 6
 """);
-Require(customV3.DoneAttentionTimeoutSeconds == 45 && customV3.ProfileSwitch.Enabled && customV3.ProfileSwitch.DurationSeconds == 6,
-    "Schema migration must preserve owner-customized values.");
+Require(customV3.DoneAttentionTimeoutSeconds == 45 && customV3.StaleAttentionTimeoutSeconds == 18000 &&
+        customV3.ProfileSwitch.Enabled && customV3.ProfileSwitch.DurationSeconds == 6,
+    "Schema migration must preserve legacy data without reusing it as stale attention.");
 
 var legacyV2 = ConfigToml.Parse("schema_version = 2\n[states.running]\neffect = \"flowing_water\"\n");
-Require(legacyV2.SchemaVersion == 4, "Legacy schema v2 must migrate in memory without rewriting the file.");
+Require(legacyV2.SchemaVersion == 5, "Legacy schema v2 must migrate in memory without rewriting the file.");
 
 var unsafeRejected = false;
 try
