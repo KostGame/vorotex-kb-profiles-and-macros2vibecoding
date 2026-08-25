@@ -1,0 +1,40 @@
+name: Status Lab OEM Identity Object Commit Trace
+
+on:
+  push:
+    branches:
+      - 'agent/**'
+    paths:
+      - 'status-lab/hid-research-lab/**'
+      - 'status-lab/tests/oem-identity-object-commit-smoke.ps1'
+      - '.github/workflows/status-lab-oem-identity-object-commit.yml'
+  pull_request:
+    paths:
+      - 'status-lab/hid-research-lab/**'
+      - 'status-lab/tests/oem-identity-object-commit-smoke.ps1'
+      - '.github/workflows/status-lab-oem-identity-object-commit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  identity-object-commit-readonly:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: OEM Identity Object Commit read-only safety smoke
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/oem-identity-object-commit-smoke.ps1
+
+      - name: Restore HID Research Lab
+        run: dotnet restore status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj
+
+      - name: Build HID Research Lab
+        run: dotnet build status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj -c Release --no-restore
