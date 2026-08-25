@@ -1,0 +1,40 @@
+# VOROTEX K15 Status Lab — Windows notification rules
+#
+# IMPORTANT:
+# - Codex NORMAL/RUNNING/WAITING/DONE remains a separate semantic state machine.
+# - These rules create temporary notification overlays only.
+# - Unknown applications are ignored by default.
+# - Raw toast title/body are used in RAM for Learning Mode and matching, but are not
+#   persisted to the diagnostic journal by default.
+
+schema_version = 1
+
+[notifications]
+enabled = true
+learning_buffer_size = 50
+default_action = "ignore"
+
+# Example only. Replace identity values with values discovered by Learning Mode.
+# [[rules]]
+# id = "telegram"
+# enabled = true
+# priority = "normal"       # low | normal | high | critical
+# behavior = "pulse"        # pulse | while_present | until_acknowledged
+# max_duration_seconds = 60
+#
+# [rules.match]
+# package_family_name = ""
+# app_user_model_id = ""
+# app_name = "Telegram"
+# title_contains = []
+# body_contains = []
+# regex = ""
+#
+# [rules.display]
+# effect = "single_color_breathing"
+# color_mode = "custom"     # custom | custom_plus_profile
+# color = "#27A7E7"
+# brightness = 6
+# speed = 7
+# direction = 0
+# duration_seconds = 6

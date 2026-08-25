@@ -15,6 +15,7 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
     private bool _primed;
 
     public event Action<string>? StatusChanged;
+    public event Action<WindowsNotificationObservation>? NotificationChanged;
 
     public WindowsNotificationPoller(TimeSpan? pollInterval = null)
     {
@@ -107,12 +108,18 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
 
             if (!_primed)
             {
-                Log("windows_notification_present", snapshot);
+                Emit(WindowsNotificationChangeKind.Present, snapshot);
+                continue;
             }
-            else if (!_known.ContainsKey(snapshot.Key))
+
+            if (!_known.TryGetValue(snapshot.Key, out var previous))
             {
-                Log("windows_notification_added", snapshot);
+                Emit(WindowsNotificationChangeKind.Added, snapshot);
+                continue;
             }
+
+            if (!string.Equals(previous.TextFingerprint, snapshot.TextFingerprint, StringComparison.Ordinal))
+                Emit(WindowsNotificationChangeKind.Updated, snapshot);
         }
 
         if (_primed)
@@ -120,7 +127,7 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
             foreach (var previous in _known.Values)
             {
                 if (!next.ContainsKey(previous.Key))
-                    Log("windows_notification_removed", previous);
+                    Emit(WindowsNotificationChangeKind.Removed, previous);
             }
         }
 
@@ -132,25 +139,56 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
         StatusChanged?.Invoke($"Уведомления: {_known.Count} активных");
     }
 
-    private static void Log(string eventName, NotificationSnapshot snapshot)
+    private void Emit(WindowsNotificationChangeKind changeKind, NotificationSnapshot snapshot)
+    {
+        var observation = snapshot.ToObservation(changeKind);
+        Log(observation);
+
+        try
+        {
+            NotificationChanged?.Invoke(observation);
+        }
+        catch (Exception ex)
+        {
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "windows_notification",
+                @event = "notification_observer_error",
+                notificationId = snapshot.NotificationId,
+                packageFamilyName = snapshot.PackageFamilyName,
+                exception = ex.GetType().FullName,
+                hresult = ex.HResult
+            });
+        }
+    }
+
+    private static void Log(WindowsNotificationObservation observation)
     {
         EventJournal.Append(new
         {
             timestampUtc = DateTimeOffset.UtcNow,
             source = "windows_notification",
-            @event = eventName,
-            notificationId = snapshot.NotificationId,
-            notificationCreatedUtc = snapshot.CreationTime.ToUniversalTime(),
-            appName = snapshot.AppName,
-            appUserModelId = snapshot.AppUserModelId,
-            packageFamilyName = snapshot.PackageFamilyName,
-            textFingerprint = snapshot.TextFingerprint,
-            textElementCount = snapshot.TextElementCount,
-            textLengths = snapshot.TextLengths,
-            textClass = snapshot.TextClass,
-            permissionHint = snapshot.PermissionHint,
-            completionHint = snapshot.CompletionHint,
-            errorHint = snapshot.ErrorHint
+            @event = observation.ChangeKind switch
+            {
+                WindowsNotificationChangeKind.Present => "windows_notification_present",
+                WindowsNotificationChangeKind.Added => "windows_notification_added",
+                WindowsNotificationChangeKind.Updated => "windows_notification_updated",
+                WindowsNotificationChangeKind.Removed => "windows_notification_removed",
+                _ => "windows_notification_unknown"
+            },
+            notificationId = observation.NotificationId,
+            notificationCreatedUtc = observation.CreationTime.ToUniversalTime(),
+            appName = observation.AppName,
+            appUserModelId = observation.AppUserModelId,
+            packageFamilyName = observation.PackageFamilyName,
+            textFingerprint = observation.TextFingerprint,
+            textElementCount = observation.TextElementCount,
+            textLengths = observation.TextLengths,
+            textClass = observation.TextClass,
+            permissionHint = observation.PermissionHint,
+            completionHint = observation.CompletionHint,
+            errorHint = observation.ErrorHint
         });
     }
 
@@ -179,6 +217,8 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
         string AppUserModelId,
         string PackageFamilyName,
         string TextFingerprint,
+        string Title,
+        string Body,
         int TextElementCount,
         int[] TextLengths,
         string TextClass,
@@ -186,6 +226,24 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
         bool CompletionHint,
         bool ErrorHint)
     {
+        public WindowsNotificationObservation ToObservation(WindowsNotificationChangeKind changeKind) => new(
+            changeKind,
+            Key,
+            NotificationId,
+            CreationTime,
+            AppName,
+            AppUserModelId,
+            PackageFamilyName,
+            TextFingerprint,
+            Title,
+            Body,
+            TextElementCount,
+            TextLengths.ToArray(),
+            TextClass,
+            PermissionHint,
+            CompletionHint,
+            ErrorHint);
+
         public static NotificationSnapshot From(UserNotification notification)
         {
             var appInfo = notification.AppInfo;
@@ -203,6 +261,8 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
                 aumid,
                 pfn,
                 text.Fingerprint,
+                text.Title,
+                text.Body,
                 text.ElementCount,
                 text.Lengths,
                 text.Classification,
@@ -227,6 +287,8 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
                 if (elements.Length == 0)
                     return NotificationTextMetadata.Empty;
 
+                var title = elements[0].Trim();
+                var body = string.Join("\n", elements.Skip(1)).Trim();
                 var normalized = string.Join("\n", elements)
                     .Trim()
                     .ToLowerInvariant();
@@ -255,6 +317,8 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
 
                 return new NotificationTextMetadata(
                     fingerprint,
+                    title,
+                    body,
                     elements.Length,
                     elements.Select(value => value.Length).ToArray(),
                     classification,
@@ -286,6 +350,8 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
 
     private sealed record NotificationTextMetadata(
         string Fingerprint,
+        string Title,
+        string Body,
         int ElementCount,
         int[] Lengths,
         string Classification,
@@ -294,6 +360,6 @@ internal sealed class WindowsNotificationPoller : IAsyncDisposable
         bool ErrorHint)
     {
         public static NotificationTextMetadata Empty { get; } =
-            new(string.Empty, 0, Array.Empty<int>(), "unknown", false, false, false);
+            new(string.Empty, string.Empty, string.Empty, 0, Array.Empty<int>(), "unknown", false, false, false);
     }
 }
