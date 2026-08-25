@@ -17,6 +17,34 @@ static WindowsNotificationObservation Obs(
     new(kind, key, id, DateTimeOffset.Parse("2026-08-25T12:00:00Z"), app, aumid, pfn,
         "fingerprint", title, body, 2, [title.Length, body.Length], "generic", false, false, false);
 
+static NotificationOverlayIntent Intent(
+    string key,
+    NotificationPriority priority,
+    NotificationBehavior behavior,
+    DateTimeOffset sourceUtc,
+    double displaySeconds = 6,
+    double maxSeconds = 60,
+    bool dismiss = false) =>
+    new(
+        key,
+        (uint)Math.Abs(key.GetHashCode()),
+        $"rule-{key}",
+        priority,
+        behavior,
+        dismiss ? WindowsNotificationChangeKind.Removed : WindowsNotificationChangeKind.Added,
+        dismiss,
+        maxSeconds,
+        new NotificationVisualConfig
+        {
+            Effect = "single_color_breathing",
+            ColorMode = NotificationColorMode.Custom,
+            Color = "#FFFFFF",
+            Brightness = 6,
+            Speed = 7,
+            DurationSeconds = displaySeconds
+        },
+        sourceUtc);
+
 var telegram = new NotificationRule
 {
     Id = "telegram",
@@ -56,6 +84,7 @@ var added = engine.Evaluate(Obs(WindowsNotificationChangeKind.Added));
 Require(added is not null && added.RuleId == "important-kost", "Higher-priority matching rule must win.");
 Require(added!.Display.ColorMode == NotificationColorMode.CustomPlusProfile, "custom_plus_profile visual policy changed.");
 Require(!added.Dismiss, "Added notification must create, not dismiss, an overlay intent.");
+Require(added.MaxDurationSeconds == important.MaxDurationSeconds, "Overlay intent must carry rule max duration for bounded scheduling.");
 
 var updated = engine.Evaluate(Obs(WindowsNotificationChangeKind.Updated, body: "updated"));
 Require(updated?.RuleId == "important-kost" && updated.ChangeKind == WindowsNotificationChangeKind.Updated,
@@ -178,4 +207,55 @@ catch (InvalidDataException)
 }
 Require(noIdentityRejected, "Draft builder must fail closed when no stable application identity exists.");
 
-Console.WriteLine("Windows notification rule engine + learning buffer + rule draft tests: PASS");
+var clock = DateTimeOffset.Parse("2026-08-25T13:00:00Z");
+var scheduler = new NotificationOverlayScheduler();
+var activeNormal = Intent("normal", NotificationPriority.Normal, NotificationBehavior.Pulse, clock, displaySeconds: 20);
+var firstDecision = scheduler.Apply(activeNormal, clock);
+Require(firstDecision?.Kind == NotificationOverlayDecisionKind.Show && scheduler.Active?.Intent.NotificationKey == "normal",
+    "First overlay must become active.");
+
+var lowPending = Intent("low", NotificationPriority.Low, NotificationBehavior.Pulse, clock.AddSeconds(1), displaySeconds: 20);
+Require(scheduler.Apply(lowPending, clock.AddSeconds(1)) is null && scheduler.Pending?.Intent.NotificationKey == "low",
+    "Lower-priority notification must wait in the single pending slot.");
+Require(scheduler.PendingCount == 1, "Notification queue must remain bounded to one pending overlay.");
+
+var high = Intent("high", NotificationPriority.High, NotificationBehavior.Pulse, clock.AddSeconds(2), displaySeconds: 2);
+var preempt = scheduler.Apply(high, clock.AddSeconds(2));
+Require(preempt?.Kind == NotificationOverlayDecisionKind.Replace && scheduler.Active?.Intent.NotificationKey == "high",
+    "Higher-priority overlay must preempt the active overlay.");
+Require(scheduler.Pending?.Intent.NotificationKey == "normal",
+    "Interrupted higher-priority candidate must beat a lower-priority pending overlay.");
+
+var resume = scheduler.Tick(clock.AddSeconds(5));
+Require(resume?.Kind == NotificationOverlayDecisionKind.Replace && scheduler.Active?.Intent.NotificationKey == "normal",
+    "Expired preempting pulse must resume still-valid pending overlay.");
+
+var normalUpdate = Intent("normal", NotificationPriority.Normal, NotificationBehavior.Pulse, clock.AddSeconds(6), displaySeconds: 10);
+var replaceSame = scheduler.Apply(normalUpdate, clock.AddSeconds(6));
+Require(replaceSame?.Kind == NotificationOverlayDecisionKind.Replace && replaceSame.Reason == "same_notification_updated",
+    "Same notification update must replace active overlay in place.");
+
+var dismissNormal = Intent("normal", NotificationPriority.Normal, NotificationBehavior.WhilePresent,
+    clock.AddSeconds(7), maxSeconds: 60, dismiss: true);
+var dismissed = scheduler.Apply(dismissNormal, clock.AddSeconds(7));
+Require(dismissed?.Kind == NotificationOverlayDecisionKind.Dismiss && scheduler.Active is null,
+    "Removing active persistent notification must dismiss its overlay.");
+
+var persistentScheduler = new NotificationOverlayScheduler();
+var persistent = Intent("persistent", NotificationPriority.Normal, NotificationBehavior.UntilAcknowledged,
+    clock, displaySeconds: 1, maxSeconds: 30);
+persistentScheduler.Apply(persistent, clock);
+Require(persistentScheduler.Tick(clock.AddSeconds(2)) is null,
+    "Until-acknowledged overlay must ignore short display duration and use bounded max duration.");
+var persistentTimeout = persistentScheduler.Tick(clock.AddSeconds(31));
+Require(persistentTimeout?.Kind == NotificationOverlayDecisionKind.Dismiss && persistentScheduler.Active is null,
+    "Persistent overlay must fail safe at max_duration_seconds.");
+
+var bounded = new NotificationOverlayScheduler();
+bounded.Apply(Intent("critical", NotificationPriority.Critical, NotificationBehavior.Pulse, clock, displaySeconds: 30), clock);
+bounded.Apply(Intent("low-a", NotificationPriority.Low, NotificationBehavior.Pulse, clock.AddSeconds(1), displaySeconds: 30), clock.AddSeconds(1));
+bounded.Apply(Intent("low-b", NotificationPriority.Low, NotificationBehavior.Pulse, clock.AddSeconds(2), displaySeconds: 30), clock.AddSeconds(2));
+Require(bounded.PendingCount == 1 && bounded.Pending?.Intent.NotificationKey == "low-b",
+    "Equal-priority pending overlays must coalesce to the newest sample without growing a queue.");
+
+Console.WriteLine("Windows notification engine + Learning Lab models + bounded overlay scheduler tests: PASS");
