@@ -10,6 +10,10 @@ internal sealed class NotificationLearningLabForm : Form
     private readonly BindingList<LearningRow> _rows = [];
     private readonly DataGridView _grid = new();
     private readonly Label _status = new();
+    private readonly Label _activeOverlay = new();
+    private readonly Label _pendingOverlay = new();
+    private readonly Label _schedulerDecision = new();
+    private readonly Label _schedulerClock = new();
     private readonly TextBox _appName = ReadOnlyBox();
     private readonly TextBox _pfn = ReadOnlyBox();
     private readonly TextBox _aumid = ReadOnlyBox();
@@ -20,15 +24,19 @@ internal sealed class NotificationLearningLabForm : Form
     private readonly TextBox _rulePreview = ReadOnlyBox(multiline: true);
     private readonly CheckBox _includeTitle = new();
     private readonly Button _copyDraft = new();
+    private readonly System.Windows.Forms.Timer _schedulerTimer = new() { Interval = 250 };
+
     private NotificationRulesConfig _rulesConfig = NotificationRulesConfig.CreateDefault();
     private NotificationRuleEngine _ruleEngine = new([]);
     private NotificationLearningBuffer _buffer = new(50);
+    private NotificationOverlayScheduler _scheduler = new();
+    private string _lastSchedulerDecision = "idle";
 
     public NotificationLearningLabForm()
     {
         Text = "VOROTEX K15 Notification Learning Lab";
-        MinimumSize = new Size(1040, 720);
-        Size = new Size(1320, 860);
+        MinimumSize = new Size(1080, 760);
+        Size = new Size(1380, 900);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(15, 17, 21);
         ForeColor = Color.FromArgb(235, 240, 248);
@@ -40,15 +48,26 @@ internal sealed class NotificationLearningLabForm : Form
         _poller.StatusChanged += value => Ui(() => _status.Text = value);
         _poller.NotificationChanged += observation => Ui(() => Observe(observation));
 
+        _schedulerTimer.Tick += (_, _) =>
+        {
+            var decision = _scheduler.Tick(DateTimeOffset.UtcNow);
+            if (decision is not null)
+                _lastSchedulerDecision = decision.Reason;
+            UpdateSchedulerSimulation();
+        };
+        _schedulerTimer.Start();
+
         Shown += async (_, _) =>
         {
             try
             {
                 var started = await _poller.StartAsync();
                 if (!started)
+                {
                     MessageBox.Show(this,
                         "Windows не дал доступ к истории уведомлений. Разреши Notification access и перезапусти Learning Lab.",
                         "Notification Learning Lab", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
             catch (Exception ex)
             {
@@ -57,7 +76,11 @@ internal sealed class NotificationLearningLabForm : Form
             }
         };
 
-        FormClosed += async (_, _) => await _poller.DisposeAsync();
+        FormClosed += async (_, _) =>
+        {
+            _schedulerTimer.Stop();
+            await _poller.DisposeAsync();
+        };
     }
 
     private void BuildUi()
@@ -66,20 +89,22 @@ internal sealed class NotificationLearningLabForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 5,
             Padding = new Padding(14),
             BackColor = BackColor
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         Controls.Add(root);
 
         root.Controls.Add(BuildHeader(), 0, 0);
-        root.Controls.Add(BuildGrid(), 0, 1);
-        root.Controls.Add(BuildDetails(), 0, 2);
-        root.Controls.Add(BuildFooter(), 0, 3);
+        root.Controls.Add(BuildSchedulerPanel(), 0, 1);
+        root.Controls.Add(BuildGrid(), 0, 2);
+        root.Controls.Add(BuildDetails(), 0, 3);
+        root.Controls.Add(BuildFooter(), 0, 4);
     }
 
     private Control BuildHeader()
@@ -94,21 +119,85 @@ internal sealed class NotificationLearningLabForm : Form
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        var text = new Label
+        panel.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "Windows Notification Learning Lab\nЖивые toast-данные хранятся только в RAM. Выбери уведомление, чтобы получить безопасную TOML-заготовку правила.",
+            Text = "Windows Notification Learning Lab\nЖивые toast-данные хранятся только в RAM. M3b показывает, как bounded scheduler разрулил бы overlay-очередь.",
             Font = new Font(Font, FontStyle.Bold),
             ForeColor = ForeColor,
             Margin = new Padding(0, 0, 12, 0)
-        };
-        panel.Controls.Add(text, 0, 0);
+        }, 0, 0);
 
         var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
         buttons.Controls.Add(Button("Reload rules", (_, _) => ReloadRules(showMessage: true)));
         buttons.Controls.Add(Button("Open notifications.toml", (_, _) => OpenRulesFile()));
         buttons.Controls.Add(Button("Clear RAM", (_, _) => ClearLearningBuffer()));
         panel.Controls.Add(buttons, 1, 0);
+        return panel;
+    }
+
+    private Control BuildSchedulerPanel()
+    {
+        var outer = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = 2,
+            AutoSize = true,
+            Padding = new Padding(10),
+            Margin = new Padding(0, 0, 0, 10),
+            BackColor = Color.FromArgb(23, 26, 33)
+        };
+        outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
+        outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
+        outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 22));
+        outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 10));
+
+        outer.Controls.Add(SchedulerCell("ACTIVE", _activeOverlay, Color.FromArgb(150, 210, 255)), 0, 0);
+        outer.Controls.Add(SchedulerCell("PENDING", _pendingOverlay, Color.FromArgb(245, 190, 100)), 1, 0);
+        outer.Controls.Add(SchedulerCell("LAST DECISION", _schedulerDecision, Color.FromArgb(174, 220, 174)), 2, 0);
+        outer.Controls.Add(SchedulerCell("CLOCK", _schedulerClock, Color.FromArgb(160, 170, 190)), 3, 0);
+
+        var help = new Label
+        {
+            AutoSize = true,
+            Text = "Simulation only: one ACTIVE + max one PENDING. Higher priority preempts; expiry/removal/ack may promote pending.",
+            ForeColor = Color.FromArgb(150, 160, 180),
+            Margin = new Padding(4, 7, 8, 0)
+        };
+        outer.Controls.Add(help, 0, 1);
+        outer.SetColumnSpan(help, 2);
+
+        var actions = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        actions.Controls.Add(Button("Acknowledge ACTIVE", (_, _) => AcknowledgeActive()));
+        actions.Controls.Add(Button("Clear scheduler", (_, _) => ClearScheduler()));
+        outer.Controls.Add(actions, 2, 1);
+        outer.SetColumnSpan(actions, 2);
+        return outer;
+    }
+
+    private static Control SchedulerCell(string caption, Label value, Color color)
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            AutoSize = true,
+            Margin = new Padding(4)
+        };
+        panel.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Text = caption,
+            ForeColor = Color.FromArgb(130, 142, 165),
+            Font = new Font("Segoe UI", 8F, FontStyle.Bold)
+        }, 0, 0);
+        value.AutoSize = true;
+        value.Text = "—";
+        value.ForeColor = color;
+        value.Font = new Font("Consolas", 9F, FontStyle.Bold);
+        panel.Controls.Add(value, 0, 1);
         return panel;
     }
 
@@ -149,7 +238,7 @@ internal sealed class NotificationLearningLabForm : Form
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
-            SplitterDistance = 650,
+            SplitterDistance = 680,
             BackColor = BackColor,
             Margin = new Padding(0, 10, 0, 10)
         };
@@ -233,7 +322,7 @@ internal sealed class NotificationLearningLabForm : Form
         panel.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "M2 is observation-only · no keyboard rendering",
+            Text = "M3b simulation-only · no keyboard rendering",
             ForeColor = Color.FromArgb(120, 132, 150)
         }, 1, 0);
         return panel;
@@ -242,7 +331,19 @@ internal sealed class NotificationLearningLabForm : Form
     private void Observe(WindowsNotificationObservation observation)
     {
         _buffer.Observe(observation);
+        var intent = _ruleEngine.Evaluate(observation);
+        if (intent is not null)
+        {
+            var decision = _scheduler.Apply(intent, DateTimeOffset.UtcNow);
+            if (decision is not null)
+                _lastSchedulerDecision = decision.Reason;
+            else if (_scheduler.Pending is not null &&
+                     string.Equals(_scheduler.Pending.Intent.NotificationKey, intent.NotificationKey, StringComparison.Ordinal))
+                _lastSchedulerDecision = "queued_or_coalesced_pending";
+        }
+
         RefreshRows(observation.Key);
+        UpdateSchedulerSimulation();
     }
 
     private void RefreshRows(string? selectKey = null)
@@ -273,6 +374,48 @@ internal sealed class NotificationLearningLabForm : Form
             }
         }
         ShowSelected();
+    }
+
+    private void UpdateSchedulerSimulation()
+    {
+        var now = DateTimeOffset.UtcNow;
+        _activeOverlay.Text = DescribeScheduled(_scheduler.Active, now);
+        _pendingOverlay.Text = DescribeScheduled(_scheduler.Pending, now);
+        _schedulerDecision.Text = _lastSchedulerDecision;
+        _schedulerClock.Text = DateTimeOffset.Now.ToString("HH:mm:ss");
+    }
+
+    private static string DescribeScheduled(ScheduledNotificationOverlay? overlay, DateTimeOffset nowUtc)
+    {
+        if (overlay is null)
+            return "—";
+
+        var left = overlay.ExpiresUtc - nowUtc;
+        if (left < TimeSpan.Zero)
+            left = TimeSpan.Zero;
+        return $"{overlay.Intent.RuleId} · {overlay.Intent.Priority} · {overlay.Intent.Behavior} · {left.TotalSeconds:0.0}s";
+    }
+
+    private void AcknowledgeActive()
+    {
+        var active = _scheduler.Active;
+        if (active is null)
+        {
+            _lastSchedulerDecision = "ack_ignored_no_active";
+            UpdateSchedulerSimulation();
+            return;
+        }
+
+        var decision = _scheduler.Acknowledge(active.Intent.NotificationKey, DateTimeOffset.UtcNow);
+        _lastSchedulerDecision = decision?.Reason ?? "ack_no_change";
+        UpdateSchedulerSimulation();
+    }
+
+    private void ClearScheduler()
+    {
+        var decision = _scheduler.Clear(DateTimeOffset.UtcNow, "learning_lab_clear");
+        _lastSchedulerDecision = decision?.Reason ?? "learning_lab_clear_no_active";
+        UpdateSchedulerSimulation();
     }
 
     private void ShowSelected()
@@ -323,8 +466,11 @@ internal sealed class NotificationLearningLabForm : Form
         _rulesConfig = NotificationRulesConfig.LoadOrCreate();
         _ruleEngine = new NotificationRuleEngine(_rulesConfig.Enabled ? _rulesConfig.Rules : []);
         _buffer = new NotificationLearningBuffer(_rulesConfig.LearningBufferSize);
+        _scheduler = new NotificationOverlayScheduler();
+        _lastSchedulerDecision = "rules_reloaded";
         _rows.Clear();
         ClearDetails();
+        UpdateSchedulerSimulation();
 
         var message = _rulesConfig.LoadWarning ??
             $"Rules loaded: {_rulesConfig.Rules.Count} · learning buffer: {_rulesConfig.LearningBufferSize}";
@@ -336,9 +482,12 @@ internal sealed class NotificationLearningLabForm : Form
     private void ClearLearningBuffer()
     {
         _buffer.Clear();
+        _scheduler = new NotificationOverlayScheduler();
+        _lastSchedulerDecision = "ram_cleared";
         _rows.Clear();
         ClearDetails();
-        _status.Text = "Learning RAM buffer cleared";
+        UpdateSchedulerSimulation();
+        _status.Text = "Learning RAM buffer + scheduler simulation cleared";
     }
 
     private void ClearDetails()
