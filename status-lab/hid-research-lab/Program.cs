@@ -6,6 +6,8 @@ internal static class Program
     private static void Main()
     {
         ApplicationConfiguration.Initialize();
-        Application.Run(new HidResearchForm());
+        var form = new HidResearchForm();
+        OemIdentityGateTraceUi.Attach(form);
+        Application.Run(form);
     }
 }
