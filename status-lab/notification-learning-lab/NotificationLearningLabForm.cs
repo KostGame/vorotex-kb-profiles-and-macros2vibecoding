@@ -296,11 +296,16 @@ internal sealed class NotificationLearningLabForm : Form
         _rulePreview.Font = new Font("Consolas", 9F);
         _rulePreview.ScrollBars = ScrollBars.Both;
         draft.Controls.Add(_rulePreview, 0, 2);
-        _copyDraft.Text = "Copy TOML rule draft";
+
+        var draftActions = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        _copyDraft.Text = "Quick copy draft";
         _copyDraft.AutoSize = true;
         _copyDraft.Enabled = false;
         _copyDraft.Click += (_, _) => CopyRuleDraft();
-        draft.Controls.Add(_copyDraft, 0, 3);
+        draftActions.Controls.Add(_copyDraft);
+        draftActions.Controls.Add(Button("Design rule…", (_, _) => OpenRuleDesigner()));
+        draft.Controls.Add(draftActions, 0, 3);
+
         split.Panel2.Controls.Add(draft);
         return split;
     }
@@ -322,7 +327,7 @@ internal sealed class NotificationLearningLabForm : Form
         panel.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = "M3b simulation-only · no keyboard rendering",
+            Text = "M4a observation/design-only · no keyboard rendering",
             ForeColor = Color.FromArgb(120, 132, 150)
         }, 1, 0);
         return panel;
@@ -459,6 +464,19 @@ internal sealed class NotificationLearningLabForm : Form
         _status.Text = _includeTitle.Checked
             ? "Rule draft copied · title condition included"
             : "Rule draft copied · application identity only";
+    }
+
+    private void OpenRuleDesigner()
+    {
+        var selected = SelectedObservation();
+        if (selected is null || !HasIdentity(selected))
+        {
+            _status.Text = "Select a notification with a stable application identity first";
+            return;
+        }
+
+        using var designer = new NotificationRuleDesignerForm(selected, _includeTitle.Checked);
+        designer.ShowDialog(this);
     }
 
     private void ReloadRules(bool showMessage)
