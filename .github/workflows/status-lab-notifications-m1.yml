@@ -13,6 +13,7 @@ on:
       - 'status-lab/notification-learning-lab/**'
       - 'status-lab/notifications/**'
       - 'status-lab/tests/NotificationRulesSmoke*'
+      - 'status-lab/tests/NotificationRuleDesignerSmoke*'
       - 'status-lab/AssemblyInfo.cs'
       - '.github/workflows/status-lab-notifications-m1.yml'
   workflow_dispatch:
@@ -28,6 +29,9 @@ jobs:
 
       - name: Notification rule engine, learning and scheduler tests
         run: dotnet run --project status-lab/tests/NotificationRulesSmoke.csproj -c Release
+
+      - name: Notification Rule Designer draft tests
+        run: dotnet run --project status-lab/tests/NotificationRuleDesignerSmoke.csproj -c Release
 
       - name: Build Status Lab with notification observation model
         run: dotnet build status-lab/Vorotex.K15.StatusLab.csproj -c Release
@@ -79,7 +83,10 @@ jobs:
           if ($lab -notmatch 'NotificationLearningBuffer' -or $lab -notmatch 'RAM only|RAM-only') {
             throw 'Learning Lab must keep its bounded in-memory learning boundary explicit.'
           }
-          Write-Output 'Notification Learning Lab privacy gate: PASS'
+          if ($lab -notmatch 'NotificationRuleDesignerForm' -or $lab -notmatch 'Copy TOML') {
+            throw 'Learning Lab must expose the explicit draft-only Rule Designer flow.'
+          }
+          Write-Output 'Notification Learning Lab privacy + Rule Designer gate: PASS'
 
       - name: Publish Notification Learning Lab
         run: dotnet publish status-lab/notification-learning-lab/Vorotex.K15.NotificationLearningLab.csproj -c Release -r win-x64 --self-contained true -o publish-notification-learning-lab
