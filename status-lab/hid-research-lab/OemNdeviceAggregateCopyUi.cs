@@ -61,10 +61,11 @@ internal static class OemNdeviceAggregateCopyUi
 
         var status = form.Controls.OfType<Label>().OrderByDescending(x => x.Top).FirstOrDefault();
         button.Enabled = false;
-        if (status is not null) status.Text = "Tracing local Ndevice aggregate and bounded copy helpers...";
+        if (status is not null) status.Text = "Tracing local Ndevice aggregate, copy helpers and +0x3EC tail...";
         try
         {
             var report = await Task.Run(() => OemNdeviceAggregateCopyAnalyzer.Analyze(exeA.Text, exeB.Text));
+            var tailReport = await Task.Run(() => OemNdeviceAggregateCopyAnalyzer.AnalyzeMember3EcTail(exeA.Text, exeB.Text));
             var root = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Vorotex.K15.StatusLab",
@@ -80,13 +81,22 @@ internal static class OemNdeviceAggregateCopyUi
                 Path.Combine(root, "oem-ndevice-aggregate-copy.txt"),
                 OemNdeviceAggregateCopyAnalyzer.ToText(report),
                 new UTF8Encoding(false));
+            File.WriteAllText(
+                Path.Combine(root, "oem-ndevice-member3ec-tail.json"),
+                JsonSerializer.Serialize(tailReport, new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+            File.WriteAllText(
+                Path.Combine(root, "oem-ndevice-member3ec-tail.txt"),
+                OemNdeviceAggregateCopyAnalyzer.Member3EcTailToText(tailReport),
+                new UTF8Encoding(false));
 
-            if (status is not null) status.Text = $"NDEVICE AGGREGATE VERDICT: {report.Verdict}\n{root}";
+            if (status is not null)
+                status.Text = $"NDEVICE AGGREGATE: {report.Verdict}; +3EC TAIL: {tailReport.Verdict}\n{root}";
             Process.Start(new ProcessStartInfo("explorer.exe", root) { UseShellExecute = true });
         }
         catch (Exception ex)
         {
-            if (status is not null) status.Text = "Ndevice aggregate trace failed: " + ex.Message;
+            if (status is not null) status.Text = "Ndevice aggregate/tail trace failed: " + ex.Message;
             MessageBox.Show(ex.Message, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         finally
