@@ -34,11 +34,14 @@ foreach ($required in @(
     'oem-keyboard-sleep-report-trace.txt',
     'Run keyboard SleepTime report trace',
     'AnalyzeKeyboardSleepReportRecovered',
-    'RecoverExactPe32SetFeatureIndexes',
-    'BinaryPrimitives.ReadUInt32LittleEndian',
-    'pe.Bytes[offset] != 0xFF',
-    'pe.Bytes[offset + 1] != 0x15',
-    'exact PE32 direct-IAT HidD_SetFeature'
+    'RecoverExactPe32SetFeatureRvas',
+    'textSection.RawPointer',
+    'textSection.RawSize',
+    'SequenceEqual(needle)',
+    'BinaryPrimitives.WriteUInt32LittleEndian',
+    'TraceRawPe32SetFeatureCall',
+    'push 0x29',
+    'exact PE32 direct-IAT'
 )) {
     if ($all -notmatch [regex]::Escape($required)) { throw "Missing required sleep-report token: $required" }
 }
@@ -72,8 +75,46 @@ if ($traceText -notmatch 'Only keyboard-specific KBSpecialFuncSet/SleepTime anch
 if ($traceText -notmatch 'PROVEN requires an explicit SleepTime-derived value') {
     throw 'PROVEN criterion is not explicit enough.'
 }
+if ($recoveryText -notmatch 'independently of linear decoding|independently of linear instruction decoding') {
+    throw 'Raw SetFeature recovery must not depend on the linear Iced instruction list.'
+}
 if ($recoveryText -notmatch 'PE32 OEM binaries') {
     throw 'Raw transport recovery must remain explicitly bounded to the proven PE32 OEM shape.'
 }
+
+# Public bounded regression fixtures copied from previously proven Vendor Static
+# call-site windows. These are code bytes only, not private device data.
+function Convert-HexBytes([string]$Hex) {
+    if (($Hex.Length % 2) -ne 0) { throw 'Odd hex fixture length.' }
+    $bytes = New-Object byte[] ($Hex.Length / 2)
+    for ($i = 0; $i -lt $bytes.Length; $i++) {
+        $bytes[$i] = [Convert]::ToByte($Hex.Substring($i * 2, 2), 16)
+    }
+    return $bytes
+}
+
+function Assert-SetFeatureFixture([string]$Hex, [uint32]$IatVa) {
+    $bytes = Convert-HexBytes $Hex
+    $iat = [BitConverter]::GetBytes($IatVa)
+    $found = $false
+    for ($i = 0; $i -le $bytes.Length - 6; $i++) {
+        if ($bytes[$i] -ne 0xFF -or $bytes[$i + 1] -ne 0x15) { continue }
+        if ($bytes[$i + 2] -eq $iat[0] -and $bytes[$i + 3] -eq $iat[1] -and $bytes[$i + 4] -eq $iat[2] -and $bytes[$i + 5] -eq $iat[3]) {
+            if ($i -lt 11) { throw 'Fixture direct-IAT call lacks the bounded 11-byte ABI prefix.' }
+            $p = $i - 11
+            if ($bytes[$p] -ne 0x6A -or $bytes[$p + 1] -ne 0x29 -or
+                $bytes[$p + 2] -ne 0x8D -or $bytes[$p + 3] -ne 0x85 -or
+                $bytes[$p + 8] -ne 0x50 -or $bytes[$p + 9] -ne 0xFF -or $bytes[$p + 10] -ne 0x36) {
+                throw 'Fixture direct-IAT call does not match the proven 41-byte SetFeature ABI prefix.'
+            }
+            $found = $true
+            break
+        }
+    }
+    if (-not $found) { throw ('Fixture did not recover FF 15 [{0:X8}]' -f $IatVa) }
+}
+
+Assert-SetFeatureFixture '6A298D85D8FDFFFF50FF36FF15B0364F00' 0x004F36B0
+Assert-SetFeatureFixture '6A298D85D8FDFFFF50FF36FF15ACE64E00' 0x004EE6AC
 
 Write-Host 'OEM keyboard SleepTime report read-only safety smoke: PASS'
