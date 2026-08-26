@@ -4,19 +4,23 @@ $root = Split-Path -Parent $PSScriptRoot
 $trace = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportTrace.cs'
 $recovery = Join-Path $root 'hid-research-lab\OemKeyboardSleepTransportRecovery.cs'
 $construction = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportConstructionTrace.cs'
+$payloadSeed = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportPayloadSeedTrace.cs'
 $ui = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportUi.cs'
 $constructionUi = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportConstructionUi.cs'
+$payloadSeedUi = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportPayloadSeedUi.cs'
 
-foreach ($path in @($trace, $recovery, $construction, $ui, $constructionUi)) {
+foreach ($path in @($trace, $recovery, $construction, $payloadSeed, $ui, $constructionUi, $payloadSeedUi)) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing expected file: $path" }
 }
 
 $traceText = Get-Content -LiteralPath $trace -Raw
 $recoveryText = Get-Content -LiteralPath $recovery -Raw
 $constructionText = Get-Content -LiteralPath $construction -Raw
+$payloadSeedText = Get-Content -LiteralPath $payloadSeed -Raw
 $uiText = Get-Content -LiteralPath $ui -Raw
 $constructionUiText = Get-Content -LiteralPath $constructionUi -Raw
-$all = $traceText + "`n" + $recoveryText + "`n" + $constructionText + "`n" + $uiText + "`n" + $constructionUiText
+$payloadSeedUiText = Get-Content -LiteralPath $payloadSeedUi -Raw
+$all = $traceText + "`n" + $recoveryText + "`n" + $constructionText + "`n" + $payloadSeedText + "`n" + $uiText + "`n" + $constructionUiText + "`n" + $payloadSeedUiText
 
 foreach ($required in @(
     'KEYBOARD_SLEEP_SETFEATURE_REPORT_PROVEN',
@@ -55,7 +59,15 @@ foreach ($required in @(
     'only retains EBP-relative references inside the proven 41-byte report range',
     'oem-keyboard-sleep-report-construction.json',
     'oem-keyboard-sleep-report-construction.txt',
-    'Run SleepTime report construction slice'
+    'Run SleepTime report construction slice',
+    'REPORT_PLUS1_PAYLOAD_CALLS_CORRESPONDING',
+    'REPORT_PLUS1_WINDOWS_CORRESPONDING',
+    'REPORT_PLUS1_PAYLOAD_UNRESOLVED',
+    'AnalyzeKeyboardSleepReportPayloadSeed',
+    'report+1 address anchors are construction evidence only',
+    'oem-keyboard-sleep-report-payload-seed.json',
+    'oem-keyboard-sleep-report-payload-seed.txt',
+    'Run report+1 payload helper trace'
 )) {
     if ($all -notmatch [regex]::Escape($required)) { throw "Missing required sleep-report token: $required" }
 }
@@ -100,6 +112,12 @@ if ($constructionText -notmatch 'matching write or helper is not SleepTime prove
 }
 if ($constructionText -notmatch 'DecodeOneRawInstruction') {
     throw 'Construction slice must decode from each candidate raw RVA rather than depend on the global linear sweep.'
+}
+if ($payloadSeedText -notmatch 'helper receiving report\+1 is not automatically a SleepTime helper') {
+    throw 'Report+1 helper correspondence must not be promoted to SleepTime provenance.'
+}
+if ($payloadSeedText -notmatch 'Register aliasing is bounded locally') {
+    throw 'Report+1 payload trace must keep alias tracking explicitly bounded.'
 }
 
 # Public bounded regression fixtures copied from previously proven Vendor Static
