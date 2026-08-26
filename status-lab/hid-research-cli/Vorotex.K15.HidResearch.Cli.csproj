@@ -7,7 +7,7 @@
     <AssemblyName>Vorotex.K15.HidResearch.Cli</AssemblyName>
     <RootNamespace>Vorotex.K15.HidResearch.Cli</RootNamespace>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>false</SelfContained>
+    <SelfContained>true</SelfContained>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\hid-research-lab\Vorotex.K15.HidResearchLab.csproj" />
