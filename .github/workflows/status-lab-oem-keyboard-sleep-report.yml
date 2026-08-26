@@ -5,6 +5,7 @@ on:
     paths:
       - 'status-lab/hid-research-lab/OemKeyboardSleepReport*.cs'
       - 'status-lab/tests/oem-keyboard-sleep-report-smoke.ps1'
+      - 'status-lab/tests/oem-keyboard-sleep-payload-helper-smoke.ps1'
       - '.github/workflows/status-lab-oem-keyboard-sleep-report.yml'
   push:
     branches:
@@ -12,6 +13,7 @@ on:
     paths:
       - 'status-lab/hid-research-lab/OemKeyboardSleepReport*.cs'
       - 'status-lab/tests/oem-keyboard-sleep-report-smoke.ps1'
+      - 'status-lab/tests/oem-keyboard-sleep-payload-helper-smoke.ps1'
       - '.github/workflows/status-lab-oem-keyboard-sleep-report.yml'
 
 permissions:
@@ -32,6 +34,10 @@ jobs:
       - name: OEM Keyboard Sleep Report read-only safety smoke
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/oem-keyboard-sleep-report-smoke.ps1
+
+      - name: OEM Keyboard Sleep Payload Helper read-only safety smoke
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/oem-keyboard-sleep-payload-helper-smoke.ps1
 
       - name: Restore HID Research Lab
         run: dotnet restore status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj
