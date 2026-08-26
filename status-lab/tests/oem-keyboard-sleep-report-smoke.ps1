@@ -3,16 +3,20 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $trace = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportTrace.cs'
 $recovery = Join-Path $root 'hid-research-lab\OemKeyboardSleepTransportRecovery.cs'
+$construction = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportConstructionTrace.cs'
 $ui = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportUi.cs'
+$constructionUi = Join-Path $root 'hid-research-lab\OemKeyboardSleepReportConstructionUi.cs'
 
-foreach ($path in @($trace, $recovery, $ui)) {
+foreach ($path in @($trace, $recovery, $construction, $ui, $constructionUi)) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing expected file: $path" }
 }
 
 $traceText = Get-Content -LiteralPath $trace -Raw
 $recoveryText = Get-Content -LiteralPath $recovery -Raw
+$constructionText = Get-Content -LiteralPath $construction -Raw
 $uiText = Get-Content -LiteralPath $ui -Raw
-$all = $traceText + "`n" + $recoveryText + "`n" + $uiText
+$constructionUiText = Get-Content -LiteralPath $constructionUi -Raw
+$all = $traceText + "`n" + $recoveryText + "`n" + $constructionText + "`n" + $uiText + "`n" + $constructionUiText
 
 foreach ($required in @(
     'KEYBOARD_SLEEP_SETFEATURE_REPORT_PROVEN',
@@ -41,7 +45,17 @@ foreach ($required in @(
     'BinaryPrimitives.WriteUInt32LittleEndian',
     'TraceRawPe32SetFeatureCall',
     'push 0x29',
-    'exact PE32 direct-IAT'
+    'exact PE32 direct-IAT',
+    'REPORT_BUFFER_WRITES_CORRESPONDING',
+    'REPORT_CONSTRUCTION_HELPER_CORRESPONDING',
+    'REPORT_CONSTRUCTION_REFERENCES_CORRESPONDING',
+    'REPORT_CONSTRUCTION_SLICE_UNRESOLVED',
+    'AnalyzeKeyboardSleepReportConstruction',
+    '0x2400',
+    'only retains EBP-relative references inside the proven 41-byte report range',
+    'oem-keyboard-sleep-report-construction.json',
+    'oem-keyboard-sleep-report-construction.txt',
+    'Run SleepTime report construction slice'
 )) {
     if ($all -notmatch [regex]::Escape($required)) { throw "Missing required sleep-report token: $required" }
 }
@@ -80,6 +94,12 @@ if ($recoveryText -notmatch 'independently of linear decoding|independently of l
 }
 if ($recoveryText -notmatch 'PE32 OEM binaries') {
     throw 'Raw transport recovery must remain explicitly bounded to the proven PE32 OEM shape.'
+}
+if ($constructionText -notmatch 'matching write or helper is not SleepTime provenance') {
+    throw 'Construction-slice correspondence must not be promoted to SleepTime provenance.'
+}
+if ($constructionText -notmatch 'DecodeOneRawInstruction') {
+    throw 'Construction slice must decode from each candidate raw RVA rather than depend on the global linear sweep.'
 }
 
 # Public bounded regression fixtures copied from previously proven Vendor Static
