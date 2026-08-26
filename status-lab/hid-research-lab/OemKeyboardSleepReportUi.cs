@@ -66,7 +66,7 @@ internal static class OemKeyboardSleepReportUi
         if (status is not null) status.Text = "Tracing keyboard SleepTime handlers and static SetFeature report construction...";
         try
         {
-            var report = await Task.Run(() => OemNdeviceAggregateCopyAnalyzer.AnalyzeKeyboardSleepReport(exeA.Text, exeB.Text));
+            var report = await Task.Run(() => OemNdeviceAggregateCopyAnalyzer.AnalyzeKeyboardSleepReportRecovered(exeA.Text, exeB.Text));
             var root = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Vorotex.K15.StatusLab",
