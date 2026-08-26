@@ -1,0 +1,47 @@
+name: Status Lab HID Research CLI
+
+on:
+  pull_request:
+    paths:
+      - 'status-lab/hid-research-cli/**'
+      - 'status-lab/hid-research-lab/HidResearchHeadless.cs'
+      - 'status-lab/hid-research-lab/OemKeyboardSleepReport*.cs'
+      - 'status-lab/tests/hid-research-cli-smoke.ps1'
+      - '.github/workflows/status-lab-hid-research-cli.yml'
+  push:
+    branches:
+      - 'agent/**'
+    paths:
+      - 'status-lab/hid-research-cli/**'
+      - 'status-lab/hid-research-lab/HidResearchHeadless.cs'
+      - 'status-lab/hid-research-lab/OemKeyboardSleepReport*.cs'
+      - 'status-lab/tests/hid-research-cli-smoke.ps1'
+      - '.github/workflows/status-lab-hid-research-cli.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  headless-research-cli:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: CLI safety and architecture smoke
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/hid-research-cli-smoke.ps1
+
+      - name: Restore headless CLI
+        run: dotnet restore status-lab/hid-research-cli/Vorotex.K15.HidResearch.Cli.csproj
+
+      - name: Build headless CLI
+        run: dotnet build status-lab/hid-research-cli/Vorotex.K15.HidResearch.Cli.csproj -c Release --no-restore
+
+      - name: List CLI modes
+        run: dotnet run --project status-lab/hid-research-cli/Vorotex.K15.HidResearch.Cli.csproj -c Release --no-build -- --list-modes
