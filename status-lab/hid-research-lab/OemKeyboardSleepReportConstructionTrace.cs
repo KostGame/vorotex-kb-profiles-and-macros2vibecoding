@@ -110,7 +110,8 @@ internal static partial class OemNdeviceAggregateCopyAnalyzer
             [
                 "This stage proves report-construction structure only. A matching write or helper is not SleepTime provenance by itself.",
                 "Candidates are accepted from exact one-instruction decodes anchored at each raw .text RVA, then cross-correlated by position relative to the already-proven SetFeature call.",
-                "The scan is bounded to 0x2400 bytes before the exact SetFeature call and only retains EBP-relative references inside the proven 41-byte report range.",
+                "The scan is bounded to 0x2400 bytes before and 0x80 bytes after the exact SetFeature call and only retains EBP-relative references inside the proven 41-byte report range.",
+                "Post-call reads/comparisons are diagnostic field-semantics evidence only; they cannot prove how the field was constructed.",
                 "No OEM code is executed and no HID/device handle is opened."
             ]);
     }
@@ -164,9 +165,10 @@ internal static partial class OemNdeviceAggregateCopyAnalyzer
         var baseDisp = call.StackBufferBaseDisplacement!.Value;
         var startRva = call.CallRva > 0x2400 ? call.CallRva - 0x2400u : pe.TextStart;
         startRva = Math.Max(startRva, pe.TextStart);
+        var endRva = Math.Min(pe.TextEnd, call.CallRva + 0x80u);
         var refs = new List<OemSleepReportBufferReference>();
 
-        for (var rva = startRva; rva < call.CallRva; rva++)
+        for (var rva = startRva; rva < endRva; rva++)
         {
             var item = DecodeOneRawInstruction(pe, rva);
             if (item is null) continue;
@@ -202,7 +204,7 @@ internal static partial class OemNdeviceAggregateCopyAnalyzer
             .ToList();
 
         var helpers = refs
-            .Where(x => x.Access == "address" && x.ReportOffset == 0)
+            .Where(x => x.Rva < call.CallRva && x.Access == "address" && x.ReportOffset == 0)
             .Select(x => TraceConstructionHelperAfterLea(pe, x, call.CallRva))
             .Where(x => x is not null)
             .Cast<OemSleepReportHelperCandidate>()
@@ -214,8 +216,8 @@ internal static partial class OemNdeviceAggregateCopyAnalyzer
         var fp = string.Join('|', refs.Select(ConstructionReferenceKey));
         var notes = new List<string>();
         if (refs.Count == 0) notes.Add("No EBP-relative references inside the proven 41-byte report range were recovered in the bounded raw-code slice.");
-        if (refs.Count > 0 && !refs.Any(x => x.Access == "write")) notes.Add("Report-buffer references were recovered, but no direct write into the buffer was conservatively identified yet.");
-        if (helpers.Length == 0) notes.Add("No bounded helper call receiving the report-buffer base address was recovered from an address-reference candidate.");
+        if (refs.Count > 0 && !refs.Any(x => x.Rva < call.CallRva && x.Access == "write")) notes.Add("Report-buffer references were recovered, but no direct pre-SetFeature write into the buffer was conservatively identified yet.");
+        if (helpers.Length == 0) notes.Add("No bounded helper call receiving the report-buffer base address was recovered from a pre-SetFeature address-reference candidate.");
 
         return new OemSleepReportConstructionSide(
             Path.GetFileName(exe),
@@ -249,6 +251,8 @@ internal static partial class OemNdeviceAggregateCopyAnalyzer
             if (ins.Op1Kind == OpKind.Memory) return ("memory", "memory");
             return ("unresolved", "?");
         }
+        if (TryInstructionImmediate(ins, 1, out var comparedImmediate))
+            return ("compare-immediate", $"0x{comparedImmediate:X}");
         if (ins.Op0Kind == OpKind.Register) return ("register", Normalize(ins.Op0Register).ToString());
         return ("unresolved", "?");
     }
