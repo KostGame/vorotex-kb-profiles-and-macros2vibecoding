@@ -20,6 +20,9 @@ Thumbs.db
 artifacts/
 runtime/
 .local/
+.research-local/
+**/.research-local/
+status-lab/hid-research-cli/local/
 **/evidence/
 **/original/
 **/rollback/
