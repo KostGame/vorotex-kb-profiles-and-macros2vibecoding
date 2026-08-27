@@ -3,7 +3,9 @@ name: Status Lab HID Research CLI
 on:
   pull_request:
     paths:
+      - 'status-lab/Vorotex.K15.StatusLab.csproj'
       - 'status-lab/hid-research-cli/**'
+      - 'status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj'
       - 'status-lab/hid-research-lab/HidResearchHeadless.cs'
       - 'status-lab/hid-research-lab/OemKeyboardSleepReport*.cs'
       - 'status-lab/tests/hid-research-cli-smoke.ps1'
@@ -12,7 +14,9 @@ on:
     branches:
       - 'agent/**'
     paths:
+      - 'status-lab/Vorotex.K15.StatusLab.csproj'
       - 'status-lab/hid-research-cli/**'
+      - 'status-lab/hid-research-lab/Vorotex.K15.HidResearchLab.csproj'
       - 'status-lab/hid-research-lab/HidResearchHeadless.cs'
       - 'status-lab/hid-research-lab/OemKeyboardSleepReport*.cs'
       - 'status-lab/tests/hid-research-cli-smoke.ps1'
