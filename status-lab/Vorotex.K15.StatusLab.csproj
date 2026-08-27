@@ -20,6 +20,7 @@
     <Compile Remove="vendor-static-lab\**\*.cs" />
     <Compile Remove="control-center\**\*.cs" />
     <Compile Remove="hid-research-lab\**\*.cs" />
+    <Compile Remove="hid-research-cli\**\*.cs" />
     <Compile Remove="StatusLabApplicationContext.cs" />
     <Compile Remove="ControlCenterForm.cs" />
     <Compile Remove="DeviceSettingsResearch.cs" />
@@ -29,12 +30,14 @@
     <EmbeddedResource Remove="vendor-static-lab\**\*" />
     <EmbeddedResource Remove="control-center\**\*" />
     <EmbeddedResource Remove="hid-research-lab\**\*" />
+    <EmbeddedResource Remove="hid-research-cli\**\*" />
     <None Remove="tests\**\*" />
     <None Remove="lighting-lab\**\*" />
     <None Remove="sleep-sweep\**\*" />
     <None Remove="vendor-static-lab\**\*" />
     <None Remove="control-center\**\*" />
     <None Remove="hid-research-lab\**\*" />
+    <None Remove="hid-research-cli\**\*" />
   </ItemGroup>
 
   <ItemGroup>
