@@ -21,10 +21,9 @@ public static class HidResearchHeadless
         "sleep-report",
         "sleep-report-construction",
         "sleep-payload-seed",
-        "sleep-payload-helper-semantics"
+        "sleep-payload-helper-semantics",
+        "sleep-payload-source"
     ];
-
-    public static string ReservedNextMode => "sleep-payload-source";
 
     public static HidResearchHeadlessResult Run(string mode, string exeA, string exeB, string outputDirectory)
     {
@@ -48,8 +47,7 @@ public static class HidResearchHeadless
             "sleep-report-construction" => RunSleepReportConstruction(a, b, output),
             "sleep-payload-seed" => RunSleepPayloadSeed(a, b, output),
             "sleep-payload-helper-semantics" => RunSleepPayloadHelperSemantics(a, b, output),
-            "sleep-payload-source" => throw new NotSupportedException(
-                "Mode 'sleep-payload-source' is reserved for the next local research increment and is not implemented yet."),
+            "sleep-payload-source" => RunSleepPayloadSource(a, b, output),
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode,
                 "Unsupported research mode. Use the CLI --list-modes option.")
         };
@@ -100,6 +98,18 @@ public static class HidResearchHeadless
             report.Verdict,
             report,
             OemNdeviceAggregateCopyAnalyzer.KeyboardSleepPayloadHelperSemanticsToText(report),
+            output);
+    }
+
+    private static HidResearchHeadlessResult RunSleepPayloadSource(string a, string b, string output)
+    {
+        var report = OemNdeviceAggregateCopyAnalyzer.AnalyzeKeyboardSleepPayloadSource(a, b);
+        return Write(
+            "sleep-payload-source",
+            "oem-keyboard-sleep-payload-source",
+            report.Verdict,
+            report,
+            OemNdeviceAggregateCopyAnalyzer.KeyboardSleepPayloadSourceToText(report),
             output);
     }
 

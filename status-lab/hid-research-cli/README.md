@@ -30,12 +30,9 @@ Implemented modes:
 - `sleep-report-construction`
 - `sleep-payload-seed`
 - `sleep-payload-helper-semantics`
-
-Reserved next mode:
-
 - `sleep-payload-source`
 
-The reserved mode intentionally exits without analysis until an explicit source-provenance analyzer is implemented.
+The `sleep-payload-source` mode is implemented as a static, read-only provenance analyzer. Its verdict remains capped below a SleepTime field proof unless an explicit, complete SleepTime-to-source-byte-to-report-to-SetFeature chain is proven.
 
 ## Local workspace convention
 

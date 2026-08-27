@@ -6,7 +6,6 @@ internal static class Program
 {
     private const int ExitOk = 0;
     private const int ExitUsage = 2;
-    private const int ExitReservedMode = 3;
     private const int ExitFailure = 10;
 
     private static int Main(string[] args)
@@ -22,7 +21,6 @@ internal static class Program
             if (Has(args, "--list-modes"))
             {
                 foreach (var supportedMode in HidResearchHeadless.SupportedModes) Console.WriteLine(supportedMode);
-                Console.WriteLine($"{HidResearchHeadless.ReservedNextMode} (reserved; not implemented)");
                 return ExitOk;
             }
 
@@ -36,12 +34,6 @@ internal static class Program
                 Console.Error.WriteLine("ERROR: --mode, --a, --b and --out are required.");
                 PrintHelp();
                 return ExitUsage;
-            }
-
-            if (string.Equals(mode, HidResearchHeadless.ReservedNextMode, StringComparison.OrdinalIgnoreCase))
-            {
-                Console.Error.WriteLine($"ERROR: mode '{mode}' is reserved for the next analyzer increment and is not implemented yet.");
-                return ExitReservedMode;
             }
 
             if (!File.Exists(a))
@@ -66,7 +58,7 @@ internal static class Program
         catch (NotSupportedException ex)
         {
             Console.Error.WriteLine("ERROR: " + ex.Message);
-            return ExitReservedMode;
+            return ExitUsage;
         }
         catch (ArgumentException ex)
         {
@@ -109,7 +101,5 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine("Implemented modes:");
         foreach (var supportedMode in HidResearchHeadless.SupportedModes) Console.WriteLine("  " + supportedMode);
-        Console.WriteLine();
-        Console.WriteLine($"Reserved next mode: {HidResearchHeadless.ReservedNextMode}");
     }
 }

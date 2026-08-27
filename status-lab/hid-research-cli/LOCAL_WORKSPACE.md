@@ -25,15 +25,15 @@ Keep the Git worktree, OEM inputs, and generated output separated:
 
 The `inputs/` and `out/` directories should live outside the Git worktree whenever practical. Repository-local `.research-local/` is ignored as a fallback scratch location.
 
-## Agent preparation state
+## Local research state
 
-At this infrastructure stage:
+At this local research stage:
 
 - create/clone the repository or isolated worktree;
 - verify the CLI project builds;
 - place or identify the two OEM binaries locally;
-- do not start the next SleepTime provenance task yet;
+- keep SleepTime provenance analysis static/read-only and evidence-gated;
 - do not perform HID/device interaction;
 - do not merge the infrastructure or stacked research PRs.
 
-The later agent task will add/iterate the reserved `sleep-payload-source` analyzer using the local CLI loop.
+The local CLI loop now includes the implemented `sleep-payload-source` analyzer. It may only read the supplied OEM byte images and write local JSON/TXT evidence; it must not open HID devices or launch OEM applications.
