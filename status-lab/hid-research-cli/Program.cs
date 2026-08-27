@@ -21,7 +21,7 @@ internal static class Program
 
             if (Has(args, "--list-modes"))
             {
-                foreach (var mode in HidResearchHeadless.SupportedModes) Console.WriteLine(mode);
+                foreach (var supportedMode in HidResearchHeadless.SupportedModes) Console.WriteLine(supportedMode);
                 Console.WriteLine($"{HidResearchHeadless.ReservedNextMode} (reserved; not implemented)");
                 return ExitOk;
             }
@@ -108,7 +108,7 @@ internal static class Program
         Console.WriteLine("  Vorotex.K15.HidResearch.Cli --list-modes");
         Console.WriteLine();
         Console.WriteLine("Implemented modes:");
-        foreach (var mode in HidResearchHeadless.SupportedModes) Console.WriteLine("  " + mode);
+        foreach (var supportedMode in HidResearchHeadless.SupportedModes) Console.WriteLine("  " + supportedMode);
         Console.WriteLine();
         Console.WriteLine($"Reserved next mode: {HidResearchHeadless.ReservedNextMode}");
     }
