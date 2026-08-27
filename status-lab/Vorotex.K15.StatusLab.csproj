@@ -14,6 +14,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Sibling apps and developer tools under status-lab are isolated projects, not Status Tray sources. -->
     <Compile Remove="tests\**\*.cs" />
     <Compile Remove="lighting-lab\**\*.cs" />
     <Compile Remove="sleep-sweep\**\*.cs" />
