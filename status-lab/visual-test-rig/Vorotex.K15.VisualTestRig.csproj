@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>Vorotex.K15.VisualTestRig</AssemblyName>
+    <RootNamespace>Vorotex.K15.VisualTestRig</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup><Compile Remove="tests\**\*.cs" /></ItemGroup>
+</Project>
