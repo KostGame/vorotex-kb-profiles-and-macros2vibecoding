@@ -26,3 +26,16 @@ Run the deterministic, dependency-free suite with:
 ```text
 npm.cmd test
 ```
+
+## Phase B transparent wrapper
+
+src/transparent-wrapper.mjs is a separate zero-observation entry point for a future owner-controlled canary. It does not import or activate the fixture observer. Its contract is:
+
+- required absolute CODEX_BRIDGE_CHILD_PATH naming the exact reviewed child file;
+- optional CODEX_BRIDGE_CHILD_SHA256 pin, verified before launch;
+- no PATH scanning and no configured child arguments; Desktop argv is forwarded unchanged;
+- native stdin.pipe(child.stdin), child.stdout.pipe(stdout), and child.stderr.pipe(stderr);
+- ordinary child exit codes pass through; a child signal maps deterministically to exit code 1;
+- missing, recursive, non-file, unsupported, or SHA-mismatched configuration exits 2; spawn failure exits 1.
+
+The wrapper never parses protocol bytes, writes payload files, or emits telemetry. The existing bridge-cli.mjs remains fake-child-only and is not a live launcher. A live Desktop canary is outside this Phase B implementation and must be owner-controlled after architect review.
