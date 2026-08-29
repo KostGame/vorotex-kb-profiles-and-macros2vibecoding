@@ -6,10 +6,14 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { ApprovalObserver, connectTransparentBridge } from '../src/bridge-core.mjs';
 
-const commandRequest = (id, extras = {}) => JSON.stringify({ method: 'item/commandExecution/requestApproval', params: { requestId: id, ...extras } });
-const fileRequest = (id, extras = {}) => JSON.stringify({ method: 'item/fileChange/requestApproval', params: { requestId: id, ...extras } });
-const commandResponse = (id, decision) => JSON.stringify({ method: 'item/commandExecution/respondApproval', params: { requestId: id, decision } });
-const fileResponse = (id, decision) => JSON.stringify({ method: 'item/fileChange/respondApproval', params: { requestId: id, decision } });
+const request = (method, id, params = {}) => JSON.stringify({ jsonrpc: '2.0', id, method, params });
+const commandRequest = (id, extras = {}) => request('item/commandExecution/requestApproval', id, extras);
+const fileRequest = (id, extras = {}) => request('item/fileChange/requestApproval', id, extras);
+const response = (id, decision, extras = {}) => JSON.stringify({ jsonrpc: '2.0', id, result: { decision, ...extras } });
+const legacyResponse = (id, decision) => JSON.stringify({
+  method: 'item/commandExecution/respondApproval',
+  params: { requestId: id, decision }
+});
 
 async function collect(stream) {
   const chunks = [];
@@ -21,6 +25,8 @@ async function collect(stream) {
 function observerWith(events, sink = (event) => events.push(event)) {
   return new ApprovalObserver({ telemetrySink: sink });
 }
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 test('transport is byte-transparent in both directions and stderr remains separate', async () => {
   const clientInput = new PassThrough(); const childInput = new PassThrough();
@@ -37,115 +43,161 @@ test('transport is byte-transparent in both directions and stderr remains separa
   assert.deepEqual(await gotStderr, stderrBytes);
 });
 
-test('ordinary, invalid JSON, and uncorrelated responses create no telemetry', async () => {
+test('live numeric approval request and exact result.decision response emit one sanitized event', async () => {
   const events = []; const observer = observerWith(events);
-  observer.observeServerChunk(Buffer.from('{"method":"ordinary","params":{"secret":"no"}}\nnot-json\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('missing', 'accept') + '\n'));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(events, []);
-});
-
-test('command decisions are exactly correlated and allowlisted', async () => {
-  const events = []; const observer = observerWith(events);
-  observer.observeServerChunk(Buffer.from(commandRequest('A', { threadId: 'T', turnId: 'U', itemId: 'I', command: 'never emit' }) + '\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('A', 'accept') + '\n'));
-  await new Promise((resolve) => setImmediate(resolve));
+  observer.observeServerChunk(Buffer.from(commandRequest(1, {
+    threadId: 'T', turnId: 'U', itemId: 'I', command: 'MUST NOT REACH SIDE CHANNEL'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(1, 'accept', { secret: 'MUST NOT REACH SIDE CHANNEL' }) + '\n'));
+  await tick();
   assert.equal(events.length, 1);
-  assert.deepEqual(Object.keys(events[0]).sort(), ['decision', 'event', 'itemId', 'requestId', 'schemaVersion', 'source', 'threadId', 'timestampUtc', 'turnId'].sort());
-  assert.equal(events[0].decision, 'accept'); assert.equal(events[0].requestId, 'A');
+  assert.deepEqual(Object.keys(events[0]).sort(), [
+    'decision', 'event', 'itemId', 'rpcId', 'rpcIdType', 'schemaVersion',
+    'source', 'threadId', 'timestampUtc', 'turnId'
+  ].sort());
+  assert.deepEqual(events[0], {
+    schemaVersion: 'k15-codex-approval/v1',
+    timestampUtc: events[0].timestampUtc,
+    source: 'codex_stdio_bridge',
+    event: 'approval_resolved',
+    rpcIdType: 'number',
+    rpcId: '1',
+    decision: 'accept',
+    threadId: 'T',
+    turnId: 'U',
+    itemId: 'I'
+  });
+  assert.doesNotMatch(JSON.stringify(events[0]), /MUST NOT REACH SIDE CHANNEL/);
+  assert.equal(observer.pendingCount(), 0);
 });
 
 test('acceptForSession, decline, and cancel remain distinct', async () => {
   const events = []; const observer = observerWith(events);
-  for (const [id, decision] of [['S', 'acceptForSession'], ['D', 'decline'], ['C', 'cancel']]) {
+  for (const [id, decision] of [[2, 'acceptForSession'], [3, 'decline'], [4, 'cancel']]) {
     observer.observeServerChunk(Buffer.from(commandRequest(id) + '\n'));
-    observer.observeClientChunk(Buffer.from(commandResponse(id, decision) + '\n'));
-    await new Promise((resolve) => setImmediate(resolve));
+    observer.observeClientChunk(Buffer.from(response(id, decision) + '\n'));
+    await tick();
   }
   assert.deepEqual(events.map((event) => event.decision), ['acceptForSession', 'decline', 'cancel']);
 });
 
-test('file change, reversed parallel responses, and same-thread outstanding requests do not cross-correlate', async () => {
+test('numeric 1 and string "1" are separate typed correlations', async () => {
   const events = []; const observer = observerWith(events);
-  observer.observeServerChunk(Buffer.from(commandRequest('A', { threadId: 'thread-A' }) + '\n' + fileRequest('B', { threadId: 'thread-B' }) + '\n' + commandRequest('C', { threadId: 'thread-A' }) + '\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('C', 'accept') + '\n' + fileResponse('B', 'decline') + '\n' + commandResponse('A', 'acceptForSession') + '\n'));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(events.map(({ requestId, decision, threadId }) => ({ requestId, decision, threadId })), [
-    { requestId: 'C', decision: 'accept', threadId: 'thread-A' },
-    { requestId: 'B', decision: 'decline', threadId: 'thread-B' },
-    { requestId: 'A', decision: 'acceptForSession', threadId: 'thread-A' }
+  observer.observeServerChunk(Buffer.from(commandRequest(1, { threadId: 'numeric' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest('1', { threadId: 'string' }) + '\n'));
+  observer.observeClientChunk(Buffer.from(response('1', 'accept') + '\n' + response(1, 'acceptForSession') + '\n'));
+  await tick();
+  assert.deepEqual(events.map(({ rpcIdType, rpcId, decision, threadId }) => ({ rpcIdType, rpcId, decision, threadId })), [
+    { rpcIdType: 'string', rpcId: '1', decision: 'accept', threadId: 'string' },
+    { rpcIdType: 'number', rpcId: '1', decision: 'acceptForSession', threadId: 'numeric' }
   ]);
 });
 
-test('partial lines and multi-line chunks are reconstructed without altering transport', async () => {
+test('same typed id with different request metadata remains ambiguous and fails closed', () => {
   const events = []; const observer = observerWith(events);
-  const line = commandRequest('partial', { threadId: 'T' }) + '\n';
-  observer.observeServerChunk(Buffer.from(line.slice(0, 12)));
-  observer.observeServerChunk(Buffer.from(line.slice(12) + commandRequest('multi') + '\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('multi', 'accept') + '\n' + commandResponse('partial', 'accept') + '\n'));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(events.map((event) => event.requestId), ['multi', 'partial']);
+  observer.observeServerChunk(Buffer.from(
+    commandRequest(5, { threadId: 'thread-A', turnId: 'turn-A' }) + '\n' +
+    commandRequest(5, { threadId: 'thread-B', turnId: 'turn-B' }) + '\n'
+  ));
+  observer.observeClientChunk(Buffer.from(response(5, 'accept') + '\n'));
+  assert.deepEqual(events, []);
+  assert.equal(observer.pendingCount(), 2);
 });
 
-test('unknown decisions and mismatched response families are not inferred', async () => {
+test('parallel approvals and same-thread concurrent approvals cannot cross-correlate', async () => {
   const events = []; const observer = observerWith(events);
-  observer.observeServerChunk(Buffer.from(commandRequest('A') + '\n' + fileRequest('B') + '\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('A', 'mystery') + '\n' + commandResponse('B', 'accept') + '\n'));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(events, []); assert.equal(observer.pendingCount(), 2);
-});
-
-test('duplicate, stale, and same-id cross-family responses cannot create a second event', async () => {
-  const events = []; const observer = observerWith(events);
-  observer.observeServerChunk(Buffer.from(commandRequest('same', { threadId: 'command' }) + '\n' + fileRequest('same', { threadId: 'file' }) + '\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('same', 'accept') + '\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('same', 'accept') + '\n'));
-  observer.observeClientChunk(Buffer.from(fileResponse('same', 'decline') + '\n'));
-  observer.observeClientChunk(Buffer.from(fileResponse('same', 'decline') + '\n'));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(events.map(({ requestId, decision, threadId }) => ({ requestId, decision, threadId })), [
-    { requestId: 'same', decision: 'accept', threadId: 'command' },
-    { requestId: 'same', decision: 'decline', threadId: 'file' }
+  observer.observeServerChunk(Buffer.from(
+    commandRequest(10, { threadId: 'thread-A', turnId: 'turn-A' }) + '\n' +
+    fileRequest(11, { threadId: 'thread-B', turnId: 'turn-B' }) + '\n' +
+    commandRequest(12, { threadId: 'thread-A', turnId: 'turn-A-2' }) + '\n'
+  ));
+  observer.observeClientChunk(Buffer.from(
+    response(12, 'accept') + '\n' + response(11, 'decline') + '\n' + response(10, 'acceptForSession') + '\n'
+  ));
+  await tick();
+  assert.deepEqual(events.map(({ rpcId, decision, threadId, turnId }) => ({ rpcId, decision, threadId, turnId })), [
+    { rpcId: '12', decision: 'accept', threadId: 'thread-A', turnId: 'turn-A-2' },
+    { rpcId: '11', decision: 'decline', threadId: 'thread-B', turnId: 'turn-B' },
+    { rpcId: '10', decision: 'acceptForSession', threadId: 'thread-A', turnId: 'turn-A' }
   ]);
 });
 
-test('server and client partial lines are isolated bounded parser state', async () => {
+test('duplicate, stale, legacy, unmatched, unknown-family, and unknown-decision responses emit nothing', async () => {
   const events = []; const observer = observerWith(events);
-  const request = commandRequest('split', { turnId: 'turn-split' }) + '\n';
-  const response = commandResponse('split', 'accept') + '\n';
-  observer.observeServerChunk(Buffer.from(request.slice(0, 10)));
-  observer.observeClientChunk(Buffer.from(response.slice(0, 10)));
-  observer.observeServerChunk(Buffer.from(request.slice(10)));
-  observer.observeClientChunk(Buffer.from(response.slice(10)));
-  await new Promise((resolve) => setImmediate(resolve));
+  observer.observeServerChunk(Buffer.from(commandRequest(20) + '\n' + fileRequest(21) + '\n'));
+  observer.observeClientChunk(Buffer.from(
+    response(20, 'mystery') + '\n' +
+    legacyResponse(20, 'accept') + '\n' +
+    response(999, 'accept') + '\n' +
+    response(20, 'accept') + '\n' +
+    response(20, 'accept') + '\n'
+  ));
+  await tick();
   assert.equal(events.length, 1);
-  assert.equal(events[0].requestId, 'split');
+  assert.equal(events[0].rpcId, '20');
+  assert.equal(observer.pendingCount(), 1);
 });
 
-test('oversize complete records remain transparent and produce no semantic event', () => {
+test('missing, null, object, array, boolean, unsafe numeric, and oversized string ids are rejected', () => {
+  const observer = new ApprovalObserver();
+  const invalid = [
+    { method: 'item/commandExecution/requestApproval', params: {} },
+    { method: 'item/commandExecution/requestApproval', id: null, params: {} },
+    { method: 'item/commandExecution/requestApproval', id: {}, params: {} },
+    { method: 'item/commandExecution/requestApproval', id: [], params: {} },
+    { method: 'item/commandExecution/requestApproval', id: true, params: {} },
+    { method: 'item/commandExecution/requestApproval', id: 9007199254740992, params: {} },
+    { method: 'item/commandExecution/requestApproval', id: 'x'.repeat(1025), params: {} }
+  ];
+  observer.observeServerChunk(Buffer.from(invalid.map((item) => JSON.stringify(item)).join('\n') + '\n'));
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('unknown request families never become pending, even with a matching response', () => {
   const events = []; const observer = observerWith(events);
-  observer.observeServerChunk(Buffer.from('{"method":"item/commandExecution/requestApproval","params":{"requestId":"oversize","padding":"' + 'x'.repeat(70 * 1024) + '"}}\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('oversize', 'accept') + '\n'));
+  observer.observeServerChunk(Buffer.from(request('item/unknown/requestApproval', 30) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(30, 'accept') + '\n'));
   assert.deepEqual(events, []);
   assert.equal(observer.pendingCount(), 0);
 });
 
-test('telemetry sink failure and a busy sink do not break correlation or transport observation', async () => {
+test('partial JSONL lines are reconstructed independently by direction', async () => {
+  const events = []; const observer = observerWith(events);
+  const requestLine = commandRequest(40, { threadId: 'T' }) + '\n';
+  const responseLine = response(40, 'accept') + '\n';
+  observer.observeServerChunk(Buffer.from(requestLine.slice(0, 12)));
+  observer.observeClientChunk(Buffer.from(responseLine.slice(0, 12)));
+  observer.observeServerChunk(Buffer.from(requestLine.slice(12)));
+  observer.observeClientChunk(Buffer.from(responseLine.slice(12)));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].rpcId, '40');
+});
+
+test('invalid JSON and oversize records remain unobservable while transport observation continues', () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from('not-json\n' + '{"method":"item/commandExecution/requestApproval","id":41,"params":{"padding":"' + 'x'.repeat(70 * 1024) + '"}}\n'));
+  observer.observeClientChunk(Buffer.from(response(41, 'accept') + '\n'));
+  assert.deepEqual(events, []);
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('telemetry sink failure and a busy sink do not break correlation', async () => {
   const events = []; let release;
   const observer = observerWith(events, (event) => {
     events.push(event);
-    if (event.requestId === 'A') return new Promise((resolve) => { release = resolve; });
+    if (event.rpcId === '50') return new Promise((resolve) => { release = resolve; });
     throw new Error('sink unavailable');
   });
-  observer.observeServerChunk(Buffer.from(commandRequest('A') + '\n' + commandRequest('B') + '\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('A', 'accept') + '\n' + commandResponse('B', 'accept') + '\n'));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(events.map((event) => event.requestId), ['A']);
-  release(); await new Promise((resolve) => setImmediate(resolve));
-  observer.observeServerChunk(Buffer.from(commandRequest('C') + '\n'));
-  observer.observeClientChunk(Buffer.from(commandResponse('C', 'accept') + '\n'));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(events.map((event) => event.requestId), ['A', 'C']);
+  observer.observeServerChunk(Buffer.from(commandRequest(50) + '\n' + commandRequest(51) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(50, 'accept') + '\n' + response(51, 'accept') + '\n'));
+  await tick();
+  assert.deepEqual(events.map((event) => event.rpcId), ['50']);
+  release(); await tick();
+  observer.observeServerChunk(Buffer.from(commandRequest(52) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(52, 'accept') + '\n'));
+  await tick();
+  assert.deepEqual(events.map((event) => event.rpcId), ['50', '52']);
 });
 
 test('a failing telemetry sink cannot block either transparent transport direction', async () => {
@@ -153,20 +205,20 @@ test('a failing telemetry sink cannot block either transparent transport directi
   const childOutput = new PassThrough(); const clientOutput = new PassThrough();
   let sinkCalls = 0;
   connectTransparentBridge({ clientInput, clientOutput, childInput, childOutput, telemetrySink: () => { sinkCalls += 1; throw new Error('offline sink'); } });
-  const clientBytes = Buffer.from(commandResponse('A', 'accept') + '\n');
-  const serverBytes = Buffer.from(commandRequest('A') + '\n');
+  const clientBytes = Buffer.from(response(60, 'accept') + '\n');
+  const serverBytes = Buffer.from(commandRequest(60) + '\n');
   const gotChild = collect(childInput); const gotClient = collect(clientOutput);
   childOutput.end(serverBytes);
-  await new Promise((resolve) => setImmediate(resolve));
+  await tick();
   clientInput.end(clientBytes);
   assert.deepEqual(await gotChild, clientBytes);
   assert.deepEqual(await gotClient, serverBytes);
   assert.equal(sinkCalls, 1);
 });
 
-test('observer caps pending request and incomplete-line buffering while transport remains independent', () => {
+test('observer caps pending request and incomplete-line buffering', () => {
   const observer = new ApprovalObserver();
-  for (let index = 0; index < 300; index += 1) observer.observeServerChunk(Buffer.from(commandRequest(`id-${index}`) + '\n'));
+  for (let index = 0; index < 300; index += 1) observer.observeServerChunk(Buffer.from(commandRequest(index) + '\n'));
   observer.observeServerChunk(Buffer.alloc(70 * 1024, 0x61));
   assert.equal(observer.pendingCount(), 256);
 });
@@ -177,9 +229,9 @@ test('fake-child bridge preserves stdout, stderr, and normal child exit lifecycl
   const stdout = []; const stderr = [];
   child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
   child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
-  child.stdin.end('fixture-line\\n');
+  child.stdin.end('fixture-line\n');
   const [code, signal] = await once(child, 'exit');
   assert.equal(code, 0); assert.equal(signal, null);
-  assert.equal(Buffer.concat(stdout).toString('utf8'), 'fixture-line\\n');
+  assert.equal(Buffer.concat(stdout).toString('utf8'), 'fixture-line\n');
   assert.match(Buffer.concat(stderr).toString('utf8'), /fake-app-server: started/);
 });

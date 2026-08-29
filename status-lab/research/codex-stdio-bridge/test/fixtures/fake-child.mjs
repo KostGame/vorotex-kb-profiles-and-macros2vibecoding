@@ -17,9 +17,10 @@ if (mode === 'argv') {
   process.stdin.on('end', () => process.stdout.end());
 } else if (mode === 'approval') {
   process.stdout.write(JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
     method: 'item/commandExecution/requestApproval',
     params: {
-      requestId: 'fixture-approval',
       threadId: 'thread-fixture',
       turnId: 'turn-fixture',
       itemId: 'item-fixture',

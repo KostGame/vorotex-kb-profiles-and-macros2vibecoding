@@ -9,9 +9,9 @@ static StatusInputEvent Hook(DateTimeOffset t, string name, string session = "se
     new(t, "codex_hook", name, SessionId: session, TurnId: turn, Cwd: cwd);
 static StatusInputEvent Notification(DateTimeOffset t, string name, uint id, bool error = false) =>
     new(t, "windows_notification", name, id, "OpenAI.Codex_test", error);
-static StatusInputEvent Approval(DateTimeOffset t, string decision, string requestId = "request-1", string threadId = "", string turnId = "") =>
+static StatusInputEvent Approval(DateTimeOffset t, string decision, string rpcId = "1", string threadId = "", string turnId = "") =>
     new(t, "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1",
-        Decision: decision, RequestId: requestId, ThreadId: threadId, TurnId: turnId, ItemId: "item-1");
+        Decision: decision, RpcIdType: "number", RpcId: rpcId, ThreadId: threadId, TurnId: turnId, ItemId: "item-1");
 
 var t = DateTimeOffset.Parse("2026-08-25T00:00:00Z");
 var reducer = new StateReducer();
@@ -35,13 +35,13 @@ Require(bridgeTransition?.Current == K15NormalizedState.Running &&
 var sessionDecision = new StateReducer();
 sessionDecision.Apply(Hook(t, "UserPromptSubmit", turn: "turn-decision"));
 sessionDecision.Apply(Hook(t.AddSeconds(1), "PermissionRequest", turn: "turn-decision"));
-sessionDecision.Apply(Approval(t.AddSeconds(2), "decline", requestId: "decline", turnId: "turn-decision"));
+sessionDecision.Apply(Approval(t.AddSeconds(2), "decline", rpcId: "2", turnId: "turn-decision"));
 Require(sessionDecision.State == K15NormalizedState.Waiting,
     "decline must remain distinct and must not map to RUNNING.");
-sessionDecision.Apply(Approval(t.AddSeconds(3), "cancel", requestId: "cancel", turnId: "turn-decision"));
+sessionDecision.Apply(Approval(t.AddSeconds(3), "cancel", rpcId: "3", turnId: "turn-decision"));
 Require(sessionDecision.State == K15NormalizedState.Waiting,
     "cancel must remain distinct and must not map to RUNNING.");
-sessionDecision.Apply(Approval(t.AddSeconds(4), "acceptForSession", requestId: "accepted", turnId: "turn-decision"));
+sessionDecision.Apply(Approval(t.AddSeconds(4), "acceptForSession", rpcId: "4", turnId: "turn-decision"));
 Require(sessionDecision.State == K15NormalizedState.Running,
     "acceptForSession must resume the exact waiting session.");
 
@@ -50,25 +50,25 @@ parallelApprovals.Apply(Hook(t, "UserPromptSubmit", "session-a", turn: "turn-a")
 parallelApprovals.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "session-a", turn: "turn-a"));
 parallelApprovals.Apply(Hook(t.AddSeconds(2), "UserPromptSubmit", "session-b", turn: "turn-b"));
 parallelApprovals.Apply(Hook(t.AddSeconds(3), "PermissionRequest", "session-b", turn: "turn-b"));
-parallelApprovals.Apply(Approval(t.AddSeconds(4), "accept", requestId: "request-b", turnId: "turn-b"));
+parallelApprovals.Apply(Approval(t.AddSeconds(4), "accept", rpcId: "5", turnId: "turn-b"));
 Require(parallelApprovals.Snapshot.ApprovalWaitingCount == 1 && parallelApprovals.Snapshot.RunningCount == 1,
     "Parallel approvals must resolve only the matching turn.");
-Require(parallelApprovals.Apply(Approval(t.AddSeconds(5), "accept", requestId: "request-a", turnId: "turn-a"))?.Current == K15NormalizedState.Running,
+Require(parallelApprovals.Apply(Approval(t.AddSeconds(5), "accept", rpcId: "6", turnId: "turn-a"))?.Current == K15NormalizedState.Running,
     "The second parallel approval must resolve independently.");
 Require(parallelApprovals.Apply(new StatusInputEvent(t.AddSeconds(6), "codex_stdio_bridge", "serverRequest/resolved",
-        SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RequestId: "generic", TurnId: "turn-a")) is null,
+        SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "7", TurnId: "turn-a")) is null,
     "Generic serverRequest/resolved must never map to RUNNING.");
 var parsedApproval = JournalStateNormalizer.ParseInput("""
-{"schemaVersion":"k15-codex-approval/v1","timestampUtc":"2026-08-25T00:00:07Z","source":"codex_stdio_bridge","event":"approval_resolved","decision":"accept","requestId":"parsed","threadId":"session-a","turnId":"turn-a","itemId":"item-a"}
+{"schemaVersion":"k15-codex-approval/v1","timestampUtc":"2026-08-25T00:00:07Z","source":"codex_stdio_bridge","event":"approval_resolved","decision":"accept","rpcIdType":"number","rpcId":"8","threadId":"session-a","turnId":"turn-a","itemId":"item-a"}
 """);
-Require(parsedApproval?.Decision == "accept" && parsedApproval.RequestId == "parsed" && parsedApproval.TurnId == "turn-a",
+Require(parsedApproval?.Decision == "accept" && parsedApproval.RpcId == "8" && parsedApproval.RpcIdType == "number" && parsedApproval.TurnId == "turn-a",
     "Status Lab must accept only the versioned sanitized approval schema.");
 Require(JournalStateNormalizer.ParseInput("""
-{"schemaVersion":"k15-codex-approval/v1","timestampUtc":"2026-08-25T00:00:08Z","source":"codex_stdio_bridge","event":"approval_resolved","decision":"accept","requestId":"raw","turnId":"turn-a","command":"MUST NOT BE ACCEPTED"}
+{"schemaVersion":"k15-codex-approval/v1","timestampUtc":"2026-08-25T00:00:08Z","source":"codex_stdio_bridge","event":"approval_resolved","decision":"accept","rpcIdType":"number","rpcId":"9","turnId":"turn-a","command":"MUST NOT BE ACCEPTED"}
 """) is null,
     "Approval parser must reject arbitrary payload fields.");
 Require(JournalStateNormalizer.ParseInput("""
-{"schemaVersion":"k15-codex-approval/v1","timestampUtc":"2026-08-25T00:00:09Z","source":"codex_stdio_bridge","event":"approval_resolved","decision":"accept","requestId":"wrong-type","turnId":42}
+{"schemaVersion":"k15-codex-approval/v1","timestampUtc":"2026-08-25T00:00:09Z","source":"codex_stdio_bridge","event":"approval_resolved","decision":"accept","rpcIdType":"number","rpcId":"10","turnId":42}
 """) is null,
     "Approval parser must reject non-string correlation fields.");
 var approvalTransition = reducer.Apply(Hook(t.AddSeconds(2), "PreToolUse"));

@@ -296,7 +296,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         var schemaVersion = GetBoundedString(root, "schemaVersion");
         var parsedEvent = GetBoundedString(root, "event");
         var decision = GetBoundedString(root, "decision");
-        var requestId = GetBoundedString(root, "requestId");
+        var rpcIdType = GetBoundedString(root, "rpcIdType");
+        var rpcId = GetBoundedString(root, "rpcId");
         var timestampText = GetBoundedString(root, "timestampUtc");
         if (root.EnumerateObject().Any(property =>
                 property.Value.ValueKind != JsonValueKind.String ||
@@ -308,7 +309,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         if (schemaVersion != ApprovalSchemaVersion ||
             parsedEvent != eventName ||
             decision is not ("accept" or "acceptForSession" or "decline" or "cancel") ||
-            string.IsNullOrWhiteSpace(requestId) ||
+            rpcIdType is not ("number" or "string") ||
+            string.IsNullOrWhiteSpace(rpcId) ||
             !DateTimeOffset.TryParse(timestampText, out var timestampUtc))
         {
             return null;
@@ -317,7 +319,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
             "schemaVersion", "timestampUtc", "source", "event", "decision",
-            "requestId", "threadId", "turnId", "itemId"
+            "rpcIdType", "rpcId", "threadId", "turnId", "itemId"
         };
         if (root.EnumerateObject().Any(property => !allowed.Contains(property.Name)))
             return null;
@@ -328,7 +330,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             eventName,
             SchemaVersion: schemaVersion,
             Decision: decision,
-            RequestId: requestId,
+            RpcIdType: rpcIdType,
+            RpcId: rpcId,
             ThreadId: GetBoundedString(root, "threadId"),
             TurnId: GetBoundedString(root, "turnId"),
             ItemId: GetBoundedString(root, "itemId"));

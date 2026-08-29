@@ -18,7 +18,10 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const wrapper = path.join(root, 'src', 'transparent-wrapper.mjs');
 const fakeChild = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-child.mjs');
-const baseEnv = { ...process.env, CODEX_BRIDGE_CHILD_PATH: fakeChild };
+const baseEnv = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CODEX_BRIDGE_'))),
+  CODEX_BRIDGE_CHILD_PATH: fakeChild
+};
 
 function collect(stream) {
   const chunks = [];

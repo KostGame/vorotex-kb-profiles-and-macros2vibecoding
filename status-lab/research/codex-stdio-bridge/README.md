@@ -2,21 +2,21 @@
 
 This is an **offline research prototype**. It only starts the bundled deterministic fake app-server and must not be pointed at Codex Desktop, a real `codex app-server`, `codex-ipc`, or owner configuration. It has no network code and never writes protocol traffic to disk.
 
-## What is proved in the fixture contract
+## What is proved in the offline contract
 
 The bridge sends transport bytes using Node `pipe()` in both directions, preserving the original chunk objects while retaining native backpressure. Child stderr is piped independently and never enters JSONL observation. Observation is a separate `data` listener: an invalid, incomplete, or oversize record remains transport traffic and never becomes a transport failure.
 
-The observer recognizes **fixture assumptions only**, not a claim about a live/private Codex protocol:
+The Phase C observer recognizes the separately proven live JSON-RPC approval shape:
 
 ```json
-{"method":"item/commandExecution/requestApproval","params":{"requestId":"A","threadId":"T","turnId":"U","itemId":"I"}}
-{"method":"item/commandExecution/respondApproval","params":{"requestId":"A","decision":"accept"}}
+{"jsonrpc":"2.0","id":1,"method":"item/commandExecution/requestApproval","params":{"threadId":"T","turnId":"U","itemId":"I"}}
+{"jsonrpc":"2.0","id":1,"result":{"decision":"accept"}}
 ```
 
 
-The corresponding `item/fileChange/*` methods use the same fixture shape. Requests are correlated by `requestId` plus method family; no timing, focus, process state, toast, or tool-completion heuristic is used. Supported fixture decisions are `accept`, `acceptForSession`, `decline`, and `cancel`. Unknown shapes, decisions, and cross-family responses emit nothing and remain pending rather than inventing a resolution.
+The corresponding item/fileChange/requestApproval request is also exact allowlisted. Requests are correlated by method family, typed top-level JSON-RPC id, and present threadId/turnId/itemId metadata; number 1 and string "1" cannot alias. Only safe integer numbers and bounded non-empty strings are supported. The live response has no method and must contain an object result.decision with one of accept, acceptForSession, decline, or cancel. The old fixture-only respondApproval/params.requestId model is REMOVED and never resolves a live pending request.
 
-Only a fresh allowlisted event is sent to the optional sink: timestamp, source, event name, request ID, decision, and present thread/turn/item IDs. Request payloads are parsed transiently to read these values but are never persisted or forwarded to telemetry. JSONL framing retains at most 64 KiB of an incomplete record and 256 pending IDs. The sink has at most one asynchronous write in flight; errors and overload drop telemetry without blocking the pipes.
+Only a fresh allowlisted event is sent to the optional sink: timestamp, source, event name, typed sanitized RPC correlation (rpcIdType and rpcId), decision, and present thread/turn/item IDs. Request payloads are parsed transiently to read these values but are never persisted or forwarded to telemetry. JSONL framing retains at most 64 KiB of an incomplete record and 256 pending IDs. The sink has at most one asynchronous write in flight; errors and overload drop telemetry without blocking the pipes.
 
 ## Configuration boundary
 
@@ -64,14 +64,17 @@ absolute path. When set, the observer appends only the versioned sanitized
 `k15-codex-approval/v1` event shape to that path; when absent, no side-channel
 file is created.
 
-The fixture-allowlisted request/response families are still the only protocol
-assumptions in this implementation:
+The live-allowlisted request families are the only protocol assumptions in this
+implementation:
 
-- `item/commandExecution/requestApproval` ↔ `item/commandExecution/respondApproval`
-- `item/fileChange/requestApproval` ↔ `item/fileChange/respondApproval`
+- item/commandExecution/requestApproval with a top-level id
+- item/fileChange/requestApproval with a top-level id
 
-Correlation is keyed by exact request ID plus family. `accept`,
-`acceptForSession`, `decline`, and `cancel` stay distinct. Unknown,
+Correlation is keyed by exact typed top-level RPC id plus family; `accept`,
+`acceptForSession`, `decline`, and `cancel` stay distinct. The legacy fixture-only
+respondApproval/params.requestId shape is REMOVED and never resolves a live
+pending request. The sanitized event uses rpcIdType and rpcId instead of
+pretending the live top-level id was a requestId. Unknown,
 malformed, unmatched, duplicate, stale, cross-family, and oversize records
 produce no semantic event. No generic `serverRequest/resolved`, timers,
 focus/toast state, process polling, completion timing, or Desktop heuristics

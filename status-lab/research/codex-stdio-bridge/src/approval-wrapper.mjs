@@ -34,8 +34,8 @@ function optionalAbsoluteSinkPath(value) {
 /**
  * Opt-in Phase C entry point. The transparent wrapper remains the transport;
  * this module only installs bounded data listeners and an optional sanitized
- * side-channel sink. The protocol method/decision shape is fixture-only until
- * the separately authorized owner canary proves it against live Desktop.
+ * side-channel sink. The observer recognizes the proven live JSON-RPC shape;
+ * it does not recognize the superseded fixture-only response method.
  */
 export async function runApprovalWrapper(options = {}) {
   const {

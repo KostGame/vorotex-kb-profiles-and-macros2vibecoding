@@ -151,7 +151,7 @@ internal static class EventJournal
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
             "schemaVersion", "timestampUtc", "source", "event", "decision",
-            "requestId", "threadId", "turnId", "itemId"
+            "rpcIdType", "rpcId", "threadId", "turnId", "itemId"
         };
         if (root.EnumerateObject().Any(property => !allowed.Contains(property.Name)))
             return false;
@@ -159,7 +159,8 @@ internal static class EventJournal
         if (GetString(root, "schemaVersion") != "k15-codex-approval/v1" ||
             GetString(root, "event") != "approval_resolved" ||
             GetString(root, "decision") is not ("accept" or "acceptForSession" or "decline" or "cancel") ||
-            string.IsNullOrWhiteSpace(GetString(root, "requestId")) ||
+            GetString(root, "rpcIdType") is not ("number" or "string") ||
+            string.IsNullOrWhiteSpace(GetString(root, "rpcId")) ||
             !DateTimeOffset.TryParse(GetString(root, "timestampUtc"), out _))
         {
             return false;
