@@ -12,5 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="../src/transparent-wrapper.mjs" Link="transparent-wrapper.mjs" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../src/approval-wrapper.mjs" Link="approval-wrapper.mjs" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../src/bridge-core.mjs" Link="bridge-core.mjs" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

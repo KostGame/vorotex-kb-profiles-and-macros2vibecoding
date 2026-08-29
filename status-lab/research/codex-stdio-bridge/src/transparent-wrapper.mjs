@@ -108,7 +108,9 @@ export async function runTransparentWrapper({
   stdin = process.stdin,
   stdout = process.stdout,
   stderr = process.stderr,
-  spawnProcess = spawn
+  spawnProcess = spawn,
+  onClientChunk,
+  onServerChunk
 } = {}) {
   let config;
   try {
@@ -151,6 +153,19 @@ export async function runTransparentWrapper({
     finish(CHILD_FAILURE_EXIT_CODE);
   });
   child.once('close', (code, signal) => finish(normalizeChildExitCode(code, signal)));
+
+  const observeSafely = (observer, chunk) => {
+    if (typeof observer !== 'function') return;
+    try {
+      observer(chunk);
+    } catch {
+      // Optional observers are fail-open and can never affect transport.
+    }
+  };
+  if (typeof onClientChunk === 'function')
+    stdin.on('data', (chunk) => observeSafely(onClientChunk, chunk));
+  if (typeof onServerChunk === 'function')
+    child.stdout.on('data', (chunk) => observeSafely(onServerChunk, chunk));
 
   stdin.pipe(child.stdin);
   child.stdout.pipe(stdout);

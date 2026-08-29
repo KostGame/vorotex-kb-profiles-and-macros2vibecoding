@@ -11,6 +11,7 @@ const bridgeDirectory = path.resolve(testDirectory, '..');
 const adapterPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'K15.CodexBridge.WindowsAdapter.exe');
 const fakeChildPath = path.join(bridgeDirectory, 'bin', 'fake-child-test', 'K15.CodexBridge.FakeChild.exe');
 const wrapperPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'transparent-wrapper.mjs');
+const approvalWrapperPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'approval-wrapper.mjs');
 
 function environmentFor(overrides = {}, { packagedWrapper = false } = {}) {
   const environment = {
@@ -78,7 +79,9 @@ test('publishes a direct Windows executable and packages the wrapper', async () 
   assert.equal(path.extname(adapterPath).toLowerCase(), '.exe');
   assert.equal((await stat(fakeChildPath)).isFile(), true);
   assert.equal((await stat(wrapperPath)).isFile(), true);
+  assert.equal((await stat(approvalWrapperPath)).isFile(), true);
   assert.match(await readFile(wrapperPath, 'utf8'), /runTransparentWrapper/);
+  assert.match(await readFile(approvalWrapperPath, 'utf8'), /runApprovalWrapper/);
 });
 
 test('direct executable boundary preserves argv without shell association', async () => {

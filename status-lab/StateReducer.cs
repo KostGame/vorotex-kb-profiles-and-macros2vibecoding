@@ -32,7 +32,12 @@ internal sealed record StatusInputEvent(
     bool ErrorHint = false,
     string SessionId = "",
     string TurnId = "",
-    string Cwd = "");
+    string Cwd = "",
+    string SchemaVersion = "",
+    string Decision = "",
+    string RequestId = "",
+    string ThreadId = "",
+    string ItemId = "");
 
 internal sealed record StateTransition(
     K15NormalizedState Previous,
@@ -57,6 +62,7 @@ internal sealed class StateReducer
     private sealed class SessionRuntime
     {
         public required string Id { get; init; }
+        public string ThreadId { get; set; } = string.Empty;
         public string TurnId { get; set; } = string.Empty;
         public string Cwd { get; set; } = string.Empty;
         public bool Internal { get; set; }
@@ -98,6 +104,9 @@ internal sealed class StateReducer
         if (input.Source.Equals("codex_hook", StringComparison.Ordinal))
             return ApplyCodex(input);
 
+        if (input.Source.Equals("codex_stdio_bridge", StringComparison.Ordinal))
+            return ApplyApprovalResolution(input);
+
         // Windows toasts are retained as diagnostics only. They are not an ACK
         // signal and must never erase session attention.
         return null;
@@ -107,10 +116,11 @@ internal sealed class StateReducer
     {
         ResetAll();
         foreach (var input in events
-                     .Where(input => input.Source.Equals("codex_hook", StringComparison.Ordinal))
+                     .Where(input => input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
+                                     input.Source.Equals("codex_stdio_bridge", StringComparison.Ordinal))
                      .OrderBy(input => input.TimestampUtc))
         {
-            ApplyCodex(input);
+            Apply(input);
         }
     }
 
@@ -178,6 +188,8 @@ internal sealed class StateReducer
         var session = GetOrCreateSession(input);
         if (!string.IsNullOrWhiteSpace(input.Cwd))
             session.Cwd = input.Cwd;
+        if (!string.IsNullOrWhiteSpace(input.ThreadId))
+            session.ThreadId = input.ThreadId;
         if (!string.IsNullOrWhiteSpace(input.TurnId))
             session.TurnId = input.TurnId;
         session.Internal = session.Internal || IsInternalCwd(session.Cwd);
@@ -242,6 +254,59 @@ internal sealed class StateReducer
             default:
                 return null;
         }
+    }
+
+    private StateTransition? ApplyApprovalResolution(StatusInputEvent input)
+    {
+        if (input.EventName != "approval_resolved" ||
+            input.SchemaVersion != "k15-codex-approval/v1" ||
+            input.Decision is not ("accept" or "acceptForSession") ||
+            string.IsNullOrWhiteSpace(input.RequestId))
+        {
+            // decline/cancel are intentionally observable decisions, but they
+            // do not prove that Codex resumed execution and never map to RUNNING.
+            return null;
+        }
+
+        var candidates = _sessions.Values
+            .Where(session => !session.Internal && !session.Ended &&
+                              session.State == K15NormalizedState.Waiting)
+            .Where(session => MatchesApproval(session, input))
+            .ToArray();
+        if (candidates.Length != 1)
+            return null;
+
+        var session = candidates[0];
+        session.State = K15NormalizedState.Running;
+        session.LastPermissionUtc = null;
+        session.LastStopUtc = null;
+        session.DoneEnteredUtc = null;
+        session.AcknowledgedUtc = input.TimestampUtc;
+        FocusedSessionId = session.Id;
+        return RecomputeAggregate("codex_approval_resolved", input.TimestampUtc);
+    }
+
+    private static bool MatchesApproval(SessionRuntime session, StatusInputEvent input)
+    {
+        var hasCorrelation = false;
+        if (!string.IsNullOrWhiteSpace(input.TurnId))
+        {
+            hasCorrelation = true;
+            if (!string.Equals(session.TurnId, input.TurnId, StringComparison.Ordinal))
+                return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(input.ThreadId))
+        {
+            hasCorrelation = true;
+            if (!string.Equals(session.ThreadId, input.ThreadId, StringComparison.Ordinal) &&
+                !string.Equals(session.Id, input.ThreadId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return hasCorrelation;
     }
 
     private SessionRuntime GetOrCreateSession(StatusInputEvent input)

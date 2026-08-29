@@ -53,3 +53,37 @@ Before any child launch, the adapter resolves its own canonical executable path 
 Build the offline package and fake child with npm.cmd test.
 
 The command publishes both local win-x64 apphosts and runs the offline executable-boundary tests. It does not start Codex Desktop or a live Codex app-server.
+
+## Phase C approval observer
+
+`src/approval-wrapper.mjs` is a separate opt-in entry point layered on the
+transparent wrapper. It adds only bounded `data` listeners; forwarding still
+uses the Phase B native pipes and the Phase B entry point remains
+zero-observation. The optional `CODEX_BRIDGE_APPROVAL_SINK_PATH` must be an
+absolute path. When set, the observer appends only the versioned sanitized
+`k15-codex-approval/v1` event shape to that path; when absent, no side-channel
+file is created.
+
+The fixture-allowlisted request/response families are still the only protocol
+assumptions in this implementation:
+
+- `item/commandExecution/requestApproval` ↔ `item/commandExecution/respondApproval`
+- `item/fileChange/requestApproval` ↔ `item/fileChange/respondApproval`
+
+Correlation is keyed by exact request ID plus family. `accept`,
+`acceptForSession`, `decline`, and `cancel` stay distinct. Unknown,
+malformed, unmatched, duplicate, stale, cross-family, and oversize records
+produce no semantic event. No generic `serverRequest/resolved`, timers,
+focus/toast state, process polling, completion timing, or Desktop heuristics
+are used. The observer never persists or forwards raw protocol bytes or
+content and a sink error/overload is fail-open for transport.
+
+Status Lab accepts only the exact sanitized schema from source
+`codex_stdio_bridge`. Only `accept` and `acceptForSession` can move a waiting
+session to `RUNNING`, and only with an exact available thread/turn
+correlation. Existing profile colors, RGB semantics, parallel attention
+priority, and `Stop -> DONE_PENDING_ATTENTION` are unchanged.
+
+Phase C offline tests use deterministic fake children and reducer fixtures.
+No live Codex Desktop is armed by this repository test command; the owner
+controls any later canary and must revalidate current protocol pins first.

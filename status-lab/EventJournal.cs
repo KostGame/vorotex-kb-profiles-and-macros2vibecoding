@@ -109,6 +109,9 @@ internal static class EventJournal
             if (source == "codex_hook")
                 return true;
 
+            if (source == "codex_stdio_bridge")
+                return IsSanitizedApprovalRecord(root);
+
             if (source != "windows_notification")
                 return false;
 
@@ -141,5 +144,43 @@ internal static class EventJournal
         }
 
         File.WriteAllText(FilePath, string.Empty, new UTF8Encoding(false));
+    }
+
+    private static bool IsSanitizedApprovalRecord(JsonElement root)
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schemaVersion", "timestampUtc", "source", "event", "decision",
+            "requestId", "threadId", "turnId", "itemId"
+        };
+        if (root.EnumerateObject().Any(property => !allowed.Contains(property.Name)))
+            return false;
+
+        if (GetString(root, "schemaVersion") != "k15-codex-approval/v1" ||
+            GetString(root, "event") != "approval_resolved" ||
+            GetString(root, "decision") is not ("accept" or "acceptForSession" or "decline" or "cancel") ||
+            string.IsNullOrWhiteSpace(GetString(root, "requestId")) ||
+            !DateTimeOffset.TryParse(GetString(root, "timestampUtc"), out _))
+        {
+            return false;
+        }
+
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.String ||
+                Encoding.UTF8.GetByteCount(property.Value.GetString() ?? string.Empty) > 1024)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string GetString(JsonElement root, string name)
+    {
+        return root.TryGetProperty(name, out var node) && node.ValueKind == JsonValueKind.String
+            ? node.GetString() ?? string.Empty
+            : string.Empty;
     }
 }

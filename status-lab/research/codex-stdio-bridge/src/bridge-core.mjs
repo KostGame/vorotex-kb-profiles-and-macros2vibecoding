@@ -1,23 +1,30 @@
-const REQUEST_METHODS = new Set([
-  'item/commandExecution/requestApproval',
-  'item/fileChange/requestApproval'
+import { appendFile as appendFileAsync, mkdir as mkdirAsync } from 'node:fs/promises';
+import path from 'node:path';
+
+const REQUEST_FAMILIES = new Map([
+  ['item/commandExecution/requestApproval', 'item/commandExecution'],
+  ['item/fileChange/requestApproval', 'item/fileChange']
 ]);
 
-const RESPONSE_METHODS = new Set([
-  'item/commandExecution/respondApproval',
-  'item/fileChange/respondApproval'
+const RESPONSE_FAMILIES = new Map([
+  ['item/commandExecution/respondApproval', 'item/commandExecution'],
+  ['item/fileChange/respondApproval', 'item/fileChange']
 ]);
 
 const DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 const MAX_PENDING = 256;
 const MAX_PARTIAL_BYTES = 64 * 1024;
+const MAX_FIELD_BYTES = 1024;
+export const APPROVAL_SCHEMA_VERSION = 'k15-codex-approval/v1';
 
 function optionalString(value) {
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
+  return typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= MAX_FIELD_BYTES
+    ? value
+    : undefined;
 }
 
-function familyOf(method) {
-  return method.split('/').slice(0, 2).join('/');
+function pendingKey(family, requestId) {
+  return family + '\u0000' + requestId;
 }
 
 /**
@@ -27,7 +34,8 @@ function familyOf(method) {
  */
 export class ApprovalObserver {
   #pending = new Map();
-  #partial = Buffer.alloc(0);
+  #serverPartial = Buffer.alloc(0);
+  #clientPartial = Buffer.alloc(0);
   #sink;
   #sinkBusy = false;
 
@@ -36,20 +44,21 @@ export class ApprovalObserver {
   }
 
   observeServerChunk(chunk) {
-    this.#observeChunk(chunk, (message) => this.#trackRequest(message));
+    this.#observeChunk(chunk, 'server', (message) => this.#trackRequest(message));
   }
 
   observeClientChunk(chunk) {
-    this.#observeChunk(chunk, (message) => this.#resolveResponse(message));
+    this.#observeChunk(chunk, 'client', (message) => this.#resolveResponse(message));
   }
 
   pendingCount() {
     return this.#pending.size;
   }
 
-  #observeChunk(chunk, handle) {
+  #observeChunk(chunk, direction, handle) {
     const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    const combined = this.#partial.length === 0 ? input : Buffer.concat([this.#partial, input]);
+    const partial = direction === 'server' ? this.#serverPartial : this.#clientPartial;
+    const combined = partial.length === 0 ? input : Buffer.concat([partial, input]);
     let start = 0;
 
     for (let index = 0; index < combined.length; index += 1) {
@@ -61,10 +70,13 @@ export class ApprovalObserver {
     const remainder = combined.subarray(start);
     // An oversize/incomplete record is intentionally unobservable, never a
     // transport error. Forwarding is handled separately by pipe().
-    this.#partial = remainder.length > MAX_PARTIAL_BYTES ? Buffer.alloc(0) : Buffer.from(remainder);
+    const nextPartial = remainder.length > MAX_PARTIAL_BYTES ? Buffer.alloc(0) : Buffer.from(remainder);
+    if (direction === 'server') this.#serverPartial = nextPartial;
+    else this.#clientPartial = nextPartial;
   }
 
   #parseLine(line, handle) {
+    if (line.length > MAX_PARTIAL_BYTES) return;
     try {
       handle(JSON.parse(line.toString('utf8')));
     } catch {
@@ -73,35 +85,41 @@ export class ApprovalObserver {
   }
 
   #trackRequest(message) {
-    if (!message || !REQUEST_METHODS.has(message.method)) return;
+    const family = REQUEST_FAMILIES.get(message?.method);
+    if (!family) return;
     const params = message.params;
     const requestId = optionalString(params?.requestId);
     if (!requestId) return;
 
-    if (this.#pending.size >= MAX_PENDING && !this.#pending.has(requestId)) return;
+    const key = pendingKey(family, requestId);
+    if (this.#pending.size >= MAX_PENDING && !this.#pending.has(key)) return;
+    // A duplicate request identity must not replace the original correlation
+    // metadata with a potentially stale or cross-turn record.
+    if (this.#pending.has(key)) return;
     const request = {
       requestId,
-      requestType: message.method,
+      family,
       timestampUtc: new Date().toISOString()
     };
     for (const key of ['threadId', 'turnId', 'itemId']) {
-      const value = optionalString(params[key]);
+      const value = optionalString(params?.[key]);
       if (value) request[key] = value;
     }
-    this.#pending.set(requestId, request);
+    this.#pending.set(key, request);
   }
 
   #resolveResponse(message) {
-    if (!message || !RESPONSE_METHODS.has(message.method)) return;
+    const family = RESPONSE_FAMILIES.get(message?.method);
+    if (!family) return;
     const params = message.params;
     const requestId = optionalString(params?.requestId);
     const decision = optionalString(params?.decision);
-    const request = requestId ? this.#pending.get(requestId) : undefined;
+    const request = requestId ? this.#pending.get(pendingKey(family, requestId)) : undefined;
     if (!request || !decision || !DECISIONS.has(decision)) return;
-    if (familyOf(request.requestType) !== familyOf(message.method)) return;
 
-    this.#pending.delete(requestId);
+    this.#pending.delete(pendingKey(family, requestId));
     const event = {
+      schemaVersion: APPROVAL_SCHEMA_VERSION,
       timestampUtc: new Date().toISOString(),
       source: 'codex_stdio_bridge',
       event: 'approval_resolved',
@@ -130,6 +148,34 @@ export class ApprovalObserver {
       this.#sinkBusy = false;
     }
   }
+}
+
+export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory } = {}) {
+  if (typeof filePath !== 'string' || filePath.length === 0) return () => {};
+
+  const append = appendFile ?? appendFileAsync;
+  const mkdir = makeDirectory ?? mkdirAsync;
+  let directoryReady;
+
+  return (event) => {
+    const sanitized = {
+      schemaVersion: event.schemaVersion,
+      timestampUtc: event.timestampUtc,
+      source: event.source,
+      event: event.event,
+      decision: event.decision,
+      requestId: event.requestId
+    };
+    for (const key of ['threadId', 'turnId', 'itemId']) {
+      if (event[key]) sanitized[key] = event[key];
+    }
+    const line = JSON.stringify(sanitized) + '\n';
+    if (Buffer.byteLength(line, 'utf8') > MAX_PARTIAL_BYTES) return;
+    if (!directoryReady) {
+      directoryReady = mkdir(path.dirname(filePath), { recursive: true });
+    }
+    return Promise.resolve(directoryReady).then(() => append(filePath, line, { encoding: 'utf8' }));
+  };
 }
 
 /**
