@@ -253,7 +253,7 @@ internal sealed class ControlCenterForm : Form
         _devices.ValueMember = nameof(DeviceChoice.CandidateId);
         _devices.DataSource = candidates.Select(c => new DeviceChoice(
             c.CandidateId,
-            $"{c.ProductString} · {c.VendorProduct} · usage {c.Usage} · report {c.FeatureReportLength} · {c.VerificationResult}")).ToList();
+            DeviceUxFormatting.CandidateLabel(c))).ToList();
         _devices.SelectedIndex = -1;
         if (!string.IsNullOrWhiteSpace(preservedExplicitId) &&
             candidates.Any(c => c.CandidateId == preservedExplicitId))

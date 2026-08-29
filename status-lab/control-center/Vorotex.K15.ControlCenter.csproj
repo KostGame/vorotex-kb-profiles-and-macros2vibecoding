@@ -14,5 +14,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\shared\StatusTrayIpc.cs" Link="StatusTrayIpc.cs" />
+    <Compile Include="..\DeviceUxFormatting.cs" Link="DeviceUxFormatting.cs" />
   </ItemGroup>
 </Project>
