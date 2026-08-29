@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>true</UseAppHost>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>K15.CodexBridge.WindowsAdapter</AssemblyName>
+    <RootNamespace>K15.CodexBridge.WindowsAdapter</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="../src/transparent-wrapper.mjs" Link="transparent-wrapper.mjs" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
