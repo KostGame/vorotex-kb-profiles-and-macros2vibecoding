@@ -18,6 +18,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _trackingStatusItem;
     private readonly ToolStripMenuItem _rgbStatusItem;
     private readonly ToolStripMenuItem _deviceStatusItem;
+    private readonly ToolStripMenuItem _deviceMenu;
     private readonly ToolStripMenuItem _rgbItem;
     private readonly ToolStripMenuItem _notificationStatusItem;
     private readonly ToolStripMenuItem _codexHookItem;
@@ -59,6 +60,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _notificationStatusItem = new ToolStripMenuItem(_notificationStatusText) { Enabled = false };
         _rgbStatusItem = new ToolStripMenuItem(_rgbStatusText) { Enabled = false };
         _deviceStatusItem = new ToolStripMenuItem("Устройство: не подключено") { Enabled = false };
+        _deviceMenu = new ToolStripMenuItem("K15 устройство");
         _rgbItem = new ToolStripMenuItem("Включить RGB-индикацию статусов");
         _rgbItem.Click += async (_, _) => await ToggleRgbAsync();
         _codexHookItem = new ToolStripMenuItem("Установить / обновить Codex hooks");
@@ -88,6 +90,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         };
         _rgbCanary.StatusChanged += UpdateRgbStatus;
         _deviceManager.StateChanged += UpdateDeviceStatus;
+        RefreshDeviceMenu();
 
         _stateNormalizer.Start();
         _ = StartNotificationPollingAsync();
@@ -117,8 +120,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         menu.Items.Add("✓ Сбросить WAITING / DONE", null, (_, _) => ManualResetAttention());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_rgbItem);
-        menu.Items.Add("Сканировать K15 устройства", null, async (_, _) => await ScanDevicesAsync());
-        menu.Items.Add("Отключить устройство", null, async (_, _) => await DisconnectDeviceAsync());
+        menu.Items.Add(_deviceMenu);
         menu.Items.Add("Восстановить штатную подсветку текущего профиля", null,
             async (_, _) => await RestoreNativeLightingAsync());
         menu.Items.Add(new ToolStripSeparator());
@@ -304,8 +306,54 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             _deviceStatusItem.Text = string.IsNullOrWhiteSpace(identity)
                 ? $"Устройство: {DeviceDisplayState(state)}"
                 : $"Устройство: {identity} · {DeviceDisplayState(state)}";
+            RefreshDeviceMenu();
             RefreshTrayTooltip(JournalStateNormalizer.ToWireName(_stateNormalizer.State));
         });
+    }
+
+    private void RefreshDeviceMenu()
+    {
+        foreach (ToolStripItem item in _deviceMenu.DropDownItems.Cast<ToolStripItem>().ToArray())
+            item.Dispose();
+        _deviceMenu.DropDownItems.Clear();
+        _deviceMenu.DropDownItems.Add(new ToolStripMenuItem(
+            $"Состояние: {DeviceStateName(_deviceManager.ConnectionState)}") { Enabled = false });
+        _deviceMenu.DropDownItems.Add(new ToolStripSeparator());
+
+        foreach (var candidate in _deviceManager.Candidates)
+        {
+            var snapshot = ToDeviceSnapshot(candidate);
+            var item = new ToolStripMenuItem(DeviceUxFormatting.CandidateLabel(snapshot));
+            var candidateId = candidate.CandidateId;
+            item.Click += async (_, _) => await ConnectDeviceAsync(candidateId);
+            _deviceMenu.DropDownItems.Add(item);
+        }
+
+        if (_deviceManager.Candidates.Count == 0)
+        {
+            _deviceMenu.DropDownItems.Add(new ToolStripMenuItem("Кандидаты не найдены") { Enabled = false });
+        }
+
+        _deviceMenu.DropDownItems.Add(new ToolStripSeparator());
+        var scanning = _deviceManager.ConnectionState == K15DeviceConnectionState.Scanning;
+        var rescan = new ToolStripMenuItem("Пересканировать")
+        {
+            Enabled = !scanning
+        };
+        rescan.Click += async (_, _) => await ScanDevicesAsync();
+        _deviceMenu.DropDownItems.Add(rescan);
+        var reconnect = new ToolStripMenuItem("Переподключить")
+        {
+            Enabled = _deviceManager.SelectedDevice is not null && !scanning
+        };
+        reconnect.Click += async (_, _) => await ReconnectDeviceAsync();
+        _deviceMenu.DropDownItems.Add(reconnect);
+        var disconnect = new ToolStripMenuItem("Отключить")
+        {
+            Enabled = _deviceManager.ConnectionState is K15DeviceConnectionState.Connected or K15DeviceConnectionState.ConnectionLost
+        };
+        disconnect.Click += async (_, _) => await DisconnectDeviceAsync();
+        _deviceMenu.DropDownItems.Add(disconnect);
     }
 
     private static string DeviceStateName(K15DeviceConnectionState state) => state.ToString().ToUpperInvariant();
@@ -320,12 +368,22 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     };
 
     private static StatusTrayDeviceCandidate ToDeviceSnapshot(K15DeviceCandidate candidate) =>
-        new(candidate.CandidateId, string.IsNullOrWhiteSpace(candidate.ProductString) ? "Unknown HID" : candidate.ProductString,
+        new(candidate.CandidateId, DeviceUxFormatting.DisplayProduct(candidate.ProductString),
             $"{candidate.VendorId:X4}:{candidate.ProductId:X4}",
             $"{candidate.UsagePage:X4}:{candidate.Usage:X4}", candidate.FeatureReportLength,
             candidate.ProtocolVerified, candidate.VerificationResult ?? "not verified");
 
-    private void OpenControlCenterProcess() => OpenSibling("Vorotex.K15.ControlCenter.exe");
+    private void OpenControlCenterProcess()
+    {
+        var path = DeviceUxFormatting.ResolveControlCenterPath(AppContext.BaseDirectory);
+        if (path is null)
+        {
+            ShowBalloon("K15 Control Center не найден. Поддерживаются только варианты: рядом с Status Tray или в соседней папке control-center.");
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+    }
 
     private void OpenSibling(string executable)
     {
