@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "dotnet publish windows-adapter/K15.CodexBridge.WindowsAdapter.csproj -c Release -r win-x64 --self-contained false -o bin/adapter-test && dotnet publish test/fake-child/K15.CodexBridge.FakeChild.csproj -c Release -r win-x64 --self-contained false -o bin/fake-child-test && node --test test/*.test.mjs"
   }
 }

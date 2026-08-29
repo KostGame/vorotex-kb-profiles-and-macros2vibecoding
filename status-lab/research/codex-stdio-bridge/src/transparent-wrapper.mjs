@@ -157,3 +157,7 @@ export async function runTransparentWrapper({
   child.stderr.pipe(stderr);
   return completed;
 }
+
+if (process.argv[1] && samePath(process.argv[1], WRAPPER_PATH)) {
+  process.exitCode = await runTransparentWrapper();
+}
