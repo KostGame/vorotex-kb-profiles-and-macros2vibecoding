@@ -5,6 +5,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     private static readonly TimeSpan ProfilePollInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly StatusLabConfig _config;
+    private readonly K15DeviceManager _deviceManager;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<byte, K15HidLightingController.LightingSnapshot> _snapshots = new();
     private readonly Dictionary<byte, K15HidLightingController.LightingSnapshot> _pendingRestores = new();
@@ -22,7 +23,16 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     private K15NormalizedState? _expiredState;
     private int _transportFailures;
 
-    public K15RgbCanary(StatusLabConfig config) => _config = config;
+    public K15RgbCanary(StatusLabConfig config, K15DeviceManager deviceManager)
+    {
+        _config = config;
+        _deviceManager = deviceManager;
+    }
+
+    public K15RgbCanary(StatusLabConfig config)
+        : this(config, new K15DeviceManager(Path.Combine(EventJournal.DirectoryPath, "preferred-device.json")))
+    {
+    }
 
     public bool Enabled { get; private set; }
     public event Action<string>? StatusChanged;
@@ -35,7 +45,10 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             if (Enabled)
                 return;
 
-            _controller = K15HidLightingController.Open();
+            if (_deviceManager.ConnectionState != K15DeviceConnectionState.Connected ||
+                _deviceManager.Controller is null)
+                throw new InvalidOperationException("Connect a verified K15 device before enabling RGB.");
+            _controller = _deviceManager.Controller;
             var currentSlot = _controller.ReadActiveSlot();
             RestorePendingForSlotLocked(currentSlot, "rgb_enable");
             _snapshot = _controller.PrepareProfileSnapshot(_config);
@@ -195,7 +208,12 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 return;
             }
 
-            using var controller = K15HidLightingController.Open();
+            var controller = _deviceManager.Controller;
+            if (_deviceManager.ConnectionState != K15DeviceConnectionState.Connected || controller is null)
+            {
+                StatusChanged?.Invoke("RGB: OFF · device unavailable");
+                return;
+            }
             var captured = controller.PrepareProfileSnapshot(_config);
             var slot = captured.OnboardSlot;
             if (captured.CanonicalNormal.Enabled)
@@ -521,8 +539,9 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
         try
         {
-            _controller?.Dispose();
-            _controller = K15HidLightingController.Open();
+            if (!_deviceManager.Reconnect() || _deviceManager.Controller is null)
+                throw new IOException("Selected K15 device could not be reconnected.");
+            _controller = _deviceManager.Controller;
             var currentSlot = _controller.ReadActiveSlot();
             _transportFailures = 0;
 
@@ -541,6 +560,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         }
         catch (Exception retryEx) when (IsTransportFault(retryEx))
         {
+            _deviceManager.MarkConnectionLost();
             Log("rgb_transport_reconnect_pending", new
             {
                 exception = retryEx.GetType().FullName,
@@ -632,7 +652,6 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             }
             finally
             {
-                _controller?.Dispose();
                 _controller = null;
                 _snapshot = null;
                 _snapshots.Clear();

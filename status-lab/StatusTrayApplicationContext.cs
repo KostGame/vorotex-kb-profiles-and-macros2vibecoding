@@ -9,6 +9,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private readonly StatusLabConfig _config;
     private readonly WindowsNotificationPoller _notificationPoller = new();
     private readonly JournalStateNormalizer _stateNormalizer;
+    private readonly K15DeviceManager _deviceManager;
     private readonly K15RgbCanary _rgbCanary;
     private readonly NotifyIcon _trayIcon;
     private readonly Icon _trackingOnIcon;
@@ -16,6 +17,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _stateStatusItem;
     private readonly ToolStripMenuItem _trackingStatusItem;
     private readonly ToolStripMenuItem _rgbStatusItem;
+    private readonly ToolStripMenuItem _deviceStatusItem;
     private readonly ToolStripMenuItem _rgbItem;
     private readonly ToolStripMenuItem _notificationStatusItem;
     private readonly ToolStripMenuItem _codexHookItem;
@@ -33,7 +35,8 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
         _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds);
-        _rgbCanary = new K15RgbCanary(_config);
+        _deviceManager = new K15DeviceManager(Path.Combine(EventJournal.DirectoryPath, "preferred-device.json"));
+        _rgbCanary = new K15RgbCanary(_config, _deviceManager);
         _trackingOnIcon = TrayIconFactory.Create(trackingEnabled: true);
         _trackingOffIcon = TrayIconFactory.Create(trackingEnabled: false);
 
@@ -55,6 +58,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _trackingStatusItem = new ToolStripMenuItem("RGB-индикация: ВЫКЛ") { Enabled = false };
         _notificationStatusItem = new ToolStripMenuItem(_notificationStatusText) { Enabled = false };
         _rgbStatusItem = new ToolStripMenuItem(_rgbStatusText) { Enabled = false };
+        _deviceStatusItem = new ToolStripMenuItem("Устройство: не подключено") { Enabled = false };
         _rgbItem = new ToolStripMenuItem("Включить RGB-индикацию статусов");
         _rgbItem.Click += async (_, _) => await ToggleRgbAsync();
         _codexHookItem = new ToolStripMenuItem("Установить / обновить Codex hooks");
@@ -83,9 +87,11 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             _ = _rgbCanary.ApplyStateAsync(state, transition);
         };
         _rgbCanary.StatusChanged += UpdateRgbStatus;
+        _deviceManager.StateChanged += UpdateDeviceStatus;
 
         _stateNormalizer.Start();
         _ = StartNotificationPollingAsync();
+        _ = RestorePreferredDeviceAsync();
         RefreshTrackingIndicator();
         _ = Task.Run(() => StatusTrayIpc.RunServerAsync(HandleIpcAsync, _ipcCancellation.Token));
 
@@ -106,10 +112,13 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         menu.Items.Add(_stateStatusItem);
         menu.Items.Add(_trackingStatusItem);
         menu.Items.Add(_notificationStatusItem);
+        menu.Items.Add(_deviceStatusItem);
         menu.Items.Add(_rgbStatusItem);
         menu.Items.Add("✓ Сбросить WAITING / DONE", null, (_, _) => ManualResetAttention());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_rgbItem);
+        menu.Items.Add("Сканировать K15 устройства", null, async (_, _) => await ScanDevicesAsync());
+        menu.Items.Add("Отключить устройство", null, async (_, _) => await DisconnectDeviceAsync());
         menu.Items.Add("Восстановить штатную подсветку текущего профиля", null,
             async (_, _) => await RestoreNativeLightingAsync());
         menu.Items.Add(new ToolStripSeparator());
@@ -132,6 +141,10 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         return command switch
         {
             "snapshot" => await RunOnUiAsync(() => Task.FromResult(new StatusTrayIpcResponse(true, Snapshot: BuildSnapshot()))),
+            "scan_devices" => await RunCommandAsync(ScanDevicesAsync),
+            "connect_device" => await RunCommandAsync(() => ConnectDeviceAsync(request.Value)),
+            "disconnect_device" => await RunCommandAsync(DisconnectDeviceAsync),
+            "reconnect_device" => await RunCommandAsync(ReconnectDeviceAsync),
             "toggle_rgb" => await RunCommandAsync(ToggleRgbAsync),
             "reset_attention" => await RunCommandAsync(() => { ManualResetAttention(); return Task.CompletedTask; }),
             "restore_lighting" => await RunCommandAsync(RestoreNativeLightingAsync),
@@ -227,8 +240,90 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             hooks.Detail,
             StartupManager.IsEnabled(),
             StatusLabConfig.FilePath,
-            _config.SchemaVersion);
+            _config.SchemaVersion,
+            DeviceStateName(_deviceManager.ConnectionState),
+            _deviceManager.SelectedDevice?.ProductString ?? string.Empty,
+            _deviceManager.Candidates.Select(ToDeviceSnapshot).ToArray());
     }
+
+    private async Task ScanDevicesAsync()
+    {
+        await _rgbCanary.DisableAsync("device_rescan");
+        _deviceManager.Disconnect();
+        await Task.Run(() => _deviceManager.Scan());
+        UpdateDeviceStatus(_deviceManager.ConnectionState);
+    }
+
+    private async Task RestorePreferredDeviceAsync()
+    {
+        try
+        {
+            await Task.Run(() =>
+            {
+                _deviceManager.Scan();
+                _deviceManager.TryResolvePreferred();
+            });
+            UpdateDeviceStatus(_deviceManager.ConnectionState);
+        }
+        catch (Exception ex)
+        {
+            EventJournal.Append(new { timestampUtc = DateTimeOffset.UtcNow, source = "status_tray", @event = "device_startup_scan_failed", error = ex.GetType().Name });
+        }
+    }
+
+    private Task ConnectDeviceAsync(string? candidateId)
+    {
+        if (string.IsNullOrWhiteSpace(candidateId) || !_deviceManager.SelectById(candidateId))
+            throw new InvalidOperationException("Выбери устройство из списка кандидатов.");
+        if (!_deviceManager.Connect())
+            throw new InvalidOperationException("Не удалось подтвердить выбранное K15 устройство.");
+        UpdateDeviceStatus(_deviceManager.ConnectionState);
+        return Task.CompletedTask;
+    }
+
+    private async Task ReconnectDeviceAsync()
+    {
+        if (!_deviceManager.Reconnect())
+            throw new InvalidOperationException("Выбранное K15 устройство недоступно для reconnect.");
+        await Task.CompletedTask;
+        UpdateDeviceStatus(_deviceManager.ConnectionState);
+    }
+
+    private async Task DisconnectDeviceAsync()
+    {
+        await _rgbCanary.DisableAsync("device_disconnect");
+        _deviceManager.Disconnect();
+        UpdateDeviceStatus(_deviceManager.ConnectionState);
+    }
+
+    private void UpdateDeviceStatus(K15DeviceConnectionState state)
+    {
+        Ui(() =>
+        {
+            var identity = _deviceManager.SelectedDevice?.ProductString;
+            _deviceStatusItem.Text = string.IsNullOrWhiteSpace(identity)
+                ? $"Устройство: {DeviceDisplayState(state)}"
+                : $"Устройство: {identity} · {DeviceDisplayState(state)}";
+            RefreshTrayTooltip(JournalStateNormalizer.ToWireName(_stateNormalizer.State));
+        });
+    }
+
+    private static string DeviceStateName(K15DeviceConnectionState state) => state.ToString().ToUpperInvariant();
+
+    private static string DeviceDisplayState(K15DeviceConnectionState state) => state switch
+    {
+        K15DeviceConnectionState.Connected => "подключено",
+        K15DeviceConnectionState.Scanning => "сканирование",
+        K15DeviceConnectionState.ConnectionLost => "соединение потеряно",
+        K15DeviceConnectionState.Error => "ошибка",
+        _ => "не подключено"
+    };
+
+    private static StatusTrayDeviceCandidate ToDeviceSnapshot(K15DeviceCandidate candidate) =>
+        new(candidate.CandidateId, string.IsNullOrWhiteSpace(candidate.ProductString) ? "Unknown HID" : candidate.ProductString,
+            $"{candidate.VendorId:X4}:{candidate.ProductId:X4}",
+            $"{candidate.UsagePage:X4}:{candidate.Usage:X4}", candidate.FeatureReportLength,
+            candidate.ProtocolVerified, candidate.VerificationResult ?? "not verified");
 
     private void OpenControlCenterProcess() => OpenSibling("Vorotex.K15.ControlCenter.exe");
 
@@ -542,6 +637,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         await _notificationPoller.DisposeAsync();
         await _stateNormalizer.DisposeAsync();
         await _rgbCanary.DisposeAsync();
+        _deviceManager.Dispose();
         ExitThread();
     }
 

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace Vorotex.K15.StatusLab;
@@ -27,6 +28,79 @@ internal sealed class K15HidLightingController : IDisposable
     private K15HidLightingController(SafeFileHandle handle)
     {
         _handle = handle;
+    }
+
+    public static K15HidLightingController Open(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("HID endpoint path is required.", nameof(path));
+
+        var handle = CreateFile(path, GenericRead | GenericWrite, FileShareRead | FileShareWrite,
+            IntPtr.Zero, OpenExisting, 0, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new Win32Exception(error, "Selected K15 HID endpoint could not be opened.");
+        }
+
+        var attr = new HiddAttributes { Size = Marshal.SizeOf<HiddAttributes>() };
+        if (!HidD_GetAttributes(handle, ref attr) ||
+            !K15HidProtocol.IsSupportedDevice(attr.VendorID, attr.ProductID) ||
+            !MatchesVendorConfigurationCollection(handle))
+        {
+            handle.Dispose();
+            throw new InvalidDataException("Selected HID endpoint is not a supported K15 configuration collection.");
+        }
+
+        return new K15HidLightingController(handle);
+    }
+
+    public static IReadOnlyList<K15DeviceCandidate> ScanCandidates()
+    {
+        var candidates = new List<K15DeviceCandidate>();
+        HidD_GetHidGuid(out var hidGuid);
+        var set = SetupDiGetClassDevs(ref hidGuid, IntPtr.Zero, IntPtr.Zero, DigcfPresent | DigcfDeviceInterface);
+        if (set == IntPtr.Zero || set == new IntPtr(-1))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "SetupDiGetClassDevs failed.");
+
+        try
+        {
+            for (uint index = 0; ; index++)
+            {
+                var iface = new SpDeviceInterfaceData { cbSize = Marshal.SizeOf<SpDeviceInterfaceData>() };
+                if (!SetupDiEnumDeviceInterfaces(set, IntPtr.Zero, ref hidGuid, index, ref iface))
+                {
+                    if (Marshal.GetLastWin32Error() == 259) break;
+                    continue;
+                }
+                SetupDiGetDeviceInterfaceDetail(set, ref iface, IntPtr.Zero, 0, out var required, IntPtr.Zero);
+                if (required == 0) continue;
+                var buffer = Marshal.AllocHGlobal((int)required);
+                try
+                {
+                    Marshal.WriteInt32(buffer, IntPtr.Size == 8 ? 8 : 6);
+                    if (!SetupDiGetDeviceInterfaceDetail(set, ref iface, buffer, required, out _, IntPtr.Zero)) continue;
+                    var path = Marshal.PtrToStringUni(IntPtr.Add(buffer, 4));
+                    if (string.IsNullOrWhiteSpace(path)) continue;
+                    using var handle = CreateFile(path, GenericRead | GenericWrite, FileShareRead | FileShareWrite,
+                        IntPtr.Zero, OpenExisting, 0, IntPtr.Zero);
+                    if (handle.IsInvalid) continue;
+                    var attr = new HiddAttributes { Size = Marshal.SizeOf<HiddAttributes>() };
+                    if (!HidD_GetAttributes(handle, ref attr) || !K15HidProtocol.IsSupportedDevice(attr.VendorID, attr.ProductID)) continue;
+                    if (!TryGetCaps(handle, out var caps) || caps.UsagePage != 0xFF01 || caps.Usage != 0x0001 ||
+                        caps.FeatureReportByteLength != K15HidProtocol.ReportSize) continue;
+                    candidates.Add(new K15DeviceCandidate(
+                        K15DeviceIdentity.CandidateIdForPath(path), path,
+                        ReadHidString(handle, product: true), ReadHidString(handle, product: false),
+                        attr.VendorID, attr.ProductID, caps.UsagePage, caps.Usage,
+                        caps.FeatureReportByteLength, null, "not verified"));
+                }
+                finally { Marshal.FreeHGlobal(buffer); }
+            }
+        }
+        finally { SetupDiDestroyDeviceInfoList(set); }
+        return candidates;
     }
 
     public static K15HidLightingController Open()
@@ -436,6 +510,24 @@ internal sealed class K15HidLightingController : IDisposable
         return _sequence;
     }
 
+    private static string ReadHidString(SafeFileHandle handle, bool product)
+    {
+        var buffer = new byte[512];
+        var ok = product
+            ? HidD_GetProductString(handle, buffer, buffer.Length)
+            : HidD_GetSerialNumberString(handle, buffer, buffer.Length);
+        return ok ? Encoding.Unicode.GetString(buffer).TrimEnd('\0').Trim() : string.Empty;
+    }
+
+    private static bool TryGetCaps(SafeFileHandle handle, out HidpCaps caps)
+    {
+        caps = new HidpCaps { Reserved = new ushort[17] };
+        if (!HidD_GetPreparsedData(handle, out var preparsed) || preparsed == IntPtr.Zero)
+            return false;
+        try { return HidP_GetCaps(preparsed, ref caps) >= 0; }
+        finally { HidD_FreePreparsedData(preparsed); }
+    }
+
     private static bool MatchesVendorConfigurationCollection(SafeFileHandle handle)
     {
         if (!HidD_GetPreparsedData(handle, out var preparsed) || preparsed == IntPtr.Zero)
@@ -523,6 +615,8 @@ internal sealed class K15HidLightingController : IDisposable
 
     [DllImport("hid.dll")] private static extern void HidD_GetHidGuid(out Guid hidGuid);
     [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_GetAttributes(SafeFileHandle hidDeviceObject, ref HiddAttributes attributes);
+    [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_GetProductString(SafeFileHandle hidDeviceObject, byte[] buffer, int bufferLength);
+    [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_GetSerialNumberString(SafeFileHandle hidDeviceObject, byte[] buffer, int bufferLength);
     [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_SetFeature(SafeFileHandle hidDeviceObject, byte[] reportBuffer, int reportBufferLength);
     [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_GetFeature(SafeFileHandle hidDeviceObject, byte[] reportBuffer, int reportBufferLength);
     [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_GetPreparsedData(SafeFileHandle hidDeviceObject, out IntPtr preparsedData);
