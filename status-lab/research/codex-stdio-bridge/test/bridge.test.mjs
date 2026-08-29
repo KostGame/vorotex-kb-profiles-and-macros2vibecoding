@@ -51,7 +51,7 @@ test('command decisions are exactly correlated and allowlisted', async () => {
   observer.observeClientChunk(Buffer.from(commandResponse('A', 'accept') + '\n'));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(events.length, 1);
-  assert.deepEqual(Object.keys(events[0]).sort(), ['decision', 'event', 'itemId', 'requestId', 'source', 'threadId', 'timestampUtc', 'turnId'].sort());
+  assert.deepEqual(Object.keys(events[0]).sort(), ['decision', 'event', 'itemId', 'requestId', 'schemaVersion', 'source', 'threadId', 'timestampUtc', 'turnId'].sort());
   assert.equal(events[0].decision, 'accept'); assert.equal(events[0].requestId, 'A');
 });
 
@@ -93,6 +93,41 @@ test('unknown decisions and mismatched response families are not inferred', asyn
   observer.observeClientChunk(Buffer.from(commandResponse('A', 'mystery') + '\n' + commandResponse('B', 'accept') + '\n'));
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(events, []); assert.equal(observer.pendingCount(), 2);
+});
+
+test('duplicate, stale, and same-id cross-family responses cannot create a second event', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(commandRequest('same', { threadId: 'command' }) + '\n' + fileRequest('same', { threadId: 'file' }) + '\n'));
+  observer.observeClientChunk(Buffer.from(commandResponse('same', 'accept') + '\n'));
+  observer.observeClientChunk(Buffer.from(commandResponse('same', 'accept') + '\n'));
+  observer.observeClientChunk(Buffer.from(fileResponse('same', 'decline') + '\n'));
+  observer.observeClientChunk(Buffer.from(fileResponse('same', 'decline') + '\n'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events.map(({ requestId, decision, threadId }) => ({ requestId, decision, threadId })), [
+    { requestId: 'same', decision: 'accept', threadId: 'command' },
+    { requestId: 'same', decision: 'decline', threadId: 'file' }
+  ]);
+});
+
+test('server and client partial lines are isolated bounded parser state', async () => {
+  const events = []; const observer = observerWith(events);
+  const request = commandRequest('split', { turnId: 'turn-split' }) + '\n';
+  const response = commandResponse('split', 'accept') + '\n';
+  observer.observeServerChunk(Buffer.from(request.slice(0, 10)));
+  observer.observeClientChunk(Buffer.from(response.slice(0, 10)));
+  observer.observeServerChunk(Buffer.from(request.slice(10)));
+  observer.observeClientChunk(Buffer.from(response.slice(10)));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.length, 1);
+  assert.equal(events[0].requestId, 'split');
+});
+
+test('oversize complete records remain transparent and produce no semantic event', () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from('{"method":"item/commandExecution/requestApproval","params":{"requestId":"oversize","padding":"' + 'x'.repeat(70 * 1024) + '"}}\n'));
+  observer.observeClientChunk(Buffer.from(commandResponse('oversize', 'accept') + '\n'));
+  assert.deepEqual(events, []);
+  assert.equal(observer.pendingCount(), 0);
 });
 
 test('telemetry sink failure and a busy sink do not break correlation or transport observation', async () => {

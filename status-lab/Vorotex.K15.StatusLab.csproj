@@ -23,6 +23,7 @@
     <Compile Remove="hid-research-lab\**\*.cs" />
     <Compile Remove="hid-research-cli\**\*.cs" />
     <Compile Remove="visual-test-rig\**\*.cs" />
+    <Compile Remove="research\**\*.cs" />
     <Compile Remove="StatusLabApplicationContext.cs" />
     <Compile Remove="ControlCenterForm.cs" />
     <Compile Remove="DeviceSettingsResearch.cs" />
@@ -42,6 +43,7 @@
     <None Remove="hid-research-lab\**\*" />
     <None Remove="hid-research-cli\**\*" />
     <None Remove="visual-test-rig\**\*" />
+    <None Remove="research\**\*" />
   </ItemGroup>
 
   <ItemGroup>

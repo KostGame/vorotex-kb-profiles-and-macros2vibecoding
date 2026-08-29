@@ -9,6 +9,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private static readonly TimeSpan ReorderDelay = TimeSpan.FromMilliseconds(400);
     private static readonly TimeSpan StartupReplayWindow = TimeSpan.FromMinutes(30);
     private const int StartupReplayMaxLines = 5000;
+    private const string ApprovalSource = "codex_stdio_bridge";
+    private const string ApprovalSchemaVersion = "k15-codex-approval/v1";
 
     private readonly CancellationTokenSource _cts = new();
     private readonly StateReducer _reducer;
@@ -73,7 +75,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         {
             var input = ParseInput(lines[index]);
             if (input is null ||
-                !input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
+                !(input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
+                  input.Source.Equals(ApprovalSource, StringComparison.Ordinal)) ||
                 input.TimestampUtc < cutoff)
             {
                 continue;
@@ -245,6 +248,9 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             var root = document.RootElement;
 
             var source = GetString(root, "source");
+            if (source == ApprovalSource)
+                return ParseApprovalInput(root);
+
             if (source is not ("codex_hook" or "windows_notification"))
                 return null;
 
@@ -275,12 +281,57 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 errorHint,
                 GetString(root, "sessionId"),
                 GetString(root, "turnId"),
-                GetString(root, "cwd"));
+                GetString(root, "cwd"),
+                ThreadId: GetString(root, "threadId"));
         }
         catch (JsonException)
         {
             return null;
         }
+    }
+
+    private static StatusInputEvent? ParseApprovalInput(JsonElement root)
+    {
+        const string eventName = "approval_resolved";
+        var schemaVersion = GetBoundedString(root, "schemaVersion");
+        var parsedEvent = GetBoundedString(root, "event");
+        var decision = GetBoundedString(root, "decision");
+        var requestId = GetBoundedString(root, "requestId");
+        var timestampText = GetBoundedString(root, "timestampUtc");
+        if (root.EnumerateObject().Any(property =>
+                property.Value.ValueKind != JsonValueKind.String ||
+                Encoding.UTF8.GetByteCount(property.Value.GetString() ?? string.Empty) > 1024))
+        {
+            return null;
+        }
+
+        if (schemaVersion != ApprovalSchemaVersion ||
+            parsedEvent != eventName ||
+            decision is not ("accept" or "acceptForSession" or "decline" or "cancel") ||
+            string.IsNullOrWhiteSpace(requestId) ||
+            !DateTimeOffset.TryParse(timestampText, out var timestampUtc))
+        {
+            return null;
+        }
+
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schemaVersion", "timestampUtc", "source", "event", "decision",
+            "requestId", "threadId", "turnId", "itemId"
+        };
+        if (root.EnumerateObject().Any(property => !allowed.Contains(property.Name)))
+            return null;
+
+        return new StatusInputEvent(
+            timestampUtc.ToUniversalTime(),
+            ApprovalSource,
+            eventName,
+            SchemaVersion: schemaVersion,
+            Decision: decision,
+            RequestId: requestId,
+            ThreadId: GetBoundedString(root, "threadId"),
+            TurnId: GetBoundedString(root, "turnId"),
+            ItemId: GetBoundedString(root, "itemId"));
     }
 
     private static string[] SafeReadReplayLines()
@@ -328,6 +379,13 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             return string.Empty;
 
         return node.GetString() ?? string.Empty;
+    }
+
+    private static string GetBoundedString(JsonElement root, string name)
+    {
+        const int maxBytes = 1024;
+        var value = GetString(root, name);
+        return value.Length > 0 && Encoding.UTF8.GetByteCount(value) <= maxBytes ? value : string.Empty;
     }
 
     internal static string ToWireName(K15NormalizedState state) => state switch

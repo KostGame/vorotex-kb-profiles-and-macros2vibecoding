@@ -14,5 +14,6 @@
     <Compile Include="..\StatusLabConfig.cs" Link="StatusLabConfig.cs" />
     <Compile Include="..\ConfigToml.cs" Link="ConfigToml.cs" />
     <Compile Include="..\EventJournal.cs" Link="EventJournal.cs" />
+    <Compile Include="..\JournalStateNormalizer.cs" Link="JournalStateNormalizer.cs" />
   </ItemGroup>
 </Project>

@@ -15,6 +15,18 @@ if (mode === 'argv') {
 } else if (mode === 'close-stdout') {
   process.stdin.resume();
   process.stdin.on('end', () => process.stdout.end());
+} else if (mode === 'approval') {
+  process.stdout.write(JSON.stringify({
+    method: 'item/commandExecution/requestApproval',
+    params: {
+      requestId: 'fixture-approval',
+      threadId: 'thread-fixture',
+      turnId: 'turn-fixture',
+      itemId: 'item-fixture',
+      command: 'MUST NOT REACH SIDE CHANNEL'
+    }
+  }) + '\n');
+  process.stdin.pipe(process.stdout);
 } else {
   process.stderr.write('fake-child: unsupported test mode\n');
   process.exit(64);

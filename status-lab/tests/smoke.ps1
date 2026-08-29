@@ -90,12 +90,19 @@ if ($stateSource -notmatch 'FocusedSessionId' -or $stateSource -notmatch 'IsInte
 if ($stateSource -notmatch 'case "PreToolUse"' -or $stateSource -notmatch 'codex_pre_tool_use') {
     throw 'State reducer must resume WAITING from the PreToolUse approval signal.'
 }
+if ($stateSource -notmatch 'codex_stdio_bridge' -or $stateSource -notmatch 'codex_approval_resolved' -or
+    $stateSource -notmatch 'acceptForSession') {
+    throw 'State reducer must resume only from exact sanitized bridge approvals.'
+}
 if ($stateSource -notmatch 'CodexAttentionSnapshot' -or $stateSource -notmatch 'stale_attention_timeout' -or
     $stateSource -match 'done_notification_resolved') {
     throw 'State reducer must aggregate attention and never treat toast removal as DONE acknowledgement.'
 }
 if ($normalizerSource -notmatch 'StartupReplayWindow' -or $normalizerSource -notmatch 'state_rehydrated') {
     throw 'Journal normalizer must replay recent Codex hooks and log rehydrated state.'
+}
+if ($normalizerSource -notmatch 'k15-codex-approval/v1' -or $normalizerSource -notmatch 'ParseApprovalInput') {
+    throw 'Journal normalizer must validate the versioned sanitized approval schema.'
 }
 if ($normalizerSource -notmatch '_readOffset' -or $normalizerSource -match 'File\.ReadAllLines\(EventJournal\.FilePath\)') {
     throw 'Runtime normalizer must tail appended journal bytes instead of re-reading the whole file.'
@@ -106,6 +113,9 @@ $hookLoggerSource = Get-Content -LiteralPath $logger -Raw -Encoding UTF8
 $appSource = Get-Content -LiteralPath $appContext -Raw -Encoding UTF8
 if ($journalSource -notmatch 'MaxFileBytes' -or $journalSource -notmatch 'MaxArchives' -or $journalSource -notmatch 'DetailedLoggingEnabled') {
     throw 'Event journal must be bounded and expose detailed logging toggle.'
+}
+if ($journalSource -notmatch 'IsSanitizedApprovalRecord' -or $journalSource -notmatch 'codex_stdio_bridge') {
+    throw 'Event journal must retain only the bounded sanitized bridge event shape.'
 }
 if ($hookLoggerSource -notmatch 'Rotate-JournalIfNeeded') {
     throw 'Codex hook transport must rotate the shared journal independently of the tray process.'
