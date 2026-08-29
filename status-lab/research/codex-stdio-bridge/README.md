@@ -11,6 +11,7 @@ The observer recognizes **fixture assumptions only**, not a claim about a live/p
 ```json
 {"method":"item/commandExecution/requestApproval","params":{"requestId":"A","threadId":"T","turnId":"U","itemId":"I"}}
 {"method":"item/commandExecution/respondApproval","params":{"requestId":"A","decision":"accept"}}
+```
 
 
 The corresponding `item/fileChange/*` methods use the same fixture shape. Requests are correlated by `requestId` plus method family; no timing, focus, process state, toast, or tool-completion heuristic is used. Supported fixture decisions are `accept`, `acceptForSession`, `decline`, and `cancel`. Unknown shapes, decisions, and cross-family responses emit nothing and remain pending rather than inventing a resolution.
@@ -23,8 +24,9 @@ Only a fresh allowlisted event is sent to the optional sink: timestamp, source, 
 
 Run the deterministic, dependency-free suite with:
 
-```tex
-npm.cmd tes
+```text
+npm.cmd test
+```
 
 
 ## Phase B transparent wrapper
