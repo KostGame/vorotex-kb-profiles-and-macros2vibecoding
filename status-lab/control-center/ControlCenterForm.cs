@@ -9,6 +9,10 @@ internal sealed class ControlCenterForm : Form
     private StatusTraySnapshot? _lastSnapshot;
 
     private readonly Label _connection = ValueLabel(11);
+    private readonly Label _deviceState = ValueLabel(11);
+    private readonly Label _deviceIdentity = ValueLabel();
+    private readonly ComboBox _devices = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 620 };
+    private string? _explicitCandidateId;
     private readonly Label _state = ValueLabel(20);
     private readonly Label _reason = ValueLabel();
     private readonly Label _elapsed = ValueLabel();
@@ -44,6 +48,11 @@ internal sealed class ControlCenterForm : Form
         Font = new Font("Segoe UI", 9.5F);
         Controls.Add(BuildRoot());
 
+        _devices.SelectionChangeCommitted += (_, _) =>
+        {
+            _explicitCandidateId = _devices.SelectedValue as string;
+        };
+
         _timer.Tick += async (_, _) => await RefreshSnapshotAsync();
         Shown += async (_, _) =>
         {
@@ -61,7 +70,7 @@ internal sealed class ControlCenterForm : Form
             Dock = DockStyle.Fill,
             Padding = new Padding(18),
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 6,
             AutoScroll = true
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -95,6 +104,10 @@ internal sealed class ControlCenterForm : Form
         _connection.AutoSize = true;
         header.Controls.Add(_connection);
         root.Controls.Add(header);
+
+        var device = Card("Устройство / Device");
+        device.Controls.Add(DevicePanel());
+        root.Controls.Add(device);
 
         var live = Card("Сейчас");
         live.Controls.Add(StatusGrid());
@@ -172,6 +185,28 @@ internal sealed class ControlCenterForm : Form
         return flow;
     }
 
+    private Control DevicePanel()
+    {
+        var panel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2 };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        AddRow(panel, "Состояние устройства", _deviceState);
+        AddRow(panel, "Выбранное устройство", _deviceIdentity);
+        AddRow(panel, "Кандидат", _devices);
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
+        actions.Controls.Add(Button("Сканировать / обновить", () => SendCommandAsync("scan_devices")));
+        actions.Controls.Add(Button("Подключить выбранное", () =>
+        {
+            if (string.IsNullOrWhiteSpace(_explicitCandidateId))
+                throw new InvalidOperationException("Сначала явно выбери устройство в списке кандидатов.");
+            return SendCommandAsync("connect_device", _explicitCandidateId);
+        }));
+        actions.Controls.Add(Button("Отключить", () => SendCommandAsync("disconnect_device")));
+        actions.Controls.Add(Button("Reconnect", () => SendCommandAsync("reconnect_device")));
+        AddRow(panel, "Действия", actions);
+        return panel;
+    }
+
     private async Task SendCommandAsync(string command, string? value = null)
     {
         try
@@ -210,6 +245,26 @@ internal sealed class ControlCenterForm : Form
     private void ApplySnapshot(StatusTraySnapshot s)
     {
         _lastSnapshot = s;
+        _deviceState.Text = s.DeviceState;
+        _deviceIdentity.Text = string.IsNullOrWhiteSpace(s.DeviceIdentity) ? "не подключено" : s.DeviceIdentity;
+        var candidates = (s.DeviceCandidates ?? Array.Empty<StatusTrayDeviceCandidate>()).ToList();
+        var preservedExplicitId = _explicitCandidateId;
+        _devices.DisplayMember = nameof(DeviceChoice.Label);
+        _devices.ValueMember = nameof(DeviceChoice.CandidateId);
+        _devices.DataSource = candidates.Select(c => new DeviceChoice(
+            c.CandidateId,
+            $"{c.ProductString} · {c.VendorProduct} · usage {c.Usage} · report {c.FeatureReportLength} · {c.VerificationResult}")).ToList();
+        _devices.SelectedIndex = -1;
+        if (!string.IsNullOrWhiteSpace(preservedExplicitId) &&
+            candidates.Any(c => c.CandidateId == preservedExplicitId))
+        {
+            _explicitCandidateId = preservedExplicitId;
+            _devices.SelectedValue = preservedExplicitId;
+        }
+        else
+        {
+            _explicitCandidateId = null;
+        }
         _state.Text = s.State;
         _state.ForeColor = StateColor(s.State);
         _reason.Text = string.IsNullOrWhiteSpace(s.Reason) ? "—" : s.Reason;
@@ -224,6 +279,8 @@ internal sealed class ControlCenterForm : Form
         _autostart.Text = s.Autostart ? "ВКЛ" : "ВЫКЛ";
         _config.Text = $"schema v{s.ConfigSchema} · {s.ConfigPath}";
     }
+
+    private sealed record DeviceChoice(string CandidateId, string Label);
 
     private void RefreshDiagnostics()
     {

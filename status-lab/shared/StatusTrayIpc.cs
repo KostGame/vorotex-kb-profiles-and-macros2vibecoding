@@ -19,7 +19,19 @@ internal sealed record StatusTraySnapshot(
     string HooksDetail,
     bool Autostart,
     string ConfigPath,
-    int ConfigSchema);
+    int ConfigSchema,
+    string DeviceState = "DISCONNECTED",
+    string DeviceIdentity = "",
+    IReadOnlyList<StatusTrayDeviceCandidate>? DeviceCandidates = null);
+
+internal sealed record StatusTrayDeviceCandidate(
+    string CandidateId,
+    string ProductString,
+    string VendorProduct,
+    string Usage,
+    int FeatureReportLength,
+    bool? ProtocolVerified,
+    string VerificationResult);
 
 internal sealed record StatusTrayIpcRequest(string Command, string? Value = null);
 internal sealed record StatusTrayIpcResponse(bool Success, string? Error = null, StatusTraySnapshot? Snapshot = null);
