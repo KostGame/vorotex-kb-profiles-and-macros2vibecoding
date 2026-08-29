@@ -35,6 +35,7 @@
     <EmbeddedResource Remove="hid-research-lab\**\*" />
     <EmbeddedResource Remove="hid-research-cli\**\*" />
     <EmbeddedResource Remove="visual-test-rig\**\*" />
+    <EmbeddedResource Remove="research\**\*" />
     <None Remove="tests\**\*" />
     <None Remove="lighting-lab\**\*" />
     <None Remove="sleep-sweep\**\*" />

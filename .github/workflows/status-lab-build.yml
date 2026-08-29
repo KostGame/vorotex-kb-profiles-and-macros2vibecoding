@@ -77,6 +77,10 @@ jobs:
       - name: Publish Status Tray win-x64
         run: dotnet publish status-lab/Vorotex.K15.StatusLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
 
+      - name: Status Tray build isolation regression
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/status-tray-build-isolation-smoke.ps1 -PublishedExe status-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.StatusTray.exe
+
       - name: Publish Control Center win-x64
         run: dotnet publish status-lab/control-center/Vorotex.K15.ControlCenter.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
 
