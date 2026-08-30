@@ -35,7 +35,8 @@ internal sealed record StatusInputEvent(
     string Cwd = "",
     string SchemaVersion = "",
     string Decision = "",
-    string RequestId = "",
+    string RpcIdType = "",
+    string RpcId = "",
     string ThreadId = "",
     string ItemId = "");
 
@@ -261,7 +262,8 @@ internal sealed class StateReducer
         if (input.EventName != "approval_resolved" ||
             input.SchemaVersion != "k15-codex-approval/v1" ||
             input.Decision is not ("accept" or "acceptForSession") ||
-            string.IsNullOrWhiteSpace(input.RequestId))
+            input.RpcIdType is not ("number" or "string") ||
+            string.IsNullOrWhiteSpace(input.RpcId))
         {
             // decline/cancel are intentionally observable decisions, but they
             // do not prove that Codex resumed execution and never map to RUNNING.

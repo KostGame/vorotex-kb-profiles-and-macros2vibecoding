@@ -15,7 +15,7 @@ const approvalWrapperPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'a
 
 function environmentFor(overrides = {}, { packagedWrapper = false } = {}) {
   const environment = {
-    ...process.env,
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CODEX_BRIDGE_'))),
     CODEX_BRIDGE_NODE_PATH: process.execPath,
     CODEX_BRIDGE_CHILD_PATH: fakeChildPath,
     CODEX_BRIDGE_WRAPPER_PATH: wrapperPath,

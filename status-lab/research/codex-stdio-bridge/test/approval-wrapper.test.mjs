@@ -36,7 +36,7 @@ test('opt-in approval wrapper preserves transport and emits only sanitized side-
   const run = runApprovalWrapper({
     argv: ['app-server'],
     env: {
-      ...process.env,
+      ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CODEX_BRIDGE_'))),
       CODEX_BRIDGE_CHILD_PATH: fakeChild,
       FAKE_CHILD_MODE: 'approval',
       [APPROVAL_SINK_PATH_ENV]: sinkPath
@@ -47,14 +47,14 @@ test('opt-in approval wrapper preserves transport and emits only sanitized side-
     spawnProcess: (childPath, childArgs, options) =>
       spawn(process.execPath, [childPath, ...childArgs], { ...options })
   });
-  stdout.once('data', () => stdin.end(Buffer.from('{"method":"item/commandExecution/respondApproval","params":{"requestId":"fixture-approval","decision":"accept","secret":"MUST NOT REACH SIDE CHANNEL"}}\n')));
+  stdout.once('data', () => stdin.end(Buffer.from('{"jsonrpc":"2.0","id":1,"result":{"decision":"accept","secret":"MUST NOT REACH SIDE CHANNEL"}}\n')));
   const code = await run;
   const transport = await output;
   await new Promise((resolve) => setImmediate(resolve));
   const records = (await readFile(sinkPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
 
   assert.equal(code, 0);
-  assert.match(transport.toString('utf8'), /fixture-approval/);
+  assert.match(transport.toString('utf8'), /"id":1/);
   assert.equal(records.length, 1);
   assert.deepEqual(records[0], {
     schemaVersion: 'k15-codex-approval/v1',
@@ -62,7 +62,8 @@ test('opt-in approval wrapper preserves transport and emits only sanitized side-
     source: 'codex_stdio_bridge',
     event: 'approval_resolved',
     decision: 'accept',
-    requestId: 'fixture-approval',
+    rpcIdType: 'number',
+    rpcId: '1',
     threadId: 'thread-fixture',
     turnId: 'turn-fixture',
     itemId: 'item-fixture'

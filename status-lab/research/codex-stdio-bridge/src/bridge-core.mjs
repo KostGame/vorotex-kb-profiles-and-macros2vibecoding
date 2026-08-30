@@ -6,11 +6,6 @@ const REQUEST_FAMILIES = new Map([
   ['item/fileChange/requestApproval', 'item/fileChange']
 ]);
 
-const RESPONSE_FAMILIES = new Map([
-  ['item/commandExecution/respondApproval', 'item/commandExecution'],
-  ['item/fileChange/respondApproval', 'item/fileChange']
-]);
-
 const DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 const MAX_PENDING = 256;
 const MAX_PARTIAL_BYTES = 64 * 1024;
@@ -23,12 +18,33 @@ function optionalString(value) {
     : undefined;
 }
 
-function pendingKey(family, requestId) {
-  return family + '\u0000' + requestId;
+function rpcId(value) {
+  if (typeof value === 'string') {
+    return value.length > 0 && Buffer.byteLength(value, 'utf8') <= MAX_FIELD_BYTES
+      ? { type: 'string', value }
+      : undefined;
+  }
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return { type: 'number', value: Object.is(value, -0) ? '-0' : String(value) };
+  }
+  return undefined;
+}
+
+function pendingKey(family, id, metadata = {}) {
+  return JSON.stringify([
+    family,
+    id.type,
+    id.value,
+    metadata.threadId ?? '',
+    metadata.turnId ?? '',
+    metadata.itemId ?? ''
+  ]);
 }
 
 /**
- * Observes fixture-defined JSONL metadata without retaining raw JSON records.
+ * Observes the proven live JSON-RPC approval shape without retaining raw JSON
+ * records. Requests use method + top-level id; responses use the same id and
+ * result.decision, with no response method.
  * The partial buffer is transient stream framing only; it is bounded and never
  * passed to the telemetry sink or written to disk.
  */
@@ -87,43 +103,51 @@ export class ApprovalObserver {
   #trackRequest(message) {
     const family = REQUEST_FAMILIES.get(message?.method);
     if (!family) return;
+    const id = rpcId(message.id);
+    if (!id) return;
     const params = message.params;
-    const requestId = optionalString(params?.requestId);
-    if (!requestId) return;
+    if (params !== undefined && (params === null || typeof params !== 'object' || Array.isArray(params))) return;
 
-    const key = pendingKey(family, requestId);
+    const metadata = {};
+    for (const key of ['threadId', 'turnId', 'itemId']) {
+      const value = optionalString(params?.[key]);
+      if (value) metadata[key] = value;
+    }
+    const key = pendingKey(family, id, metadata);
     if (this.#pending.size >= MAX_PENDING && !this.#pending.has(key)) return;
     // A duplicate request identity must not replace the original correlation
     // metadata with a potentially stale or cross-turn record.
     if (this.#pending.has(key)) return;
     const request = {
-      requestId,
+      rpcIdType: id.type,
+      rpcId: id.value,
       family,
       timestampUtc: new Date().toISOString()
     };
-    for (const key of ['threadId', 'turnId', 'itemId']) {
-      const value = optionalString(params?.[key]);
-      if (value) request[key] = value;
-    }
+    Object.assign(request, metadata);
     this.#pending.set(key, request);
   }
 
   #resolveResponse(message) {
-    const family = RESPONSE_FAMILIES.get(message?.method);
-    if (!family) return;
-    const params = message.params;
-    const requestId = optionalString(params?.requestId);
-    const decision = optionalString(params?.decision);
-    const request = requestId ? this.#pending.get(pendingKey(family, requestId)) : undefined;
+    if (!message || typeof message !== 'object' || Array.isArray(message) || Object.hasOwn(message, 'method')) return;
+    const id = rpcId(message.id);
+    const result = message.result;
+    const decision = optionalString(result?.decision);
+    if (!id || !result || typeof result !== 'object' || Array.isArray(result) || !decision || !DECISIONS.has(decision)) return;
+
+    const requestEntries = [...this.#pending.entries()]
+      .filter(([, request]) => request.rpcIdType === id.type && request.rpcId === id.value);
+    const request = requestEntries.length === 1 ? requestEntries[0][1] : undefined;
     if (!request || !decision || !DECISIONS.has(decision)) return;
 
-    this.#pending.delete(pendingKey(family, requestId));
+    this.#pending.delete(requestEntries[0][0]);
     const event = {
       schemaVersion: APPROVAL_SCHEMA_VERSION,
       timestampUtc: new Date().toISOString(),
       source: 'codex_stdio_bridge',
       event: 'approval_resolved',
-      requestId: request.requestId,
+      rpcIdType: request.rpcIdType,
+      rpcId: request.rpcId,
       decision
     };
     for (const key of ['threadId', 'turnId', 'itemId']) {
@@ -164,7 +188,8 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
       source: event.source,
       event: event.event,
       decision: event.decision,
-      requestId: event.requestId
+      rpcIdType: event.rpcIdType,
+      rpcId: event.rpcId
     };
     for (const key of ['threadId', 'turnId', 'itemId']) {
       if (event[key]) sanitized[key] = event[key];
