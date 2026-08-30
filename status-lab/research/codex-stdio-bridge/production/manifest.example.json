@@ -1,0 +1,16 @@
+{
+  "schema": "k15-codex-bridge/production-manifest-v1",
+  "adapterPath": "C:\\Users\\<owner>\\AppData\\Local\\K15\\CodexBridge\\K15.CodexBridge.WindowsAdapter.exe",
+  "adapterSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
+  "nodePath": "C:\\Program Files\\nodejs\\node.exe",
+  "nodeSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
+  "wrapperPath": "C:\\Users\\<owner>\\AppData\\Local\\K15\\CodexBridge\\approval-wrapper.mjs",
+  "wrapperSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
+  "transparentWrapperPath": "C:\\Users\\<owner>\\AppData\\Local\\K15\\CodexBridge\\transparent-wrapper.mjs",
+  "transparentWrapperSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
+  "bridgeCorePath": "C:\\Users\\<owner>\\AppData\\Local\\K15\\CodexBridge\\bridge-core.mjs",
+  "bridgeCoreSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
+  "childPath": "C:\\Users\\<owner>\\AppData\\Local\\Programs\\Codex\\codex.exe",
+  "childSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
+  "approvalSinkPath": ""
+}
