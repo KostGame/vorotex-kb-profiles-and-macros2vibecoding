@@ -1,4 +1,5 @@
 using Vorotex.K15.StatusLab;
+using System.Text.Json;
 
 static void Require(bool condition, string message)
 {
@@ -27,10 +28,64 @@ Require(resolved is null && reducer.State == K15NormalizedState.Waiting,
 var exactApproval = new StateReducer();
 exactApproval.Apply(Hook(t, "UserPromptSubmit", turn: "turn-approval"));
 exactApproval.Apply(Hook(t.AddSeconds(1), "PermissionRequest", turn: "turn-approval"));
+Require(exactApproval.LastSessionTransitions.Count == 1 &&
+        exactApproval.LastSessionTransitions[0].SessionId == "session-main" &&
+        exactApproval.LastSessionTransitions[0].Previous == K15NormalizedState.Running &&
+        exactApproval.LastSessionTransitions[0].Current == K15NormalizedState.Waiting &&
+        exactApproval.LastSessionTransitions[0].Reason == "codex_permission_request" &&
+        !exactApproval.LastSessionTransitions[0].IsRehydrated,
+    "Single-session approval must provide explicit live WAITING evidence before approval resolution.");
 var bridgeTransition = exactApproval.Apply(Approval(t.AddSeconds(2), "accept", turnId: "turn-approval"));
 Require(bridgeTransition?.Current == K15NormalizedState.Running &&
         bridgeTransition.Reason == "codex_approval_resolved" && exactApproval.State == K15NormalizedState.Running,
     "Exact sanitized accept must resume the matching WAITING session immediately.");
+Require(exactApproval.LastSessionTransitions.Count == 1 &&
+        exactApproval.LastSessionTransitions[0].SessionId == "session-main" &&
+        exactApproval.LastSessionTransitions[0].Previous == K15NormalizedState.Waiting &&
+        exactApproval.LastSessionTransitions[0].Current == K15NormalizedState.Running &&
+        exactApproval.LastSessionTransitions[0].Reason == "codex_approval_resolved" &&
+        !exactApproval.LastSessionTransitions[0].IsRehydrated,
+    "Accepted approval must emit exactly one live same-session WAITING to RUNNING transition.");
+var doneHold = new StateReducer();
+doneHold.Apply(Hook(t, "UserPromptSubmit", "session-a", turn: "turn-a"));
+doneHold.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "session-a", turn: "turn-a"));
+doneHold.Apply(Hook(t.AddSeconds(2), "Stop", "session-b", turn: "turn-b"));
+var doneHoldApproval = doneHold.Apply(Approval(t.AddSeconds(3), "accept", turnId: "turn-a"));
+Require(doneHoldApproval?.Current == K15NormalizedState.DonePendingAttention &&
+        doneHold.State == K15NormalizedState.DonePendingAttention &&
+        doneHold.LastSessionTransitions.Count == 1 &&
+        doneHold.LastSessionTransitions[0].SessionId == "session-a" &&
+        doneHold.LastSessionTransitions[0].Reason == "codex_approval_resolved",
+    "Per-session approval evidence must publish while DONE_UNREAD keeps the aggregate state.");
+var twoWaiting = new StateReducer();
+twoWaiting.Apply(Hook(t, "PermissionRequest", "session-a", turn: "turn-a"));
+twoWaiting.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "session-b", turn: "turn-b"));
+var unchangedApproval = twoWaiting.Apply(Approval(t.AddSeconds(2), "accept", turnId: "turn-a"));
+Require(unchangedApproval is null && twoWaiting.State == K15NormalizedState.Waiting &&
+        twoWaiting.LastSessionTransitions.Count == 1 &&
+        twoWaiting.LastSessionTransitions[0].SessionId == "session-a" &&
+        twoWaiting.Snapshot.ApprovalWaitingCount == 1,
+    "Per-session event must publish when RecomputeAggregate returns null and B remains WAITING.");
+var replayTransition = new StateReducer();
+replayTransition.Rehydrate(new[]
+{
+    Hook(t, "PermissionRequest", "replay-session", turn: "replay-turn"),
+    Approval(t.AddSeconds(1), "accept", turnId: "replay-turn")
+});
+Require(replayTransition.LastSessionTransitions.Count == 2 &&
+        replayTransition.LastSessionTransitions[^1].IsRehydrated &&
+        replayTransition.LastSessionTransitions[^1].Reason == "codex_approval_resolved",
+    "Rehydrated session transitions must be explicitly marked and cannot masquerade as live evidence.");
+var sessionJson = JsonSerializer.Serialize(new
+{
+    source = "state_normalizer", @event = "session_state_changed", plane = "per_session",
+    sessionId = "opaque-session", previous = "WAITING", current = "RUNNING",
+    reason = "codex_approval_resolved", isRehydrated = false,
+    correlation = new { threadId = "opaque-thread", turnId = "opaque-turn", rpcIdType = "number", rpcId = "17" }
+});
+foreach (var forbidden in new[] { "prompt", "modelOutput", "toolArguments", "command", "rawProtocol", "credential", "token" })
+    Require(!sessionJson.Contains(forbidden, StringComparison.OrdinalIgnoreCase),
+        $"Per-session event contract must not contain {forbidden}.");
 
 var sessionDecision = new StateReducer();
 sessionDecision.Apply(Hook(t, "UserPromptSubmit", turn: "turn-decision"));
@@ -196,6 +251,11 @@ ended.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "C"));
 ended.Apply(Hook(t.AddSeconds(2), "SessionEnd", "C"));
 Require(ended.Snapshot.DoneUnreadCount == 1 && ended.State == K15NormalizedState.DonePendingAttention,
     "Scenario K: SessionEnd must not erase other-session attention.");
+ended.Apply(Hook(t.AddSeconds(3), "SessionEnd", "A"));
+Require(ended.Snapshot.DoneUnreadCount == 1 && ended.State == K15NormalizedState.DonePendingAttention &&
+        ended.Snapshot.DriverSessionId == "A" &&
+        ended.Snapshot.DriverReason == "aggregate_precedence_donependingattention",
+    "Ended DONE_UNREAD must remain the aggregate driver with an explicit DONE precedence reason.");
 
 var replayLedger = new StateReducer();
 replayLedger.Rehydrate(new[]
