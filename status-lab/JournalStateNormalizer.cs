@@ -11,6 +11,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private const int StartupReplayMaxLines = 5000;
     private const string ApprovalSource = "codex_stdio_bridge";
     private const string ApprovalSchemaVersion = "k15-codex-approval/v1";
+    private const string CompletionSchemaVersion = "k15-codex-completion/v1";
 
     private readonly CancellationTokenSource _cts = new();
     private readonly StateReducer _reducer;
@@ -293,7 +294,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 
             var source = GetString(root, "source");
             if (source == ApprovalSource)
-                return ParseApprovalInput(root);
+                return ParseBridgeInput(root);
 
             if (source is not ("codex_hook" or "windows_notification"))
                 return null;
@@ -379,6 +380,34 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             ThreadId: GetBoundedString(root, "threadId"),
             TurnId: GetBoundedString(root, "turnId"),
             ItemId: GetBoundedString(root, "itemId"));
+    }
+
+    private static StatusInputEvent? ParseBridgeInput(JsonElement root)
+    {
+        var schemaVersion = GetBoundedString(root, "schemaVersion");
+        var eventName = GetBoundedString(root, "event");
+        var timestampText = GetBoundedString(root, "timestampUtc");
+        if (schemaVersion == CompletionSchemaVersion && eventName == "turn_completed")
+        {
+            var status = GetBoundedString(root, "status");
+            if (status is not ("completed" or "interrupted" or "failed") ||
+                !DateTimeOffset.TryParse(timestampText, out var timestampUtc) ||
+                root.EnumerateObject().Any(property => property.Name is not (
+                    "schemaVersion" or "timestampUtc" or "source" or "event" or
+                    "threadId" or "turnId" or "status") ||
+                    property.Value.ValueKind != JsonValueKind.String ||
+                    Encoding.UTF8.GetByteCount(property.Value.GetString() ?? string.Empty) > 1024))
+                return null;
+
+            var threadId = GetBoundedString(root, "threadId");
+            var turnId = GetBoundedString(root, "turnId");
+            return string.IsNullOrWhiteSpace(threadId) || string.IsNullOrWhiteSpace(turnId)
+                ? null
+                : new StatusInputEvent(timestampUtc.ToUniversalTime(), ApprovalSource, eventName,
+                    SchemaVersion: schemaVersion, ThreadId: threadId, TurnId: turnId, CompletionStatus: status);
+        }
+
+        return ParseApprovalInput(root);
     }
 
     private static string[] SafeReadReplayLines()

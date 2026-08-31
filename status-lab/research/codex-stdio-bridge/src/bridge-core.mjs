@@ -11,6 +11,8 @@ const MAX_PENDING = 256;
 const MAX_PARTIAL_BYTES = 64 * 1024;
 const MAX_FIELD_BYTES = 1024;
 export const APPROVAL_SCHEMA_VERSION = 'k15-codex-approval/v1';
+export const COMPLETION_SCHEMA_VERSION = 'k15-codex-completion/v1';
+const COMPLETION_STATUSES = new Set(['completed', 'interrupted', 'failed']);
 
 function optionalString(value) {
   return typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= MAX_FIELD_BYTES
@@ -60,7 +62,10 @@ export class ApprovalObserver {
   }
 
   observeServerChunk(chunk) {
-    this.#observeChunk(chunk, 'server', (message) => this.#trackRequest(message));
+    this.#observeChunk(chunk, 'server', (message) => {
+      this.#trackRequest(message);
+      this.#trackCompletion(message);
+    });
   }
 
   observeClientChunk(chunk) {
@@ -128,6 +133,28 @@ export class ApprovalObserver {
     this.#pending.set(key, request);
   }
 
+  #trackCompletion(message) {
+    if (!message || typeof message !== 'object' || Array.isArray(message) ||
+        message.method !== 'turn/completed' || !message.params ||
+        typeof message.params !== 'object' || Array.isArray(message.params)) return;
+    const threadId = optionalString(message.params.threadId);
+    const turn = message.params.turn;
+    const turnId = optionalString(turn?.id);
+    const status = optionalString(turn?.status);
+    if (!threadId || !turn || typeof turn !== 'object' || Array.isArray(turn) ||
+        !turnId || !status || !COMPLETION_STATUSES.has(status)) return;
+
+    this.#emitFailOpen({
+      schemaVersion: COMPLETION_SCHEMA_VERSION,
+      timestampUtc: new Date().toISOString(),
+      source: 'codex_stdio_bridge',
+      event: 'turn_completed',
+      threadId,
+      turnId,
+      status
+    });
+  }
+
   #resolveResponse(message) {
     if (!message || typeof message !== 'object' || Array.isArray(message) || Object.hasOwn(message, 'method')) return;
     const id = rpcId(message.id);
@@ -191,6 +218,12 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
       rpcIdType: event.rpcIdType,
       rpcId: event.rpcId
     };
+    if (event.event === 'turn_completed') {
+      sanitized.schemaVersion = COMPLETION_SCHEMA_VERSION;
+      sanitized.threadId = event.threadId;
+      sanitized.turnId = event.turnId;
+      sanitized.status = event.status;
+    }
     for (const key of ['threadId', 'turnId', 'itemId']) {
       if (event[key]) sanitized[key] = event[key];
     }

@@ -6,13 +6,16 @@ static void Require(bool condition, string message)
     if (!condition) throw new InvalidOperationException(message);
 }
 
-static StatusInputEvent Hook(DateTimeOffset t, string name, string session = "session-main", string cwd = @"C:\work\main", string turn = "") =>
-    new(t, "codex_hook", name, SessionId: session, TurnId: turn, Cwd: cwd);
+static StatusInputEvent Hook(DateTimeOffset t, string name, string session = "session-main", string cwd = @"C:\work\main", string turn = "", string thread = "") =>
+    new(t, "codex_hook", name, SessionId: session, TurnId: turn, Cwd: cwd, ThreadId: thread);
 static StatusInputEvent Notification(DateTimeOffset t, string name, uint id, bool error = false) =>
     new(t, "windows_notification", name, id, "OpenAI.Codex_test", error);
 static StatusInputEvent Approval(DateTimeOffset t, string decision, string rpcId = "1", string threadId = "", string turnId = "") =>
     new(t, "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1",
         Decision: decision, RpcIdType: "number", RpcId: rpcId, ThreadId: threadId, TurnId: turnId, ItemId: "item-1");
+static StatusInputEvent Completion(DateTimeOffset t, string threadId, string turnId, string status = "completed") =>
+    new(t, "codex_stdio_bridge", "turn_completed", SchemaVersion: "k15-codex-completion/v1",
+        CompletionStatus: status, ThreadId: threadId, TurnId: turnId);
 
 var t = DateTimeOffset.Parse("2026-08-25T00:00:00Z");
 var reducer = new StateReducer();
@@ -20,6 +23,172 @@ Require(reducer.State == K15NormalizedState.Normal, "Initial state must be NORMA
 reducer.Apply(Hook(t, "UserPromptSubmit"));
 Require(reducer.State == K15NormalizedState.Running, "UserPromptSubmit must enter RUNNING.");
 Require(reducer.FocusedSessionId == "session-main", "Main task session must become focused.");
+var noStop = new StateReducer();
+noStop.Apply(Hook(t, "UserPromptSubmit", "session-done", turn: "turn-done", thread: "thread-done"));
+var completion = noStop.Apply(Completion(t.AddSeconds(1), "", "turn-done"));
+Require(completion is null && noStop.State == K15NormalizedState.Running,
+    "Completion without exact thread correlation must not infer DONE.");
+completion = noStop.Apply(Completion(t.AddSeconds(2), "thread-done", "turn-done"));
+Require(completion?.Reason == "codex_turn_completed" && noStop.State == K15NormalizedState.DonePendingAttention &&
+        noStop.LastSessionTransitions.Count == 1 && !noStop.LastSessionTransitions[0].IsRehydrated,
+    "Matching turn/completed must produce one live per-session DONE transition.");
+var completionDuplicate = noStop.Apply(Completion(t.AddSeconds(2.5), "thread-done", "turn-done"));
+Require(completionDuplicate is null && noStop.LastSessionTransitions.Count == 0 &&
+        noStop.State == K15NormalizedState.DonePendingAttention,
+    "Duplicate completion after DONE must be idempotent.");
+noStop.Acknowledge("session-done", t.AddSeconds(3));
+Require(noStop.State == K15NormalizedState.Normal, "Explicit session ACK must clear DONE to NORMAL.");
+var lateCompletion = noStop.Apply(Completion(t.AddSeconds(4), "thread-done", "turn-done"));
+Require(lateCompletion is null && noStop.State == K15NormalizedState.Normal &&
+        noStop.LastSessionTransitions.Count == 0,
+    "Late completion after explicit ACK must not resurrect NORMAL.");
+noStop.Apply(Hook(t.AddSeconds(3), "SessionEnd", "session-done", turn: "turn-done"));
+Require(noStop.State == K15NormalizedState.Normal,
+    "Ended explicitly acknowledged session must remain NORMAL.");
+var idempotentStop = new StateReducer();
+idempotentStop.Apply(Hook(t, "UserPromptSubmit", "idempotent-a", turn: "turn-a", thread: "thread-a"));
+idempotentStop.Apply(Completion(t.AddSeconds(1), "thread-a", "turn-a"));
+var beforeStop = idempotentStop.LastSessionTransitions.Count;
+idempotentStop.Apply(Hook(t.AddSeconds(2), "Stop", "idempotent-a", turn: "turn-a", thread: "thread-a"));
+Require(idempotentStop.LastSessionTransitions.Count == 0 && beforeStop == 1,
+    "Completion then real Stop must not emit a second DONE transition.");
+var idempotentCompletion = new StateReducer();
+idempotentCompletion.Apply(Hook(t, "UserPromptSubmit", "idempotent-b", turn: "turn-b", thread: "thread-b"));
+idempotentCompletion.Apply(Hook(t.AddSeconds(1), "Stop", "idempotent-b", turn: "turn-b", thread: "thread-b"));
+idempotentCompletion.Apply(Completion(t.AddSeconds(2), "thread-b", "turn-b"));
+Require(idempotentCompletion.LastSessionTransitions.Count == 0 &&
+        idempotentCompletion.State == K15NormalizedState.DonePendingAttention,
+    "Real Stop then completion must not emit a second DONE transition.");
+var wrongTurn = new StateReducer();
+wrongTurn.Apply(Hook(t, "UserPromptSubmit", "wrong-turn", turn: "turn-right", thread: "thread-same"));
+Require(wrongTurn.Apply(Completion(t.AddSeconds(1), "thread-same", "turn-wrong")) is null &&
+        wrongTurn.State == K15NormalizedState.Running && wrongTurn.LastSessionTransitions.Count == 0,
+    "Same thread with wrong turn must not complete a session.");
+var statusSemantics = new StateReducer();
+statusSemantics.Apply(Hook(t, "UserPromptSubmit", "status-session", turn: "turn-status", thread: "thread-status"));
+foreach (var status in new[] { "interrupted", "failed", "inProgress" })
+{
+    Require(statusSemantics.Apply(Completion(t.AddSeconds(1), "thread-status", "turn-status", status)) is null &&
+            statusSemantics.State == K15NormalizedState.Running && statusSemantics.LastSessionTransitions.Count == 0,
+        $"Completion status {status} must not produce DONE.");
+}
+var crossSession = new StateReducer();
+crossSession.Apply(Hook(t, "UserPromptSubmit", "session-A", turn: "turn-A", thread: "thread-A"));
+crossSession.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "session-B", turn: "turn-B", thread: "thread-B"));
+crossSession.Apply(Completion(t.AddSeconds(2), "thread-A", "turn-A"));
+Require(crossSession.SessionSnapshots.Single(s => s.SessionId == "session-A").State == K15NormalizedState.DonePendingAttention &&
+        crossSession.SessionSnapshots.Single(s => s.SessionId == "session-B").State == K15NormalizedState.Running &&
+        crossSession.LastSessionTransitions.Count == 1 && crossSession.LastSessionTransitions[0].SessionId == "session-A",
+    "Completion must mutate only the exact matching session.");
+var noMatch = new StateReducer();
+noMatch.Apply(Hook(t, "UserPromptSubmit", "no-match", turn: "turn-no-match", thread: "thread-no-match"));
+Require(noMatch.Apply(Completion(t.AddSeconds(1), "thread-absent", "turn-no-match")) is null &&
+        noMatch.State == K15NormalizedState.Running && noMatch.LastSessionTransitions.Count == 0,
+    "No matching completion candidate must fail closed.");
+var ambiguous = new StateReducer();
+ambiguous.Apply(Hook(t, "UserPromptSubmit", "ambiguous-A", turn: "turn-ambiguous", thread: "thread-ambiguous"));
+ambiguous.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "ambiguous-B", turn: "turn-ambiguous", thread: "thread-ambiguous"));
+Require(ambiguous.Apply(Completion(t.AddSeconds(2), "thread-ambiguous", "turn-ambiguous")) is null &&
+        ambiguous.SessionSnapshots.All(s => s.State == K15NormalizedState.Running) &&
+        ambiguous.LastSessionTransitions.Count == 0,
+    "Multiple matching sessions must fail closed.");
+var parallelPriority = new StateReducer();
+parallelPriority.Apply(Hook(t, "UserPromptSubmit", "parallel-A", turn: "turn-parallel-A", thread: "thread-parallel-A"));
+parallelPriority.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "parallel-B", turn: "turn-parallel-B", thread: "thread-parallel-B"));
+var parallelTransition = parallelPriority.Apply(Completion(t.AddSeconds(2), "thread-parallel-A", "turn-parallel-A"));
+Require(parallelTransition is null && parallelPriority.State == K15NormalizedState.Waiting &&
+        parallelPriority.SessionSnapshots.Single(s => s.SessionId == "parallel-A").State == K15NormalizedState.DonePendingAttention &&
+        parallelPriority.SessionSnapshots.Single(s => s.SessionId == "parallel-B").State == K15NormalizedState.Waiting &&
+        parallelPriority.LastSessionTransitions.Count == 1 && parallelPriority.LastSessionTransitions[0].SessionId == "parallel-A" &&
+        parallelPriority.LastSessionTransitions[0].Reason == "codex_turn_completed",
+    "Per-session completion must survive aggregate WAITING precedence.");
+var bareEnd = new StateReducer();
+bareEnd.Apply(Hook(t, "UserPromptSubmit", "bare-end", turn: "turn-bare", thread: "thread-bare"));
+bareEnd.Apply(Hook(t.AddSeconds(1), "SessionEnd", "bare-end", turn: "turn-bare", thread: "thread-bare"));
+Require(bareEnd.State == K15NormalizedState.Normal, "Bare SessionEnd must not invent DONE.");
+var doneThenEnd = new StateReducer();
+doneThenEnd.Apply(Hook(t, "UserPromptSubmit", "done-end", turn: "turn-end", thread: "thread-end"));
+doneThenEnd.Apply(Completion(t.AddSeconds(1), "thread-end", "turn-end"));
+doneThenEnd.Apply(Hook(t.AddSeconds(2), "SessionEnd", "done-end", turn: "turn-end", thread: "thread-end"));
+Require(doneThenEnd.State == K15NormalizedState.DonePendingAttention,
+    "SessionEnd after proven DONE must preserve attention.");
+var completionReplay = new StateReducer();
+completionReplay.Rehydrate(new[] { Hook(t, "UserPromptSubmit", "rehydrate-done", cwd: @"C:\work\done", turn: "turn-done", thread: "thread-done"),
+    Completion(t.AddSeconds(1), "thread-done", "turn-done") });
+Require(completionReplay.State == K15NormalizedState.DonePendingAttention &&
+        completionReplay.LastSessionTransitions.Count == 2 &&
+        completionReplay.LastSessionTransitions[^1].IsRehydrated,
+    "Replayed completion must be marked rehydrated.");
+var parsedCompletion = JournalStateNormalizer.ParseInput("{\"schemaVersion\":\"k15-codex-completion/v1\",\"timestampUtc\":\"2026-08-25T00:00:00Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"turn_completed\",\"threadId\":\"thread-parser\",\"turnId\":\"turn-parser\",\"status\":\"completed\",\"turn\":\"MUST NOT PERSIST\"}");
+Require(parsedCompletion is null, "Completion parser must reject unexpected payload fields.");
+parsedCompletion = JournalStateNormalizer.ParseInput("{\"schemaVersion\":\"k15-codex-completion/v1\",\"timestampUtc\":\"2026-08-25T00:00:00Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"turn_completed\",\"threadId\":\"thread-parser\",\"turnId\":\"turn-parser\",\"status\":\"completed\"}");
+Require(parsedCompletion?.CompletionStatus == "completed" && parsedCompletion.ThreadId == "thread-parser" &&
+        parsedCompletion.TurnId == "turn-parser", "Valid completion parser shape changed.");
+Require(JournalStateNormalizer.ParseInput("{\"schemaVersion\":\"k15-codex-completion/v1\",\"timestampUtc\":\"2026-08-25T00:00:00Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"turn_completed\",\"threadId\":\"thread-parser\",\"turnId\":\"turn-parser\",\"status\":\"inProgress\"}") is null,
+    "Non-terminal inProgress completion must be rejected by the parser.");
+var journalFixture = Path.Combine(Path.GetTempPath(), "vorotex-k15-event-journal-" + Guid.NewGuid().ToString("N"));
+try
+{
+    EventJournal.SetTestDirectoryPath(journalFixture);
+    EventJournal.SetDetailedLoggingEnabled(false);
+    Require(!EventJournal.DetailedLoggingEnabled, "Journal filtering fixture must disable detailed logging.");
+    EventJournal.Clear();
+    EventJournal.Append(new
+    {
+        schemaVersion = "k15-codex-completion/v1",
+        timestampUtc = t,
+        source = "codex_stdio_bridge",
+        @event = "turn_completed",
+        threadId = "thread-journal",
+        turnId = "turn-journal",
+        status = "completed"
+    });
+    var completionLines = File.ReadAllLines(EventJournal.FilePath);
+    Require(completionLines.Length == 1 && completionLines[0].Contains("k15-codex-completion/v1", StringComparison.Ordinal),
+        "Valid sanitized completion must pass the real EventJournal.Append filtering path.");
+    EventJournal.Append(new
+    {
+        schemaVersion = "k15-codex-completion/v1", timestampUtc = t, source = "codex_stdio_bridge",
+        @event = "turn_completed", threadId = "thread-journal", turnId = "turn-journal", status = "completed",
+        detail = "MUST NOT PASS"
+    });
+    EventJournal.Append(new
+    {
+        schemaVersion = "k15-codex-completion/v1", timestampUtc = t, source = "codex_stdio_bridge",
+        @event = "turn_completed", threadId = "thread-journal", turnId = "turn-journal", status = "completed",
+        decision = "accept"
+    });
+    EventJournal.Append(new
+    {
+        schemaVersion = "k15-codex-approval/v1", timestampUtc = t, source = "codex_stdio_bridge",
+        @event = "approval_resolved", decision = "accept", rpcIdType = "number", rpcId = "1", status = "completed"
+    });
+    EventJournal.Append(new
+    {
+        schemaVersion = "k15-codex-approval/v1", timestampUtc = t, source = "codex_stdio_bridge",
+        @event = "approval_resolved", decision = "accept", rpcIdType = "number", rpcId = "1"
+    });
+    Require(File.ReadAllLines(EventJournal.FilePath).Length == 2,
+        "Schema-specific EventJournal filtering must reject cross-schema fields and retain valid approval.");
+}
+finally
+{
+    EventJournal.SetTestDirectoryPath(null);
+    if (Directory.Exists(journalFixture))
+        Directory.Delete(journalFixture, recursive: true);
+}
+var waitingCompletion = new StateReducer();
+waitingCompletion.Apply(Hook(t, "UserPromptSubmit", "waiting-completion", turn: "turn-waiting", thread: "thread-waiting"));
+waitingCompletion.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "waiting-completion", turn: "turn-waiting", thread: "thread-waiting"));
+Require(waitingCompletion.Apply(Completion(t.AddSeconds(2), "thread-waiting", "turn-waiting")) is null &&
+        waitingCompletion.State == K15NormalizedState.Waiting && waitingCompletion.LastSessionTransitions.Count == 0,
+    "WAITING must not be treated as successful completion automatically.");
+var endedCompletion = new StateReducer();
+endedCompletion.Apply(Hook(t, "UserPromptSubmit", "ended-completion", turn: "turn-ended", thread: "thread-ended"));
+endedCompletion.Apply(Hook(t.AddSeconds(1), "SessionEnd", "ended-completion", turn: "turn-ended", thread: "thread-ended"));
+Require(endedCompletion.Apply(Completion(t.AddSeconds(2), "thread-ended", "turn-ended")) is null &&
+        endedCompletion.State == K15NormalizedState.Normal && endedCompletion.LastSessionTransitions.Count == 0,
+    "Ended session must not be resurrected by completion.");
 reducer.Apply(Hook(t.AddSeconds(1), "PermissionRequest"));
 Require(reducer.State == K15NormalizedState.Waiting, "PermissionRequest must enter WAITING.");
 var resolved = reducer.Apply(Approval(t.AddSeconds(1), "accept", turnId: "turn-approval"));

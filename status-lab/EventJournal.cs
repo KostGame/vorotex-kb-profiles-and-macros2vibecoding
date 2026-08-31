@@ -8,15 +8,19 @@ internal static class EventJournal
     private const string MutexName = @"Local\VorotexK15StatusLabJournal";
     private const long MaxFileBytes = 5L * 1024 * 1024;
     private const int MaxArchives = 2;
+    private static string? _testDirectoryPath;
 
-    public static string DirectoryPath { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "VOROTEX",
-        "K15 Status Lab");
+    public static string DirectoryPath => _testDirectoryPath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "VOROTEX",
+            "K15 Status Lab");
 
-    public static string FilePath { get; } = Path.Combine(DirectoryPath, "events.jsonl");
-    public static string DetailedLoggingMarkerPath { get; } = Path.Combine(DirectoryPath, "detailed-logging.disabled");
+    public static string FilePath => Path.Combine(DirectoryPath, "events.jsonl");
+    public static string DetailedLoggingMarkerPath => Path.Combine(DirectoryPath, "detailed-logging.disabled");
     public static bool DetailedLoggingEnabled => !File.Exists(DetailedLoggingMarkerPath);
+
+    // Narrow same-assembly test seam; production callers never set it.
+    internal static void SetTestDirectoryPath(string? path) => _testDirectoryPath = path;
 
     public static void SetDetailedLoggingEnabled(bool enabled)
     {
@@ -148,16 +152,49 @@ internal static class EventJournal
 
     private static bool IsSanitizedApprovalRecord(JsonElement root)
     {
-        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        var schemaVersion = GetString(root, "schemaVersion");
+        if (schemaVersion == "k15-codex-completion/v1")
+        {
+            var completionAllowed = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "schemaVersion", "timestampUtc", "source", "event", "threadId", "turnId", "status"
+            };
+            if (root.EnumerateObject().Any(property => !completionAllowed.Contains(property.Name)))
+                return false;
+
+            if (GetString(root, "event") != "turn_completed" ||
+                GetString(root, "status") is not ("completed" or "interrupted" or "failed") ||
+                string.IsNullOrWhiteSpace(GetString(root, "threadId")) ||
+                string.IsNullOrWhiteSpace(GetString(root, "turnId")) ||
+                !DateTimeOffset.TryParse(GetString(root, "timestampUtc"), out _))
+            {
+                return false;
+            }
+
+            foreach (var property in root.EnumerateObject())
+            {
+                if (property.Value.ValueKind != JsonValueKind.String ||
+                    Encoding.UTF8.GetByteCount(property.Value.GetString() ?? string.Empty) > 1024)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (schemaVersion != "k15-codex-approval/v1")
+            return false;
+
+        var approvalAllowed = new HashSet<string>(StringComparer.Ordinal)
         {
             "schemaVersion", "timestampUtc", "source", "event", "decision",
             "rpcIdType", "rpcId", "threadId", "turnId", "itemId"
         };
-        if (root.EnumerateObject().Any(property => !allowed.Contains(property.Name)))
+        if (root.EnumerateObject().Any(property => !approvalAllowed.Contains(property.Name)))
             return false;
 
-        if (GetString(root, "schemaVersion") != "k15-codex-approval/v1" ||
-            GetString(root, "event") != "approval_resolved" ||
+        if (GetString(root, "event") != "approval_resolved" ||
             GetString(root, "decision") is not ("accept" or "acceptForSession" or "decline" or "cancel") ||
             GetString(root, "rpcIdType") is not ("number" or "string") ||
             string.IsNullOrWhiteSpace(GetString(root, "rpcId")) ||
