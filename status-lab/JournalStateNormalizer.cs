@@ -30,6 +30,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     public string? FocusedSessionId => _reducer.FocusedSessionId;
     public string FocusedCwd => _reducer.FocusedCwd;
     public CodexAttentionSnapshot AttentionSnapshot => _reducer.Snapshot;
+    public IReadOnlyList<CodexSessionSnapshot> SessionSnapshots => _reducer.SessionSnapshots;
 
     public void Start()
     {
@@ -38,8 +39,11 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 
         EventJournal.EnsureExists();
         var replayLines = SafeReadReplayLines();
-        RehydrateFromRecentJournal(replayLines);
+        var replayTransitions = RehydrateFromRecentJournal(replayLines);
         _readOffset = SafeCurrentLength();
+
+        foreach (var transition in replayTransitions)
+            PublishSessionTransition(transition);
 
         EventJournal.Append(new
         {
@@ -61,11 +65,13 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     public void Acknowledge()
     {
         var transition = _reducer.Acknowledge(DateTimeOffset.UtcNow);
+        foreach (var sessionTransition in _reducer.LastSessionTransitions)
+            PublishSessionTransition(sessionTransition);
         if (transition is not null)
             PublishTransition(transition);
     }
 
-    private void RehydrateFromRecentJournal(string[] lines)
+    private IReadOnlyList<SessionStateTransition> RehydrateFromRecentJournal(string[] lines)
     {
         var cutoff = DateTimeOffset.UtcNow - StartupReplayWindow;
         var start = Math.Max(0, lines.Length - StartupReplayMaxLines);
@@ -86,6 +92,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         }
 
         _reducer.Rehydrate(events);
+        return _reducer.LastSessionTransitions;
     }
 
     private async Task ProcessLoopAsync()
@@ -209,6 +216,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         for (var index = 0; index < readyCount; index++)
         {
             var transition = _reducer.Apply(_pending[index]);
+            foreach (var sessionTransition in _reducer.LastSessionTransitions)
+                PublishSessionTransition(sessionTransition);
             if (transition is not null)
                 PublishTransition(transition);
         }
@@ -224,6 +233,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             timestampUtc = DateTimeOffset.UtcNow,
             source = "state_normalizer",
             @event = "normalized_state_changed",
+            plane = "aggregate",
             previous = ToWireName(transition.Previous),
             current = ToWireName(transition.Current),
             reason = transition.Reason,
@@ -231,11 +241,45 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             focusedSessionId = _reducer.FocusedSessionId,
             focusedCwd = _reducer.FocusedCwd,
             activeTaskSessions = _reducer.ActiveTaskSessionCount,
-            attention = _reducer.Snapshot
+            attention = _reducer.Snapshot,
+            aggregatePrevious = ToWireName(transition.Previous),
+            aggregateCurrent = ToWireName(transition.Current),
+            driverSessionId = _reducer.Snapshot.DriverSessionId,
+            driverReason = _reducer.Snapshot.DriverReason,
+            runningCount = _reducer.Snapshot.RunningCount,
+            waitingCount = _reducer.Snapshot.ApprovalWaitingCount,
+            doneUnreadCount = _reducer.Snapshot.DoneUnreadCount
         });
 
         StateChanged?.Invoke(transition.Current, transition);
     }
+
+    private void PublishSessionTransition(SessionStateTransition transition)
+    {
+        EventJournal.Append(new
+        {
+            timestampUtc = DateTimeOffset.UtcNow,
+            source = "state_normalizer",
+            @event = "session_state_changed",
+            plane = "per_session",
+            sessionId = BoundOpaque(transition.SessionId),
+            previous = ToWireName(transition.Previous),
+            current = ToWireName(transition.Current),
+            reason = transition.Reason,
+            sourceTimestampUtc = transition.TimestampUtc,
+            isRehydrated = transition.IsRehydrated,
+            correlation = new
+            {
+                threadId = BoundOpaque(transition.ThreadId),
+                turnId = BoundOpaque(transition.TurnId),
+                rpcIdType = transition.RpcIdType,
+                rpcId = BoundOpaque(transition.RpcId)
+            }
+        });
+    }
+
+    private static string BoundOpaque(string value) =>
+        string.IsNullOrEmpty(value) ? string.Empty : value.Length <= 128 ? value : value[..128];
 
     internal static StatusInputEvent? ParseInput(string line)
     {

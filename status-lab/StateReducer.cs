@@ -46,6 +46,24 @@ internal sealed record StateTransition(
     string Reason,
     DateTimeOffset TimestampUtc);
 
+internal sealed record SessionStateTransition(
+    string SessionId,
+    K15NormalizedState Previous,
+    K15NormalizedState Current,
+    string Reason,
+    DateTimeOffset TimestampUtc,
+    string ThreadId,
+    string TurnId,
+    string RpcIdType,
+    string RpcId,
+    bool IsRehydrated);
+
+internal sealed record CodexSessionSnapshot(
+    string SessionId,
+    K15NormalizedState State,
+    bool IsAlive,
+    bool IsFocused);
+
 internal sealed record CodexAttentionSnapshot(
     int RunningCount,
     int ApprovalWaitingCount,
@@ -54,7 +72,11 @@ internal sealed record CodexAttentionSnapshot(
     int EndedSessionCount,
     K15NormalizedState AggregateState,
     DateTimeOffset? NoRunningSinceUtc,
-    DateTimeOffset? StaleResetDueUtc);
+    DateTimeOffset? StaleResetDueUtc)
+{
+    public string? DriverSessionId { get; init; }
+    public string DriverReason { get; init; } = string.Empty;
+}
 
 internal sealed class StateReducer
 {
@@ -80,6 +102,8 @@ internal sealed class StateReducer
     private readonly Dictionary<string, SessionRuntime> _sessions = new(StringComparer.Ordinal);
     private DateTimeOffset? _noRunningSinceUtc;
 
+    public IReadOnlyList<SessionStateTransition> LastSessionTransitions { get; private set; } = Array.Empty<SessionStateTransition>();
+
     public StateReducer(double staleAttentionTimeoutSeconds = 18000)
     {
         if (staleAttentionTimeoutSeconds < 0 || staleAttentionTimeoutSeconds > 259200)
@@ -100,8 +124,16 @@ internal sealed class StateReducer
 
     public CodexAttentionSnapshot Snapshot => CreateSnapshot();
 
+    public IReadOnlyList<CodexSessionSnapshot> SessionSnapshots => _sessions.Values
+        .Where(session => !session.Internal)
+        .OrderBy(session => session.Id, StringComparer.Ordinal)
+        .Select(session => new CodexSessionSnapshot(session.Id, session.State, !session.Ended,
+            string.Equals(session.Id, FocusedSessionId, StringComparison.Ordinal)))
+        .ToArray();
+
     public StateTransition? Apply(StatusInputEvent input)
     {
+        LastSessionTransitions = Array.Empty<SessionStateTransition>();
         if (input.Source.Equals("codex_hook", StringComparison.Ordinal))
             return ApplyCodex(input);
 
@@ -116,17 +148,21 @@ internal sealed class StateReducer
     public void Rehydrate(IEnumerable<StatusInputEvent> events)
     {
         ResetAll();
+        var replayTransitions = new List<SessionStateTransition>();
         foreach (var input in events
                      .Where(input => input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
                                      input.Source.Equals("codex_stdio_bridge", StringComparison.Ordinal))
                      .OrderBy(input => input.TimestampUtc))
         {
             Apply(input);
+            replayTransitions.AddRange(LastSessionTransitions.Select(transition => transition with { IsRehydrated = true }));
         }
+        LastSessionTransitions = replayTransitions;
     }
 
     public StateTransition? Tick(DateTimeOffset nowUtc)
     {
+        LastSessionTransitions = Array.Empty<SessionStateTransition>();
         var snapshot = CreateSnapshot();
         if (_staleAttentionTimeout is not TimeSpan timeout ||
             snapshot.RunningCount != 0 ||
@@ -140,7 +176,7 @@ internal sealed class StateReducer
         foreach (var session in _sessions.Values.Where(session => !session.Internal &&
                      session.State is K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
         {
-            session.State = K15NormalizedState.Normal;
+            SetSessionState(session, K15NormalizedState.Normal, "stale_attention_timeout", nowUtc);
             session.LastPermissionUtc = null;
             session.LastStopUtc = null;
             session.DoneEnteredUtc = null;
@@ -155,10 +191,11 @@ internal sealed class StateReducer
     // ledger remains intentionally ready for a future Acknowledge(sessionId).
     public StateTransition? Acknowledge(DateTimeOffset timestampUtc, string reason = "manual_acknowledge")
     {
+        LastSessionTransitions = Array.Empty<SessionStateTransition>();
         foreach (var session in _sessions.Values.Where(session => !session.Internal &&
                      session.State is K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
         {
-            session.State = K15NormalizedState.Normal;
+            SetSessionState(session, K15NormalizedState.Normal, reason, timestampUtc);
             session.LastPermissionUtc = null;
             session.LastStopUtc = null;
             session.DoneEnteredUtc = null;
@@ -170,13 +207,14 @@ internal sealed class StateReducer
 
     public StateTransition? Acknowledge(string sessionId, DateTimeOffset timestampUtc, string reason = "session_acknowledge")
     {
+        LastSessionTransitions = Array.Empty<SessionStateTransition>();
         if (!_sessions.TryGetValue(sessionId, out var session) || session.Internal ||
             session.State is not (K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
         {
             return null;
         }
 
-        session.State = K15NormalizedState.Normal;
+        SetSessionState(session, K15NormalizedState.Normal, reason, timestampUtc);
         session.LastPermissionUtc = null;
         session.LastStopUtc = null;
         session.DoneEnteredUtc = null;
@@ -202,7 +240,7 @@ internal sealed class StateReducer
             // Completion is not a read receipt: retain DONE_UNREAD across end.
             if (session.State is not K15NormalizedState.DonePendingAttention)
             {
-                session.State = K15NormalizedState.Normal;
+                SetSessionState(session, K15NormalizedState.Normal, "codex_session_end", input.TimestampUtc, input);
                 session.LastPermissionUtc = null;
             }
 
@@ -219,7 +257,7 @@ internal sealed class StateReducer
         {
             case "UserPromptSubmit":
                 // A prompt in this same session is the MVP explicit return/ACK.
-                session.State = K15NormalizedState.Running;
+                SetSessionState(session, K15NormalizedState.Running, "codex_user_prompt_submit", input.TimestampUtc, input);
                 session.LastPermissionUtc = null;
                 session.LastStopUtc = null;
                 session.DoneEnteredUtc = null;
@@ -228,7 +266,7 @@ internal sealed class StateReducer
                 return RecomputeAggregate("codex_user_prompt_submit", input.TimestampUtc);
 
             case "PermissionRequest":
-                session.State = K15NormalizedState.Waiting;
+                SetSessionState(session, K15NormalizedState.Waiting, "codex_permission_request", input.TimestampUtc, input);
                 session.LastPermissionUtc = input.TimestampUtc;
                 session.LastStopUtc = null;
                 session.DoneEnteredUtc = null;
@@ -237,7 +275,8 @@ internal sealed class StateReducer
 
             case "PreToolUse":
             case "PostToolUse":
-                session.State = K15NormalizedState.Running;
+                SetSessionState(session, K15NormalizedState.Running,
+                    input.EventName == "PreToolUse" ? "codex_pre_tool_use" : "codex_post_tool_use", input.TimestampUtc, input);
                 session.LastPermissionUtc = null;
                 session.LastStopUtc = null;
                 session.DoneEnteredUtc = null;
@@ -245,7 +284,7 @@ internal sealed class StateReducer
                 return RecomputeAggregate(input.EventName == "PreToolUse" ? "codex_pre_tool_use" : "codex_post_tool_use", input.TimestampUtc);
 
             case "Stop":
-                session.State = K15NormalizedState.DonePendingAttention;
+                SetSessionState(session, K15NormalizedState.DonePendingAttention, "codex_stop", input.TimestampUtc, input);
                 session.LastPermissionUtc = null;
                 session.LastStopUtc = input.TimestampUtc;
                 session.DoneEnteredUtc = input.TimestampUtc;
@@ -279,7 +318,7 @@ internal sealed class StateReducer
             return null;
 
         var session = candidates[0];
-        session.State = K15NormalizedState.Running;
+        SetSessionState(session, K15NormalizedState.Running, "codex_approval_resolved", input.TimestampUtc, input);
         session.LastPermissionUtc = null;
         session.LastStopUtc = null;
         session.DoneEnteredUtc = null;
@@ -346,6 +385,11 @@ internal sealed class StateReducer
         var aggregate = waiting > 0 ? K15NormalizedState.Waiting :
             done > 0 ? K15NormalizedState.DonePendingAttention :
             running > 0 ? K15NormalizedState.Running : K15NormalizedState.Normal;
+        var driver = sessions.Where(session => session.State == aggregate &&
+                (aggregate == K15NormalizedState.DonePendingAttention || !session.Ended))
+            .OrderByDescending(session => string.Equals(session.Id, FocusedSessionId, StringComparison.Ordinal))
+            .ThenByDescending(session => session.LastActivityUtc)
+            .FirstOrDefault();
         return new CodexAttentionSnapshot(
             running,
             waiting,
@@ -356,7 +400,11 @@ internal sealed class StateReducer
             _noRunningSinceUtc,
             _staleAttentionTimeout is TimeSpan timeout && _noRunningSinceUtc is DateTimeOffset since
                 ? since + timeout
-                : null);
+                : null)
+        {
+            DriverSessionId = driver?.Id,
+            DriverReason = driver is null ? "aggregate_precedence_normal" : $"aggregate_precedence_{aggregate.ToString().ToLowerInvariant()}"
+        };
     }
 
     private StateTransition? RecomputeAggregate(string reason, DateTimeOffset timestampUtc)
@@ -380,6 +428,25 @@ internal sealed class StateReducer
         FocusedSessionId = null;
         State = K15NormalizedState.Normal;
         _noRunningSinceUtc = null;
+        LastSessionTransitions = Array.Empty<SessionStateTransition>();
+    }
+
+    private void SetSessionState(SessionRuntime session, K15NormalizedState next, string reason,
+        DateTimeOffset timestampUtc, StatusInputEvent? input = null)
+    {
+        if (session.State == next)
+            return;
+
+        var previous = session.State;
+        session.State = next;
+        var transition = new SessionStateTransition(
+            session.Id, previous, next, reason, timestampUtc,
+            input is not null && !string.IsNullOrWhiteSpace(input.ThreadId) ? input.ThreadId : session.ThreadId,
+            input is not null && !string.IsNullOrWhiteSpace(input.TurnId) ? input.TurnId : session.TurnId,
+            input?.RpcIdType ?? string.Empty,
+            input?.RpcId ?? string.Empty,
+            false);
+        LastSessionTransitions = LastSessionTransitions.Append(transition).ToArray();
     }
 
     internal static bool IsInternalCwd(string cwd)
