@@ -21,6 +21,30 @@ For live approval verification, the architect must correlate these records:
 The raw `PermissionRequest` alone is not session WAITING evidence; the
 per-session WAITING transition is required.
 
+For Issue #93, `codex_stdio_bridge/turn_completed` with schema
+`k15-codex-completion/v1` and status `completed` is the candidate authoritative
+no-Stop completion signal. The production bridge observes only bounded opaque
+`threadId`, `turnId`, and terminal `status`; turn items, messages, errors,
+usage, prompts, tools, commands, paths, and raw protocol are never persisted.
+The reducer requires exact thread and turn correlation to exactly one active
+non-internal session. It emits that session's
+`session_state_changed` with `reason=codex_turn_completed`; aggregate state is
+separate and is not proof that an individual task completed.
+Only a matching `RUNNING` session is eligible for the first completion
+transition. A repeated completion for an already DONE session is idempotent;
+NORMAL (including explicitly acknowledged) and WAITING sessions, ended
+sessions, ambiguous matches, and wrong turns fail closed. This authority never
+writes `LastStopUtc`: only a real `codex_hook/Stop` may create Stop evidence.
+
+`SessionEnd` remains lifecycle-only evidence and is never completion authority.
+The planned owner live verifier chain is:
+
+`UserPromptSubmit(S,T) -> RUNNING -> sanitized turn_completed(threadId,turnId=T,status=completed) -> same S DONE_PENDING_ATTENTION`.
+
+The no-Stop canary must prove that `Stop` is absent for the same turn; a later
+`SessionEnd` must not be treated as the DONE authority. Final acceptance still
+requires an owner live canary against the current Codex Desktop/runtime.
+
 `state_normalizer/normalized_state_changed` remains the backward-compatible
 aggregate plane. It has `plane=aggregate`, aggregate previous/current values,
 focused session, counts, `driverSessionId`, and `driverReason`. Aggregate

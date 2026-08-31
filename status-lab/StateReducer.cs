@@ -38,7 +38,8 @@ internal sealed record StatusInputEvent(
     string RpcIdType = "",
     string RpcId = "",
     string ThreadId = "",
-    string ItemId = "");
+    string ItemId = "",
+    string CompletionStatus = "");
 
 internal sealed record StateTransition(
     K15NormalizedState Previous,
@@ -138,7 +139,9 @@ internal sealed class StateReducer
             return ApplyCodex(input);
 
         if (input.Source.Equals("codex_stdio_bridge", StringComparison.Ordinal))
-            return ApplyApprovalResolution(input);
+            return input.EventName == "turn_completed"
+                ? ApplyTurnCompletion(input)
+                : ApplyApprovalResolution(input);
 
         // Windows toasts are retained as diagnostics only. They are not an ACK
         // signal and must never erase session attention.
@@ -325,6 +328,31 @@ internal sealed class StateReducer
         session.AcknowledgedUtc = input.TimestampUtc;
         FocusedSessionId = session.Id;
         return RecomputeAggregate("codex_approval_resolved", input.TimestampUtc);
+    }
+
+    private StateTransition? ApplyTurnCompletion(StatusInputEvent input)
+    {
+        if (input.SchemaVersion != "k15-codex-completion/v1" || input.CompletionStatus != "completed" ||
+            string.IsNullOrWhiteSpace(input.ThreadId) || string.IsNullOrWhiteSpace(input.TurnId))
+            return null;
+
+        var candidates = _sessions.Values.Where(session => !session.Internal && !session.Ended &&
+            string.Equals(session.ThreadId, input.ThreadId, StringComparison.Ordinal) &&
+            string.Equals(session.TurnId, input.TurnId, StringComparison.Ordinal)).ToArray();
+        if (candidates.Length != 1)
+            return null;
+
+        var session = candidates[0];
+        if (session.State == K15NormalizedState.DonePendingAttention)
+            return null;
+        if (session.State != K15NormalizedState.Running)
+            return null;
+
+        SetSessionState(session, K15NormalizedState.DonePendingAttention, "codex_turn_completed", input.TimestampUtc, input);
+        session.LastPermissionUtc = null;
+        session.DoneEnteredUtc = input.TimestampUtc;
+        FocusedSessionId = session.Id;
+        return RecomputeAggregate("codex_turn_completed", input.TimestampUtc);
     }
 
     private static bool MatchesApproval(SessionRuntime session, StatusInputEvent input)

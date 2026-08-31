@@ -71,6 +71,67 @@ test('live numeric approval request and exact result.decision response emit one 
   assert.equal(observer.pendingCount(), 0);
 });
 
+test('exact turn/completed notification emits only bounded sanitized completion metadata', async () => {
+  const events = []; const observer = observerWith(events);
+  const message = JSON.stringify({
+    jsonrpc: '2.0', method: 'turn/completed',
+    params: { threadId: 'thread-complete', turn: {
+      id: 'turn-complete', status: 'completed',
+      items: [{ text: 'MUST NOT REACH SIDE CHANNEL' }],
+      error: { message: 'MUST NOT REACH SIDE CHANNEL' }, usage: { secret: true }
+    } }
+  });
+  observer.observeServerChunk(Buffer.from(message.slice(0, 37)));
+  observer.observeServerChunk(Buffer.from(message.slice(37) + '\n'));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.deepEqual(Object.keys(events[0]).sort(), [
+    'event', 'schemaVersion', 'source', 'status', 'threadId', 'timestampUtc', 'turnId'
+  ].sort());
+  assert.equal(events[0].schemaVersion, 'k15-codex-completion/v1');
+  assert.equal(events[0].event, 'turn_completed');
+  assert.equal(events[0].status, 'completed');
+  assert.doesNotMatch(JSON.stringify(events[0]), /MUST NOT REACH SIDE CHANNEL|usage|items/);
+});
+
+test('only exact terminal turn statuses are observed; wrong method and malformed records are ignored', async () => {
+  const events = []; const observer = observerWith(events);
+  const send = (value) => observer.observeServerChunk(Buffer.from(JSON.stringify(value) + '\n'));
+  send({ method: 'turn/done', params: { threadId: 'T', turn: { id: 'U', status: 'completed' } } });
+  send({ method: 'turn/completed', params: { threadId: 'T', turn: { id: 'U', status: 'inProgress' } } });
+  send({ method: 'turn/completed', params: { threadId: '', turn: { id: 'U', status: 'completed' } } });
+  send({ method: 'turn/completed', params: { threadId: 'T', turn: { id: 'U', status: 'unknown' } } });
+  observer.observeServerChunk(Buffer.from('{not-json}\n'));
+  await tick();
+  assert.equal(events.length, 0);
+});
+
+test('oversized completion identifiers are ignored', async () => {
+  const events = []; const observer = observerWith(events);
+  const valid = { method: 'turn/completed', params: { threadId: 'T', turn: { id: 'U', status: 'completed' } } };
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ ...valid, params: {
+    ...valid.params, threadId: 'x'.repeat(1025)
+  } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ ...valid, params: {
+    ...valid.params, turn: { ...valid.params.turn, id: 'x'.repeat(1025) }
+  } }) + '\n'));
+  await tick();
+  assert.equal(events.length, 0);
+});
+
+test('multiple newline-delimited server records emit exactly one completion event', async () => {
+  const events = []; const observer = observerWith(events);
+  const completion = { jsonrpc: '2.0', method: 'turn/completed', params: {
+    threadId: 'thread-many', turn: { id: 'turn-many', status: 'completed' }
+  } };
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'thread/started', params: {} }) + '\n' +
+    JSON.stringify(completion) + '\n' + JSON.stringify({ jsonrpc: '2.0', method: 'thread/updated', params: {} }) + '\n'));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].threadId, 'thread-many');
+  assert.equal(events[0].turnId, 'turn-many');
+});
+
 test('acceptForSession, decline, and cancel remain distinct', async () => {
   const events = []; const observer = observerWith(events);
   for (const [id, decision] of [[2, 'acceptForSession'], [3, 'decline'], [4, 'cancel']]) {
