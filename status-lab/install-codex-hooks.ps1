@@ -10,9 +10,9 @@ function Get-DetectedCodexHomes {
     $candidates = New-Object System.Collections.Generic.List[string]
     $hasExplicitHomes = $false
 
-    foreach ($home in @($ExplicitHomes)) {
-        if (-not [string]::IsNullOrWhiteSpace($home)) {
-            $candidates.Add($home)
+    foreach ($homePath in @($ExplicitHomes)) {
+        if (-not [string]::IsNullOrWhiteSpace($homePath)) {
+            $candidates.Add($homePath)
             $hasExplicitHomes = $true
         }
     }
@@ -85,6 +85,11 @@ function Remove-OldStatusLabHandlers {
             continue
         }
 
+        if ($group -is [Array]) {
+            $result += Remove-OldStatusLabHandlers -Groups $group
+            continue
+        }
+
         $hooksProperty = $group.PSObject.Properties['hooks']
         if ($null -eq $hooksProperty) {
             $result += $group
@@ -107,6 +112,55 @@ function Remove-OldStatusLabHandlers {
     return @($result)
 }
 
+function Remove-StatusLabHandlersFromAllEvents {
+    param([Parameter(Mandatory)]$Hooks)
+
+    # Snapshot event names first so stale events such as SessionStart are cleaned
+    # while every non-Status-Lab group remains unchanged.
+    foreach ($property in @($Hooks.PSObject.Properties)) {
+        $eventName = $property.Name
+        $groups = Remove-OldStatusLabHandlers -Groups @($property.Value)
+        if ($groups.Count -eq 0) {
+            $Hooks.PSObject.Properties.Remove($eventName)
+        } else {
+            $property.Value = @($groups)
+        }
+    }
+}
+
+function Get-StableLoggerPath {
+    $localAppData = $env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($localAppData)) { $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData) }
+    if ([string]::IsNullOrWhiteSpace($localAppData)) {
+        throw 'LOCALAPPDATA is unavailable; stable Status Lab logger path cannot be established.'
+    }
+    return (Join-Path $localAppData 'VorotexK15\app\hooks\codex-hook-logger.ps1')
+}
+
+function Deploy-StableLogger {
+    param([string]$SourcePath)
+
+    $destination = Get-StableLoggerPath
+    New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($destination)) -Force | Out-Null
+    if (-not [string]::Equals([IO.Path]::GetFullPath($SourcePath), [IO.Path]::GetFullPath($destination), [StringComparison]::OrdinalIgnoreCase)) {
+        Copy-Item -LiteralPath $SourcePath -Destination $destination -Force -ErrorAction Stop
+    }
+    if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) {
+        throw "Stable logger deployment failed: $destination"
+    }
+    return [IO.Path]::GetFullPath($destination)
+}
+
+function New-HooksBackupPath {
+    param([string]$HooksPath)
+
+    $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
+    do {
+        $candidate = "$HooksPath.vorotex-k15-status-lab.$stamp.$([Guid]::NewGuid().ToString('N')).bak"
+    } while (Test-Path -LiteralPath $candidate)
+    return $candidate
+}
+
 function Install-StatusLabHooks {
     param(
         [Parameter(Mandatory)][string]$CodexHomePath,
@@ -116,13 +170,7 @@ function Install-StatusLabHooks {
     New-Item -ItemType Directory -Path $CodexHomePath -Force | Out-Null
 
     $target = Join-Path $CodexHomePath 'hooks.json'
-    $backup = $target + '.vorotex-k15-status-lab.bak'
-
     if (Test-Path -LiteralPath $target -PathType Leaf) {
-        if (-not (Test-Path -LiteralPath $backup -PathType Leaf)) {
-            Copy-Item -LiteralPath $target -Destination $backup -ErrorAction Stop
-        }
-
         try {
             $root = Get-Content -LiteralPath $target -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
         } catch {
@@ -138,6 +186,8 @@ function Install-StatusLabHooks {
     if ($null -eq $root.hooks) {
         $root.hooks = New-Object PSObject
     }
+
+    Remove-StatusLabHandlersFromAllEvents -Hooks $root.hooks
 
     $quotedLogger = '"' + $Logger + '"'
     $commandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $quotedLogger"
@@ -179,6 +229,28 @@ function Install-StatusLabHooks {
     }
 
     $json = $root | ConvertTo-Json -Depth 20
+    $existingSemantic = if (Test-Path -LiteralPath $target -PathType Leaf) {
+        try { (Get-Content -LiteralPath $target -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop | ConvertTo-Json -Depth 20 -Compress) }
+        catch { throw "Existing hooks.json is malformed; no changes were written: $target" }
+    } else { $null }
+    $desiredSemantic = ($json | ConvertFrom-Json -ErrorAction Stop | ConvertTo-Json -Depth 20 -Compress)
+    if ($null -ne $existingSemantic -and $existingSemantic -eq $desiredSemantic) {
+        return [pscustomobject]@{
+            home = $CodexHomePath
+            hooksPath = $target
+            backupPath = $null
+            changed = $false
+            loggerPath = $Logger
+        }
+    }
+
+    # The backup is created only after a real semantic change is known, and
+    # immediately before the first write to hooks.json. Never overwrite one.
+    $backup = $null
+    if (Test-Path -LiteralPath $target -PathType Leaf) {
+        $backup = New-HooksBackupPath -HooksPath $target
+        [IO.File]::Copy($target, $backup, $false)
+    }
     $tmp = $target + '.tmp.' + [Guid]::NewGuid().ToString('N')
 
     try {
@@ -205,19 +277,40 @@ function Install-StatusLabHooks {
         if ($matches.Count -ne 1) {
             throw "Hook verification failed for $name in $target"
         }
+        foreach ($handler in $matches) {
+            if ([string]$handler.commandWindows -notlike "*$Logger*") {
+                throw "Hook path verification failed for $name in $target"
+            }
+        }
+    }
+    $canonicalNames = @('UserPromptSubmit', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd')
+    foreach ($property in @($verify.hooks.PSObject.Properties)) {
+        if ($canonicalNames -notcontains $property.Name) {
+            $stale = @(
+                foreach ($group in @($property.Value)) {
+                    foreach ($handler in @($group.hooks)) {
+                        if (Test-IsStatusLabHandler -Handler $handler) { $handler }
+                    }
+                }
+            )
+            if ($stale.Count -ne 0) { throw "Stale Status Lab handler survived for $($property.Name) in $target" }
+        }
     }
 
     return [pscustomobject]@{
         home = $CodexHomePath
         hooksPath = $target
-        backupPath = if (Test-Path -LiteralPath $backup -PathType Leaf) { $backup } else { $null }
+        backupPath = $backup
+        changed = $true
+        loggerPath = $Logger
     }
 }
 
-$logger = Join-Path $PSScriptRoot 'codex-hook-logger.ps1'
-if (-not (Test-Path -LiteralPath $logger -PathType Leaf)) {
-    throw "Logger script not found: $logger"
+$sourceLogger = Join-Path $PSScriptRoot 'codex-hook-logger.ps1'
+if (-not (Test-Path -LiteralPath $sourceLogger -PathType Leaf)) {
+    throw "Logger script not found: $sourceLogger"
 }
+$logger = Deploy-StableLogger -SourcePath $sourceLogger
 
 $homes = Get-DetectedCodexHomes -ExplicitHomes $CodexHome
 $installed = @()

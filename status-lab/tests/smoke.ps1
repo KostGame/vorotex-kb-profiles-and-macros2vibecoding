@@ -193,6 +193,7 @@ try {
   }
 }
 '@ | Set-Content -LiteralPath $hooksPath -Encoding UTF8
+    $originalHooks = Get-Content -LiteralPath $hooksPath -Raw -Encoding UTF8
 
     $firstInstall = (& $installer | Out-String | ConvertFrom-Json)
     $secondInstall = (& $installer | Out-String | ConvertFrom-Json)
@@ -227,8 +228,9 @@ try {
     )[0]
     if ([int]$sessionEndHandler.timeout -ne 3) { throw 'SessionEnd timeout must be 3 seconds.' }
 
-    $backup = $hooksPath + '.vorotex-k15-status-lab.bak'
-    if (-not (Test-Path -LiteralPath $backup)) { throw 'Installer did not create one-time backup.' }
+    $backup = @($firstInstall.installed | Where-Object { $_.hooksPath -eq $hooksPath })[0].backupPath
+    if ([string]::IsNullOrWhiteSpace($backup) -or -not (Test-Path -LiteralPath $backup -PathType Leaf)) { throw 'Installer did not create a safe hooks.json backup.' }
+    if ((Get-Content -LiteralPath $backup -Raw -Encoding UTF8) -ne $originalHooks) { throw 'Installer backup did not preserve pre-repair hooks.json.' }
 
     $agentLoopHooksPath = Join-Path $agentLoopHome 'hooks.json'
     if (-not (Test-Path -LiteralPath $agentLoopHooksPath)) { throw 'Installer did not install hooks into .codex-agentloop.' }
