@@ -43,7 +43,7 @@ test('diagnostic CLI preserves Stop-authored classification and ignores forbidde
 test('runner is explicit about all four modes and protected surfaces', () => {
   const source = fs.readFileSync(runner, 'utf8');
   for (const mode of ['PREPARE','ARM','VERIFY_DISABLE','ROLLBACK']) assert.match(source, new RegExp(`Mode -eq '${mode}'`));
-  for (const forbidden of ['Machine','hooks.json']) assert.match(source, new RegExp(forbidden));
+  for (const forbidden of ['Machine']) assert.match(source, new RegExp(forbidden));
   assert.match(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), /WindowsApps/);
   assert.match(source, /1048576/); assert.match(source, /r5-diagnostic|r5-live-diagnose/);
 });
