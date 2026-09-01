@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'live');
 const runner = path.join(root, 'K15-CODEX-DONE-R5-LIVE.ps1');
+const lifecycle = path.join(root, 'r5-live-runner.psm1');
 const diagnose = path.join(root, 'r5-live-diagnose.mjs');
 const ps = process.env.PWSH ?? 'pwsh.exe';
 const hook = (event, extra = {}) => ({ source: 'codex_hook', event, timestampUtc: '2026-01-01T00:00:00Z', sessionId: 'S', turnId: 'T', ...extra });
@@ -42,8 +43,9 @@ test('diagnostic CLI preserves Stop-authored classification and ignores forbidde
 
 test('runner is explicit about all four modes and protected surfaces', () => {
   const source = fs.readFileSync(runner, 'utf8');
-  for (const mode of ['PREPARE','ARM','VERIFY_DISABLE','ROLLBACK']) assert.match(source, new RegExp(`Mode\\s*-eq\\s*'${mode}'`));
-  for (const forbidden of ['Machine']) assert.match(source, new RegExp(forbidden));
+  const lifecycleSource = fs.readFileSync(lifecycle, 'utf8');
+  for (const mode of ['PREPARE','ARM','VERIFY_DISABLE','ROLLBACK']) assert.match(`${source}\n${lifecycleSource}`, new RegExp(mode));
+  for (const forbidden of ['Machine']) assert.match(`${source}\n${lifecycleSource}`, new RegExp(forbidden));
   assert.match(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), /WindowsApps/);
-  assert.match(source, /1048576/); assert.match(source, /r5-diagnostic|r5-live-diagnose/);
+  assert.match(lifecycleSource, /1048576/); assert.match(lifecycleSource, /r5-diagnostic|r5-live-diagnose/);
 });

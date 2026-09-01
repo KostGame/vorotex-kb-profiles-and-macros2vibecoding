@@ -2,7 +2,9 @@
 
 This package prepares and verifies the owner canary; implementation and tests never run the live canary. Run the numbered `.cmd` launcher for exactly one phase. `PREPARE` is read-only against Codex configuration. Before `ARM`, close Codex Desktop completely. After ARM, perform exactly one harmless ordinary turn manually, close Codex, then run `VERIFY-DISABLE`. `ROLLBACK` is safe after a partial ARM.
 
-The runner reuses `production/Activate-CodexBridge.ps1` and imports `src/r5-diagnostic.mjs`. It records only the allowlisted sanitized chronology. It never stores prompts, responses, commands, tool arguments, raw JSON-RPC, credentials, or raw journal deltas. Owner-local state is written under `%LOCALAPPDATA%\VorotexK15\app\codex-done-r5-live` and is not repository evidence.
+The runner reuses `production/Activate-CodexBridge.ps1` and imports `src/r5-diagnostic.mjs`. The `.cmd` entrypoint and `test/live-runner-owner.test.ps1` both call the same `Invoke-R5Prepare`, `Invoke-R5Arm`, `Invoke-R5VerifyDisable`, and `Invoke-R5Rollback` lifecycle functions; production uses `RealProvider` and tests use `FakeProvider` with temporary stores. It records only the allowlisted sanitized chronology. It never stores prompts, responses, commands, tool arguments, raw JSON-RPC, credentials, or raw journal deltas. Owner-local state is written under `%LOCALAPPDATA%\VorotexK15\app\codex-done-r5-live` and is not repository evidence.
+
+The provider behavioral acceptance is run with `npm run test:owner --prefix status-lab/research/codex-done-r5`. It does not start Codex Desktop, AppX, the bridge, or a live canary.
 
 Suggested harmless turn: `Ответь одной строкой: R5 CANARY OK. Не используй инструменты и не изменяй файлы.` A `Stop` event is diagnosed as `STOP_AUTHORED_DONE`; it is not Issue #93 acceptance.
 
