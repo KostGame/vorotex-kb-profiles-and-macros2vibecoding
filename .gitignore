@@ -11,6 +11,8 @@ __pycache__/
 venv/
 TestResults/
 *.trx
+**/bin/
+**/obj/
 .vscode/
 .idea/
 .DS_Store
