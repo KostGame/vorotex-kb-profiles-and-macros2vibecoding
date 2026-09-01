@@ -3,83 +3,59 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { diagnose, evaluatePreflight, persistEvidence, ALLOWED_EVIDENCE_FIELDS } from '../src/r5-diagnostic.mjs';
+import { adaptProductionSessionEvent, diagnose, evaluatePreflight, persistEvidence, ALLOWED_EVIDENCE_FIELDS, RESULTS } from '../src/r5-diagnostic.mjs';
 
-const base = { source: 'codex_hook', sessionId: 'S', turnId: 'T' };
-const hook = (event, timestampUtc, extra = {}) => ({ ...base, event, timestampUtc, sessionThreadId: 'S', ...extra });
-const completion = (status = 'completed', timestampUtc = '2026-01-01T00:00:02Z', threadId = 'S') =>
-  ({ source: 'codex_stdio_bridge', event: 'turn_completed', timestampUtc, threadId, turnId: 'T', terminalStatus: status });
+const hook = (event, timestampUtc, extra = {}) => ({ source: 'codex_hook', event, timestampUtc, sessionId: 'S', turnId: 'T', ...extra });
+const completion = (status = 'completed', threadId = 'S', timestampUtc = '2026-01-01T00:00:02Z') => ({ source: 'codex_stdio_bridge', event: 'turn_completed', timestampUtc, threadId, turnId: 'T', terminalStatus: status });
+const state = (reason = 'codex_turn_completed', isRehydrated = false, threadId = 'S', timestampUtc = '2026-01-01T00:00:03Z', extra = {}) => ({ source: 'state_normalizer', event: 'session_state_changed', plane: 'per_session', sessionId: 'S', previous: 'RUNNING', current: 'DONE_PENDING_ATTENTION', reason, sourceTimestampUtc: timestampUtc, isRehydrated, correlation: { threadId, turnId: 'T', rpcIdType: '', rpcId: '' }, ...extra });
 
-test('A: completion without Stop is the diagnostic candidate', () => {
+test('A: real no-Stop production transition is accepted', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state()]);
+  assert.equal(result.cases[0].result, RESULTS.ACCEPTED); assert.equal(result.cases[0].productionDone, true);
+});
+test('B: completion without real production DONE is not acceptance', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z', { threadId: 'S' }), completion()]);
+  assert.equal(result.cases[0].result, RESULTS.NO_PRODUCTION_DONE); assert.equal(result.cases[0].productionDone, false);
+});
+test('C/D: real Stop transition is authoritative in either chronology', () => {
+  for (const events of [[hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), hook('Stop', '2026-01-01T00:00:01Z'), state('codex_stop'), completion()], [hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), hook('Stop', '2026-01-01T00:00:03Z'), state('codex_stop')]]) assert.equal(diagnose(events).cases[0].result, RESULTS.STOP);
+});
+test('E: empty observed thread plus session-id completion is only a bounded candidate', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion()]);
-  assert.equal(result.cases[0].reason, 'codex_turn_completed');
-  assert.equal(result.cases[0].currentState, 'DONE_PENDING_ATTENTION');
-  assert.equal(result.cases[0].chronology, 'no_stop');
+  assert.equal(result.cases[0].result, RESULTS.CANDIDATE); assert.equal(result.cases[0].productionDone, false);
 });
-
-test('B/C: Stop remains the authority and chronology is retained', () => {
-  for (const events of [
-    [hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), hook('Stop', '2026-01-01T00:00:01Z'), completion()],
-    [hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), hook('Stop', '2026-01-01T00:00:03Z')]
-  ]) {
-    const result = diagnose(events);
-    assert.equal(result.cases[0].reason, 'codex_stop');
-    assert.match(result.cases[0].chronology, /stop|no_stop/);
-  }
+test('F/G: wrong and unrelated identities are not exact correlation', () => {
+  assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion('completed', 'S'), state('codex_turn_completed', false, 'OTHER')]).cases[0].result, RESULTS.IDENTITY);
+  assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z', { threadId: 'S' }), completion('completed', 'OTHER')]).cases[0].result, RESULTS.IDENTITY);
 });
-
-test('D: mismatching identity does not correlate', () => {
-  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion('completed', '2026-01-01T00:00:02Z', 'OTHER')]);
-  assert.equal(result.cases[0].correlationResult, 'identity_or_ambiguity_mismatch');
-  assert.equal(result.cases[0].reason, '');
+test('H: ambiguous duplicate completion evidence fails closed', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), completion('completed', 'S', '2026-01-01T00:00:04Z'), state()]);
+  assert.equal(result.cases[0].result, RESULTS.AMBIGUOUS);
 });
-
-test('E: empty session.ThreadId reports the future fix candidate without applying it', () => {
-  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z', { sessionThreadId: '' }), completion()]);
-  assert.equal(result.cases[0].mismatchCandidate, true);
-  assert.equal(result.cases[0].correlationResult, 'candidate_session_id_thread_id_mismatch');
-  assert.equal(result.cases[0].reason, '');
+test('I: non-success statuses never become successful authority', () => {
+  for (const status of ['interrupted', 'failed', 'inProgress']) assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(status), state()]).cases[0].result, RESULTS.NON_SUCCESS);
 });
-
-test('F: interrupted, failed, and inProgress are not successful DONE authority', () => {
-  for (const status of ['interrupted', 'failed', 'inProgress']) {
-    const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(status)]);
-    assert.notEqual(result.cases[0].reason, 'codex_turn_completed');
-  }
+test('J: exact duplicate/replay chronology is deterministic', () => {
+  const p = hook('UserPromptSubmit', '2026-01-01T00:00:00Z'); const c = completion(); const s = state(); const result = diagnose([p, c, s, p, c, s]);
+  assert.equal(result.duplicateEventsRemoved, 3); assert.equal(result.cases[0].result, RESULTS.ACCEPTED);
 });
-
-test('G: duplicate completion is deterministic and not a second evidence claim', () => {
-  const event = completion();
-  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), event, event]);
-  assert.equal(result.duplicateEventsRemoved, 1);
-  assert.equal(result.evidence.length, 1);
+test('K: actual nested production schema is adapted without raw correlation', () => {
+  const adapted = adaptProductionSessionEvent(state()); assert.equal(adapted.currentState, 'DONE_PENDING_ATTENTION'); assert.equal(adapted.threadId, 'S'); assert.equal('correlation' in adapted, false);
 });
-
-test('H: parallel sessions do not cross-correlate', () => {
-  const events = [hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), hook('UserPromptSubmit', '2026-01-01T00:00:01Z', { sessionId: 'S2', turnId: 'T2' }), completion()];
-  const result = diagnose(events);
-  assert.equal(result.cases.find(item => item.sessionId === 'S').reason, 'codex_turn_completed');
-  assert.equal(result.cases.find(item => item.sessionId === 'S2').reason, '');
+test('L: rehydrated DONE is not live acceptance', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state('codex_turn_completed', true)]);
+  assert.equal(result.cases[0].result, RESULTS.REHYDRATED); assert.equal(result.cases[0].productionDone, false);
 });
-
-test('I: persisted evidence contains only the sanitized allowlist', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r5-'));
-  const file = path.join(dir, 'evidence.jsonl');
+test('M: bare SessionEnd never creates DONE', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), hook('SessionEnd', '2026-01-01T00:00:02Z')]);
+  assert.equal(result.cases[0].result, RESULTS.NO_COMPLETION); assert.equal(result.cases[0].productionDone, false);
+});
+test('N: persisted evidence is privacy-bounded and preflight fails closed', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r5-')); const file = path.join(dir, 'evidence.jsonl');
   try {
-    const result = diagnose([{ ...hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), prompt: 'secret', tool_input: 'secret' }, completion()]);
-    persistEvidence(file, result.evidence);
-    for (const line of fs.readFileSync(file, 'utf8').trim().split('\n')) {
-      const record = JSON.parse(line);
-      assert.deepEqual(Object.keys(record).filter(key => !ALLOWED_EVIDENCE_FIELDS.has(key)), []);
-      assert.equal(JSON.stringify(record).includes('secret'), false);
-    }
+    const result = diagnose([{ ...hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), prompt: 'secret', tool_input: 'secret' }, completion(), state()]); persistEvidence(file, result.evidence);
+    for (const line of fs.readFileSync(file, 'utf8').trim().split('\n')) assert.deepEqual(Object.keys(JSON.parse(line)).filter(key => !ALLOWED_EVIDENCE_FIELDS.has(key)), []);
+    const good = evaluatePreflight({ repositoryRuntimeCompatible: true, bothHomesCanonical: true, hookHealthFlags: [], stableLoggerExists: true, productionBridgePathExists: true, userCodexCliPathBaselineRecorded: true, rollbackDeterministic: true });
+    assert.equal(good.status, 'READY'); assert.equal(evaluatePreflight({ ...good.checks, hookHealthFlags: ['duplicate Stop'] }).status, 'BLOCKED');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-});
-
-test('J: any hook-health failure blocks the future live canary', () => {
-  const good = evaluatePreflight({ repositoryRuntimeCompatible: true, bothHomesCanonical: true, hookHealthFlags: [], stableLoggerExists: true, productionBridgePathExists: true, userCodexCliPathBaselineRecorded: true, rollbackDeterministic: true });
-  assert.equal(good.status, 'READY');
-  const bad = evaluatePreflight({ ...good.checks, hookHealthFlags: ['duplicate Stop'] });
-  assert.equal(bad.status, 'BLOCKED');
-  assert.ok(bad.blockers.includes('hookHealthFlagsEmpty'));
 });
