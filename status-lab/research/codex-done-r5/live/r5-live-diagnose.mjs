@@ -5,4 +5,6 @@ if (!input) process.exit(2);
 const events = fs.readFileSync(input, 'utf8').split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
 const result = diagnose(events);
 const classifications = result.cases.map(c => c.result);
-console.log(classifications.length === 1 ? classifications[0] : classifications.length ? 'AMBIGUOUS_CORRELATION' : 'NO_COMPLETION');
+const classification = classifications.length === 1 ? classifications[0] : classifications.length ? 'AMBIGUOUS_CORRELATION' : 'NO_COMPLETION';
+if (process.argv.includes('--json')) console.log(JSON.stringify({ classification, evidence: result.evidence }));
+else console.log(classification);

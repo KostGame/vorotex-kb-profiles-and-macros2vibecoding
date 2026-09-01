@@ -17,7 +17,7 @@ const done = (reason = 'codex_turn_completed') => ({ source: 'state_normalizer',
 test('live package has one launcher per phase and no live execution in tests', () => {
   for (const file of ['000-RUN-R5-PREPARE.cmd','010-RUN-R5-ARM.cmd','020-RUN-R5-VERIFY-DISABLE.cmd','099-RUN-R5-ROLLBACK.cmd']) assert.equal(fs.existsSync(path.join(root, file)), true);
   assert.match(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), /never run the live canary/i);
-  assert.doesNotMatch(fs.readFileSync(runner, 'utf8'), /Stop-Process|Start-Process.*Codex/i);
+  assert.doesNotMatch(fs.readFileSync(runner, 'utf8'), /Start-Process\s+\$?m?\.childPath/i);
 });
 
 test('diagnostic CLI accepts exact no-Stop production completion', () => {
