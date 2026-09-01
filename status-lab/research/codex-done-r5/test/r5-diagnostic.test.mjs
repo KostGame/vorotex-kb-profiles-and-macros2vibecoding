@@ -3,16 +3,20 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { adaptProductionSessionEvent, diagnose, evaluatePreflight, persistEvidence, ALLOWED_EVIDENCE_FIELDS, RESULTS } from '../src/r5-diagnostic.mjs';
+import { adaptProductionCompletionEvent, adaptProductionSessionEvent, diagnose, evaluatePreflight, persistEvidence, ALLOWED_EVIDENCE_FIELDS, RESULTS } from '../src/r5-diagnostic.mjs';
 
 const hook = (event, timestampUtc, extra = {}) => ({ source: 'codex_hook', event, timestampUtc, sessionId: 'S', turnId: 'T', ...extra });
-const completion = (status = 'completed', threadId = 'S', timestampUtc = '2026-01-01T00:00:02Z') => ({ source: 'codex_stdio_bridge', event: 'turn_completed', timestampUtc, threadId, turnId: 'T', terminalStatus: status });
+const completion = (status = 'completed', threadId = 'S', timestampUtc = '2026-01-01T00:00:02Z') => ({ schemaVersion: 'k15-codex-completion/v1', source: 'codex_stdio_bridge', event: 'turn_completed', timestampUtc, threadId, turnId: 'T', status });
 const state = (reason = 'codex_turn_completed', isRehydrated = false, threadId = 'S', timestampUtc = '2026-01-01T00:00:03Z', extra = {}) => ({ source: 'state_normalizer', event: 'session_state_changed', plane: 'per_session', sessionId: 'S', previous: 'RUNNING', current: 'DONE_PENDING_ATTENTION', reason, sourceTimestampUtc: timestampUtc, isRehydrated, correlation: { threadId, turnId: 'T', rpcIdType: '', rpcId: '' }, ...extra });
 const running = (threadId = '', timestampUtc = '2026-01-01T00:00:01Z') => ({ source: 'state_normalizer', event: 'session_state_changed', plane: 'per_session', sessionId: 'S', previous: 'NORMAL', current: 'RUNNING', reason: 'codex_user_prompt_submit', sourceTimestampUtc: timestampUtc, isRehydrated: false, correlation: { threadId, turnId: 'T', rpcIdType: '', rpcId: '' } });
 
 test('A: real no-Stop production transition is accepted', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state()]);
   assert.equal(result.cases[0].result, RESULTS.ACCEPTED); assert.equal(result.cases[0].productionDone, true);
+});
+test('A2: production status is adapted to the internal terminalStatus field', () => {
+  const adapted = adaptProductionCompletionEvent(completion());
+  assert.equal(adapted.terminalStatus, 'completed'); assert.equal('status' in adapted, false);
 });
 test('B: negative guard rejects completion without any production session event', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z', { threadId: 'S' }), completion()]);
@@ -38,7 +42,29 @@ test('H: ambiguous duplicate completion evidence fails closed', () => {
   assert.equal(result.cases[0].result, RESULTS.AMBIGUOUS);
 });
 test('I: non-success statuses never become successful authority', () => {
-  for (const status of ['interrupted', 'failed', 'inProgress']) assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(status), state()]).cases[0].result, RESULTS.NON_SUCCESS);
+  for (const status of ['interrupted', 'failed']) assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(status), state()]).cases[0].result, RESULTS.NON_SUCCESS);
+});
+test('I2: malformed production completion records fail closed', () => {
+  const base = completion();
+  for (const input of [
+    { ...base, schemaVersion: 'wrong/v1' },
+    { ...base, schemaVersion: undefined },
+    { ...base, status: 'unknown' },
+    { ...base, extra: 'forbidden' },
+    { ...base, terminalStatus: 'completed', status: undefined }
+  ]) {
+    assert.equal(adaptProductionCompletionEvent(input), null);
+    assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), input, state()]).cases[0].result, RESULTS.NO_COMPLETION);
+  }
+});
+test('I3: production completion identifiers and timestamp are bounded and typed', () => {
+  const base = completion();
+  for (const input of [
+    { ...base, threadId: 'x'.repeat(1025) },
+    { ...base, turnId: 'x'.repeat(1025) },
+    { ...base, timestampUtc: 'not-a-timestamp' },
+    { ...base, status: 1 }
+  ]) assert.equal(adaptProductionCompletionEvent(input), null);
 });
 test('J: exact duplicate/replay chronology is deterministic', () => {
   const p = hook('UserPromptSubmit', '2026-01-01T00:00:00Z'); const c = completion(); const s = state(); const result = diagnose([p, c, s, p, c, s]);

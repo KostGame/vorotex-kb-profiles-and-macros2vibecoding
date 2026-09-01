@@ -3,8 +3,11 @@ import fs from 'node:fs';
 const ALLOWED_EVIDENCE_FIELDS = new Set(['timestampUtc', 'source', 'event', 'sessionId', 'threadId', 'turnId', 'terminalStatus', 'previousState', 'currentState', 'reason', 'correlationResult']);
 const HOOK_EVENTS = new Set(['UserPromptSubmit', 'Stop', 'SessionEnd']);
 const TERMINAL_STATUSES = new Set(['completed', 'interrupted', 'failed']);
+const COMPLETION_SCHEMA_VERSION = 'k15-codex-completion/v1';
+const MAX_FIELD_BYTES = 1024;
 const RESULTS = Object.freeze({ ACCEPTED: 'NO_STOP_LIVE_DONE_ACCEPTED', STOP: 'STOP_AUTHORED_DONE', NO_PRODUCTION_DONE: 'COMPLETION_PRESENT_BUT_NO_PRODUCTION_DONE', CANDIDATE: 'CORRELATION_FIX_CANDIDATE', IDENTITY: 'IDENTITY_MISMATCH', AMBIGUOUS: 'AMBIGUOUS_CORRELATION', NON_SUCCESS: 'NON_SUCCESS_TERMINAL_STATUS', REHYDRATED: 'REHYDRATED_DONE_NOT_LIVE_ACCEPTANCE', NO_COMPLETION: 'NO_COMPLETION' });
 const text = value => typeof value === 'string' ? value : '';
+const boundedString = value => typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= MAX_FIELD_BYTES ? value : '';
 
 export function sanitizeEvent(input) {
   const safe = { timestampUtc: text(input.timestampUtc), source: text(input.source), event: text(input.event), sessionId: text(input.sessionId), threadId: text(input.threadId), turnId: text(input.turnId), terminalStatus: text(input.terminalStatus), previousState: text(input.previousState), currentState: text(input.currentState), reason: text(input.reason), correlationResult: text(input.correlationResult) };
@@ -21,11 +24,37 @@ export function adaptProductionSessionEvent(input) {
   return { timestampUtc: input.sourceTimestampUtc, source: 'state_normalizer', event: 'session_state_changed', sessionId: text(input.sessionId), threadId, turnId, previousState: text(input.previous), currentState: text(input.current), reason: text(input.reason), isRehydrated: input.isRehydrated };
 }
 
-function normalizeInput(input) { return adaptProductionSessionEvent(input) ?? { ...sanitizeEvent(input), _sessionThreadId: text(input.sessionThreadId ?? input.threadId) }; }
+// Adapt only the exact completion record emitted by the production bridge.
+// A record with the bridge completion identity must never fall through to the
+// permissive generic sanitizer when this validation fails.
+export function adaptProductionCompletionEvent(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) ||
+      input.source !== 'codex_stdio_bridge' || input.event !== 'turn_completed') return null;
+  const allowed = new Set(['schemaVersion', 'timestampUtc', 'source', 'event', 'threadId', 'turnId', 'status']);
+  if (Object.keys(input).some(key => !allowed.has(key)) ||
+      input.schemaVersion !== COMPLETION_SCHEMA_VERSION ||
+      typeof input.timestampUtc !== 'string' || Number.isNaN(Date.parse(input.timestampUtc)) ||
+      !boundedString(input.threadId) || !boundedString(input.turnId) ||
+      !TERMINAL_STATUSES.has(input.status) ||
+      Object.values(input).some(value => typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_FIELD_BYTES)) return null;
+  return {
+    timestampUtc: input.timestampUtc,
+    source: input.source,
+    event: input.event,
+    threadId: input.threadId,
+    turnId: input.turnId,
+    terminalStatus: input.status
+  };
+}
+
+function normalizeInput(input) {
+  if (input?.source === 'codex_stdio_bridge' && input?.event === 'turn_completed') return adaptProductionCompletionEvent(input);
+  return adaptProductionSessionEvent(input) ?? { ...sanitizeEvent(input), _sessionThreadId: text(input.sessionThreadId ?? input.threadId) };
+}
 function time(event, index) { const parsed = Date.parse(event.timestampUtc); return Number.isNaN(parsed) ? [Number.MAX_SAFE_INTEGER, index] : [parsed, index]; }
 
 export function diagnose(inputEvents) {
-  const ordered = inputEvents.map(normalizeInput).filter(event => event.timestampUtc && event.source && event.event).map((event, index) => ({ event, index })).sort((a, b) => time(a.event, a.index)[0] - time(b.event, b.index)[0]).map(({ event }) => event);
+  const ordered = inputEvents.map(normalizeInput).filter(event => event && event.timestampUtc && event.source && event.event).map((event, index) => ({ event, index })).sort((a, b) => time(a.event, a.index)[0] - time(b.event, b.index)[0]).map(({ event }) => event);
   const unique = []; const seen = new Set();
   for (const event of ordered) { const key = JSON.stringify(event); if (!seen.has(key)) { seen.add(key); unique.push(event); } }
   const evidence = unique.map(event => sanitizeEvent(event)); const cases = [];
