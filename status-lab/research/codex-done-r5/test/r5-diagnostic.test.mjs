@@ -8,20 +8,25 @@ import { adaptProductionSessionEvent, diagnose, evaluatePreflight, persistEviden
 const hook = (event, timestampUtc, extra = {}) => ({ source: 'codex_hook', event, timestampUtc, sessionId: 'S', turnId: 'T', ...extra });
 const completion = (status = 'completed', threadId = 'S', timestampUtc = '2026-01-01T00:00:02Z') => ({ source: 'codex_stdio_bridge', event: 'turn_completed', timestampUtc, threadId, turnId: 'T', terminalStatus: status });
 const state = (reason = 'codex_turn_completed', isRehydrated = false, threadId = 'S', timestampUtc = '2026-01-01T00:00:03Z', extra = {}) => ({ source: 'state_normalizer', event: 'session_state_changed', plane: 'per_session', sessionId: 'S', previous: 'RUNNING', current: 'DONE_PENDING_ATTENTION', reason, sourceTimestampUtc: timestampUtc, isRehydrated, correlation: { threadId, turnId: 'T', rpcIdType: '', rpcId: '' }, ...extra });
+const running = (threadId = '', timestampUtc = '2026-01-01T00:00:01Z') => ({ source: 'state_normalizer', event: 'session_state_changed', plane: 'per_session', sessionId: 'S', previous: 'NORMAL', current: 'RUNNING', reason: 'codex_user_prompt_submit', sourceTimestampUtc: timestampUtc, isRehydrated: false, correlation: { threadId, turnId: 'T', rpcIdType: '', rpcId: '' } });
 
 test('A: real no-Stop production transition is accepted', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state()]);
   assert.equal(result.cases[0].result, RESULTS.ACCEPTED); assert.equal(result.cases[0].productionDone, true);
 });
-test('B: completion without real production DONE is not acceptance', () => {
+test('B: negative guard rejects completion without any production session event', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z', { threadId: 'S' }), completion()]);
+  assert.equal(result.cases[0].result, RESULTS.NO_PRODUCTION_DONE); assert.equal(result.cases[0].productionDone, false);
+});
+test('B2: live completion reason with the wrong previous state is not acceptance', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state('codex_turn_completed', false, 'S', '2026-01-01T00:00:03Z', { previous: 'NORMAL' })]);
   assert.equal(result.cases[0].result, RESULTS.NO_PRODUCTION_DONE); assert.equal(result.cases[0].productionDone, false);
 });
 test('C/D: real Stop transition is authoritative in either chronology', () => {
   for (const events of [[hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), hook('Stop', '2026-01-01T00:00:01Z'), state('codex_stop'), completion()], [hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), hook('Stop', '2026-01-01T00:00:03Z'), state('codex_stop')]]) assert.equal(diagnose(events).cases[0].result, RESULTS.STOP);
 });
 test('E: empty observed thread plus session-id completion is only a bounded candidate', () => {
-  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion()]);
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), running(), completion()]);
   assert.equal(result.cases[0].result, RESULTS.CANDIDATE); assert.equal(result.cases[0].productionDone, false);
 });
 test('F/G: wrong and unrelated identities are not exact correlation', () => {

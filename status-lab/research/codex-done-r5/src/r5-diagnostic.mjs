@@ -35,11 +35,12 @@ export function diagnose(inputEvents) {
     const completions = unique.filter(event => event.source === 'codex_stdio_bridge' && event.event === 'turn_completed' && sameTurn(event) && event.threadId);
     const states = unique.filter(event => event.source === 'state_normalizer' && event.event === 'session_state_changed' && event.sessionId === prompt.sessionId && sameTurn(event));
     const done = states.filter(event => event.currentState === 'DONE_PENDING_ATTENTION');
-    const liveCompletionDone = done.filter(event => !event.isRehydrated && event.reason === 'codex_turn_completed');
+    const liveCompletionDone = done.filter(event => !event.isRehydrated && event.previousState === 'RUNNING' && event.currentState === 'DONE_PENDING_ATTENTION' && event.reason === 'codex_turn_completed');
     const liveStopDone = done.filter(event => !event.isRehydrated && event.reason === 'codex_stop');
     const exact = completions.filter(completion => liveCompletionDone.some(state => state.threadId === completion.threadId && state.turnId === completion.turnId));
     const sessionThreadId = states.find(event => event.threadId)?.threadId ?? prompt._sessionThreadId ?? '';
     const sessionIdMatches = completions.filter(event => event.threadId === prompt.sessionId);
+    const liveRunningWithEmptyThread = states.some(event => !event.isRehydrated && event.currentState === 'RUNNING' && event.reason === 'codex_user_prompt_submit' && event.threadId === '');
     const ambiguous = completions.length > 1 || liveCompletionDone.length > 1;
     let result = RESULTS.NO_COMPLETION;
     if (liveStopDone.length && stops.length) result = RESULTS.STOP;
@@ -47,7 +48,7 @@ export function diagnose(inputEvents) {
     else if (completions.some(event => !TERMINAL_STATUSES.has(event.terminalStatus) || event.terminalStatus !== 'completed')) result = RESULTS.NON_SUCCESS;
     else if (ambiguous) result = RESULTS.AMBIGUOUS;
     else if (exact.length === 1 && stops.length === 0) result = RESULTS.ACCEPTED;
-    else if (sessionIdMatches.length === 1 && !sessionThreadId && !liveCompletionDone.length) result = RESULTS.CANDIDATE;
+    else if (sessionIdMatches.length === 1 && liveRunningWithEmptyThread && !sessionThreadId && !liveCompletionDone.length) result = RESULTS.CANDIDATE;
     else if (completions.length && sessionThreadId && completions.some(event => event.threadId !== sessionThreadId)) result = RESULTS.IDENTITY;
     else if (completions.length && !liveCompletionDone.length) result = RESULTS.NO_PRODUCTION_DONE;
     else if (stops.length && !liveStopDone.length) result = RESULTS.NO_PRODUCTION_DONE;
