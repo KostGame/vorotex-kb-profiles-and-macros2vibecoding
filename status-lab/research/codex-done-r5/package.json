@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:owner": "pwsh.exe -NoProfile -File test/live-runner-owner.test.ps1"
   }
 }
