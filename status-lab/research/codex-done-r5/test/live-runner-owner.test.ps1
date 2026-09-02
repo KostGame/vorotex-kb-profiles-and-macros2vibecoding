@@ -11,6 +11,11 @@ function Invoke-OptionalStringEqual($Current, $Expected) {
     $moduleObject = Get-Module (Split-Path -LeafBase $module)
     & $moduleObject { param($actual, $expected) Test-R5OptionalStringEqual $actual $expected } $Current $Expected
 }
+function Invoke-R5Launcher([string]$StateRoot) {
+    $launcher = Join-Path $PSScriptRoot '..\live\K15-CODEX-DONE-R5-LIVE.ps1'
+    $output = & pwsh.exe -NoProfile -File $launcher -Mode ARM -StateRoot $StateRoot 2>&1 | Out-String
+    [pscustomobject]@{ Output = $output; ExitCode = $LASTEXITCODE }
+}
 function New-HookFixture([string]$Root, [string]$StableLogger, [string]$Variant = 'healthy') {
     $hookHome = Join-Path $Root 'home'; $hookDir = Join-Path $Root 'LocalAppData\VorotexK15\app\hooks'
     New-Item -Path $hookHome,$hookDir -ItemType Directory -Force | Out-Null
@@ -215,6 +220,28 @@ try {
     Require ($withLastStage.ERROR_CLASS -eq 'InvalidOperationException' -and $withLastStage.ERROR_STAGE -eq 'HOOK_HEALTH') 'present LastStage did not preserve the original failure stage'
     'ERROR_REPORTING_NO_LASTSTAGE_MASKING=PASS'
     'ERROR_STAGE_PRESERVES_ORIGINAL_FAILURE=PASS'
+
+    $emptyLauncherRoot = Join-Path ([IO.Path]::GetTempPath()) "r5-launcher-empty-$PID-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        $emptyLauncher = Invoke-R5Launcher $emptyLauncherRoot
+        Require ($emptyLauncher.ExitCode -eq 2 -and $emptyLauncher.Output -match 'ERROR_CLASS=RuntimeException' -and $emptyLauncher.Output -match 'ERROR_STAGE=ARM') 'empty StateRoot launcher failure was masked or mis-staged'
+        Require ($emptyLauncher.Output -notmatch 'PropertyNotFoundException|LastStage') 'empty StateRoot launcher emitted a secondary LastStage failure'
+    } finally { if (Test-Path $emptyLauncherRoot) { Remove-Item $emptyLauncherRoot -Recurse -Force -ErrorAction SilentlyContinue } }
+
+    $mismatchLauncherRoot = Join-Path ([IO.Path]::GetTempPath()) "r5-launcher-mismatch-$PID-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        New-Item -Path $mismatchLauncherRoot -ItemType Directory -Force | Out-Null
+        $minimalState = [ordered]@{ machine = [ordered]@{ CODEX_CLI_PATH = "architect-review-mismatch-$([Guid]::NewGuid().ToString('N'))" } }
+        $minimalStateText = $minimalState | ConvertTo-Json -Depth 10
+        Set-Content -LiteralPath (Join-Path $mismatchLauncherRoot 'state.json') -Value $minimalStateText -Encoding UTF8
+        $mismatchLauncher = Invoke-R5Launcher $mismatchLauncherRoot
+        Require ($mismatchLauncher.ExitCode -eq 2 -and $mismatchLauncher.Output -match 'ERROR_STAGE=MACHINE_ENV_CHECK') 'Machine mismatch launcher failure did not preserve the real stage'
+        Require ($mismatchLauncher.Output -match 'ERROR_CLASS=RuntimeException' -and $mismatchLauncher.Output -notmatch 'CANARY_ARMED|BRIDGE_ENABLED|DESKTOP_STARTED') 'Machine mismatch launcher reached a live mutation boundary'
+        $afterMinimalState = Get-Content -LiteralPath (Join-Path $mismatchLauncherRoot 'state.json') -Raw | ConvertFrom-Json
+        Require ($afterMinimalState.machine.CODEX_CLI_PATH -eq $minimalState.machine.CODEX_CLI_PATH -and @($afterMinimalState.PSObject.Properties.Name).Count -eq 1) 'Machine mismatch launcher mutated the pre-mutation state'
+    } finally { if (Test-Path $mismatchLauncherRoot) { Remove-Item $mismatchLauncherRoot -Recurse -Force -ErrorAction SilentlyContinue } }
+    'LAUNCHER_EMPTY_STATE_REPORTING=PASS'
+    'LAUNCHER_MACHINE_MISMATCH_PREMUTATION=PASS'
 
     $case = New-TestProvider 'broadcast-fail'; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null
     $armFailed = $false; try { Invoke-R5Arm $case.Provider | Out-Null } catch { $armFailed = $true }
