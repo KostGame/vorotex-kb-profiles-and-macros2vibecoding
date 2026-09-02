@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "test:owner": "pwsh.exe -NoProfile -File test/live-runner-owner.test.ps1"
+    "test:owner": "pwsh.exe -NoProfile -Command \"& { & './test/live-runner-owner.test.ps1'; & './test/repo-preflight-owner.test.ps1' }\""
   }
 }

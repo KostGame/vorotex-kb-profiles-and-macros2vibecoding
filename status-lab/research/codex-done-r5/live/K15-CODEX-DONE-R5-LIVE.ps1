@@ -24,5 +24,14 @@ try {
     "STATUS=BLOCKED"
     "NEXT_ACTION=ROLLBACK"
     "ERROR_CLASS=$($_.Exception.GetType().Name)"
+    "ERROR_STAGE=$($provider.LastStage ?? $Mode)"
+    $safeMessage = switch -Regex ([string]$_.Exception.Message) {
+        'clean HEAD==origin.main' { 'repository preflight blocked: clean HEAD==origin/main required'; break }
+        'hook health' { 'hook health validation blocked'; break }
+        'permanent StatusTray' { 'permanent StatusTray identity was ambiguous'; break }
+        'child' { 'Codex child identity validation blocked'; break }
+        default { "$Mode operation blocked" }
+    }
+    "ERROR_MESSAGE=$safeMessage"
     exit 2
 }
