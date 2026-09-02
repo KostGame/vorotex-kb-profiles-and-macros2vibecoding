@@ -11,6 +11,7 @@ function Get-R5State($Provider) { if (!(Test-Path $Provider.StatePath)) { throw 
 function Save-R5State($Provider, $State) { Write-R5Json $Provider.StatePath $State }
 function Get-R5Property($Object, [string]$Name) { if ($Object -is [System.Collections.IDictionary] -and $Object.Contains($Name)) { return $Object[$Name] }; $p = $Object.PSObject.Properties[$Name]; if ($p) { return $p.Value }; return $null }
 function Set-R5Property($Object, [string]$Name, $Value) { $p = $Object.PSObject.Properties[$Name]; if ($p) { $p.Value = $Value } else { $Object | Add-Member NoteProperty $Name $Value } }
+function Set-R5Stage($Provider, [string]$Stage) { Set-R5Property $Provider 'LastStage' $Stage }
 function New-R5Result($Map) { $Map.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key)=$($_.Value)" } }
 function Write-R5Result($Provider, $Map) { $lines = @(New-R5Result $Map); $lines | Set-Content -LiteralPath (Join-Path $Provider.StateRoot 'result.txt') -Encoding UTF8; $lines }
 function Get-R5Transient([string]$Payload) {
@@ -38,7 +39,7 @@ function Test-R5HookHealth([string]$LocalAppData) {
 function New-R5RealProvider([string]$RepoRoot, [string]$StateRoot, [int]$TimeoutSeconds) {
     $local = $env:LOCALAPPDATA ?? [Environment]::GetFolderPath('LocalApplicationData')
     $p = [pscustomobject]@{ Kind = 'Real'; RepoRoot = $RepoRoot; LocalAppData = $local; ChildBin = Join-Path $local 'OpenAI\Codex\bin'; StateRoot = [IO.Path]::GetFullPath($StateRoot); StatePath = Join-Path $StateRoot 'state.json'; ManifestPath = Join-Path $StateRoot 'production-manifest.json'; TimeoutSeconds = $TimeoutSeconds; Journal = Join-Path $local 'VOROTEX\K15 Status Lab\events.jsonl'; Marker = Join-Path $local 'VOROTEX\K15 Status Lab\detailed-logging.disabled'; BridgeRoot = Join-Path $RepoRoot 'status-lab\research\codex-stdio-bridge'; Activate = Join-Path $RepoRoot 'status-lab\research\codex-stdio-bridge\production\Activate-CodexBridge.ps1' }
-    $p | Add-Member ScriptMethod RepoPreflight { $head = (git -C $this.RepoRoot rev-parse HEAD).Trim(); $origin = (git -C $this.RepoRoot rev-parse origin/main).Trim(); if ($head -ne $origin -or (git -C $this.RepoRoot status --porcelain=v1).Trim()) { throw 'PREPARE requires clean HEAD==origin/main' }; return $head }
+    $p | Add-Member ScriptMethod RepoPreflight { $head = ([string](git -C $this.RepoRoot rev-parse HEAD)).Trim(); $origin = ([string](git -C $this.RepoRoot rev-parse origin/main)).Trim(); $status = [string](git -C $this.RepoRoot status --porcelain=v1); if ($head -ne $origin -or -not [string]::IsNullOrWhiteSpace($status)) { throw 'PREPARE requires clean HEAD==origin/main' }; return $head }
     $p | Add-Member ScriptMethod HookHealth { return Test-R5HookHealth $this.LocalAppData }
     $p | Add-Member ScriptMethod DiscoverChild {
         $live = @(Get-CimInstance Win32_Process -Filter "Name='codex.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($this.ChildBin, [StringComparison]::OrdinalIgnoreCase) -and ([regex]::IsMatch([string]$_.CommandLine, '(?i)(^|[\s"/\\])app-server([\s"/\\]|$)')) })
@@ -144,9 +145,9 @@ function New-R5FakeProvider([string]$StateRoot, [string]$Scenario = '') {
 
 function Get-ProcessIdentity([Diagnostics.Process]$Process) { if (!$Process) { return $null }; [ordered]@{ pid = $Process.Id; path = $Process.Path; sha256 = $(if ($Process.Path) { (Get-FileHash $Process.Path -Algorithm SHA256).Hash.ToLowerInvariant() } else { '' }) } }
 function Invoke-R5Prepare($Provider) {
-    $main = $Provider.RepoPreflight(); $health = $Provider.HookHealth(); if (!$health.Pass) { throw "hook health blocked: $($health.Detail)" }
-    $trays = @($Provider.GetPermanentTrays()); if ($trays.Count -gt 1) { throw "multiple permanent StatusTray processes count=$($trays.Count)" }
-    $child = $Provider.DiscoverChild(); $manifest = $Provider.Publish($child); Write-R5Json $Provider.ManifestPath $manifest; $Provider.Validate()
+    Set-R5Stage $Provider 'REPO_PREFLIGHT'; $main = $Provider.RepoPreflight(); Set-R5Stage $Provider 'HOOK_HEALTH'; $health = $Provider.HookHealth(); if (!$health.Pass) { throw "hook health blocked: $($health.Detail)" }
+    Set-R5Stage $Provider 'TRAY_DISCOVERY'; $trays = @($Provider.GetPermanentTrays()); if ($trays.Count -gt 1) { throw "multiple permanent StatusTray processes count=$($trays.Count)" }
+    Set-R5Stage $Provider 'CHILD_DISCOVERY'; $child = $Provider.DiscoverChild(); Set-R5Stage $Provider 'ARTIFACT_PUBLISH'; $manifest = $Provider.Publish($child); Write-R5Json $Provider.ManifestPath $manifest; Set-R5Stage $Provider 'ACTIVATION_VALIDATE'; $Provider.Validate()
     $tray = if ($trays.Count -eq 1) { $trays[0] } else { [ordered]@{ running = $false; path = ''; sha256 = '' } }
     $s = [ordered]@{ schema = 'k15-codex-done-r5-live/v9'; mainSha = $main; manifestPath = $Provider.ManifestPath; manifest = $manifest; journal = $Provider.Journal; offset = 0; user = $Provider.EnvSnapshot(); machine = [ordered]@{ CODEX_CLI_PATH = $Provider.MachineValue() }; desktop = [ordered]@{ identity = $manifest.desktopIdentity; installLocation = $manifest.desktopInstallLocation; packageFamily = $manifest.desktopPackageFamily; appUserModelId = $manifest.desktopAppUserModelId; childPath = $manifest.childPath; childSha256 = $manifest.childSha256; version = $manifest.desktopVersion }; detailedLoggingDisabled = $Provider.MarkerExists(); permanentTray = $tray; phase = 'PREPARED' }
     Save-R5State $Provider $s; New-R5Result @{ STATUS = 'PASS'; CANARY_PREPARED = 'YES'; MAIN_SHA = $main; ENV_MUTATION = 'NO'; HOOK_MUTATION = 'NO'; PROVEN_CHILD_DISCOVERY = 'PASS' }
