@@ -7,11 +7,14 @@ param(
     [string] $StatePath,
     [string] $EnvironmentStorePath,
     [string] $EnvironmentStoreFailOnSet,
+    [ValidateSet('Real', 'FakeSuccess', 'FakeFailure')]
+    [string] $BroadcastMode = 'Real',
     [switch] $Force
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'UserEnvironmentBroadcast.ps1')
 
 $ManagedVariables = @(
     'CODEX_CLI_PATH',
@@ -123,6 +126,9 @@ function Set-UserValue([string] $Name, $Value) {
 try {
     $resolved = Read-Manifest
     $stateFile = Get-StatePath
+    if ($BroadcastMode -ne 'Real' -and [string]::IsNullOrWhiteSpace($EnvironmentStorePath)) {
+        Fail 'fake broadcast mode requires an isolated EnvironmentStorePath'
+    }
     if ($Mode -eq 'Validate') {
         'VALID=YES'
         'PIN=EXACT'
@@ -155,11 +161,16 @@ try {
             } else {
                 Set-UserValue 'CODEX_BRIDGE_APPROVAL_SINK_PATH' $null
             }
+            Assert-UserEnvironmentBroadcast -Mode $BroadcastMode | Out-Null
             'ACTIVE=YES'
         } catch {
-            foreach ($name in $ManagedVariables) { Set-UserValue $name $original[$name] }
-            Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue
-            throw
+            $operationError = $_.Exception
+            $rollbackError = $null
+            try { foreach ($name in $ManagedVariables) { Set-UserValue $name $original[$name] }; Assert-UserEnvironmentBroadcast -Mode $BroadcastMode | Out-Null }
+            catch { $rollbackError = $_.Exception }
+            if ($null -eq $rollbackError) { Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue }
+            if ($null -ne $rollbackError) { throw "Enable failed: $($operationError.Message); rollback failed: $($rollbackError.Message)" }
+            throw $operationError
         }
         exit 0
     }
@@ -169,6 +180,7 @@ try {
         $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
         if ($state.schema -ne 'k15-codex-bridge/activation-state-v1') { Fail 'unsupported activation state schema' }
         foreach ($name in $ManagedVariables) { Set-UserValue $name $state.original.$name }
+        Assert-UserEnvironmentBroadcast -Mode $BroadcastMode | Out-Null
         Remove-Item -LiteralPath $stateFile -Force
         'ACTIVE=NO'
         exit 0

@@ -123,7 +123,7 @@ test('isolated Enable, Status, Disable round-trip clears stale empty sink and re
     const environment = path.join(temp, 'environment.json');
     const original = { CODEX_CLI_PATH: 'stock-codex', CODEX_BRIDGE_APPROVAL_SINK_PATH: 'stale-sink' };
     await writeFile(environment, JSON.stringify(original), 'utf8');
-    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment];
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
     const enabled = await powershell(['-File', script, '-Mode', 'Enable', ...common]);
     assert.match(enabled.stdout, /ACTIVE=YES/);
     const enabledEnvironment = await readJson(environment);
@@ -145,7 +145,7 @@ test('isolated Enable sets non-empty sink and Disable restores absent sink', asy
     const state = path.join(temp, 'state.json');
     const environment = path.join(temp, 'environment.json');
     await writeFile(environment, JSON.stringify({ CODEX_CLI_PATH: 'stock-codex' }), 'utf8');
-    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment];
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
     await powershell(['-File', script, '-Mode', 'Enable', ...common]);
     assert.equal((await readJson(environment)).CODEX_BRIDGE_APPROVAL_SINK_PATH, sink);
     await powershell(['-File', script, '-Mode', 'Disable', ...common]);
@@ -163,11 +163,56 @@ test('isolated Enable failure restores all pre-existing state and removes activa
     const environment = path.join(temp, 'environment.json');
     const original = { CODEX_CLI_PATH: 'stock-codex', CODEX_BRIDGE_APPROVAL_SINK_PATH: 'stale-sink' };
     await writeFile(environment, JSON.stringify(original), 'utf8');
-    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-EnvironmentStoreFailOnSet', 'CODEX_BRIDGE_CHILD_PATH'];
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-EnvironmentStoreFailOnSet', 'CODEX_BRIDGE_CHILD_PATH', '-BroadcastMode', 'FakeSuccess'];
     await assert.rejects(powershell(['-File', script, '-Mode', 'Enable', ...common]));
     assert.deepEqual(await readJson(environment), original);
     await assert.rejects(readFile(state, 'utf8'));
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
+});
+
+test('Enable broadcasts after exact writes and blocks on broadcast failure without Desktop launch', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    await writeFile(environment, JSON.stringify({ CODEX_CLI_PATH: 'stock-codex' }), 'utf8');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeFailure'];
+    await assert.rejects(powershell(['-File', script, '-Mode', 'Enable', ...common]));
+    assert.deepEqual(await readJson(environment), { CODEX_CLI_PATH: 'stock-codex' });
+    await readFile(state, 'utf8');
+  } finally { await rm(temp, { recursive: true, force: true }); }
+});
+
+test('Disable restores exact User env but remains loud and retry-safe when broadcast fails', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const original = { CODEX_CLI_PATH: 'stock-codex' };
+    await writeFile(environment, JSON.stringify(original), 'utf8');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment];
+    await powershell(['-File', script, '-Mode', 'Enable', ...common, '-BroadcastMode', 'FakeSuccess']);
+    await assert.rejects(powershell(['-File', script, '-Mode', 'Disable', ...common, '-BroadcastMode', 'FakeFailure']));
+    assert.deepEqual(await readJson(environment), original);
+    await readFile(state, 'utf8');
+  } finally { await rm(temp, { recursive: true, force: true }); }
+});
+
+test('fake broadcast modes require an isolated environment store before mutation', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    for (const mode of ['FakeSuccess', 'FakeFailure']) {
+      const state = path.join(temp, `${mode}.state.json`);
+      await assert.rejects(
+        powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, '-StatePath', state, '-BroadcastMode', mode]),
+        error => error.code === 2
+      );
+      await assert.rejects(readFile(state, 'utf8'));
+    }
+  } finally { await rm(temp, { recursive: true, force: true }); }
 });
