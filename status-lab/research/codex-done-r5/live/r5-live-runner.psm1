@@ -47,6 +47,9 @@ function Get-R5WindowsPowerShellPath {
     return [IO.Path]::GetFullPath($path)
 }
 
+$script:R5AppxIdentity = 'OpenAI.Codex'
+$script:R5AppxPackageFamily = 'OpenAI.Codex_2p2nqsd0c76g0'
+
 function Invoke-R5WindowsPowerShellAppxDiscovery {
     param(
         [string]$ExecutablePath = (Get-R5WindowsPowerShellPath),
@@ -56,8 +59,9 @@ function Invoke-R5WindowsPowerShellAppxDiscovery {
         $ScriptText = @'
 $ErrorActionPreference = 'Stop'
 try {
-    $packages = @(Get-AppxPackage -Name '*Codex*' | Where-Object {
-        $_.Name -match '(?i)codex' -and $_.Publisher -match '(?i)OpenAI' -and $_.InstallLocation -and $_.PackageFamilyName -and $_.Version
+    $packages = @(Get-AppxPackage -Name 'OpenAI.Codex' | Where-Object {
+        $_.Name -ceq 'OpenAI.Codex' -and $_.PackageFamilyName -ceq 'OpenAI.Codex_2p2nqsd0c76g0' -and
+        -not [string]::IsNullOrWhiteSpace([string]$_.Publisher) -and $_.InstallLocation -and $_.Version
     } | ForEach-Object {
         $manifest = Get-AppxPackageManifest -Package $_
         $applications = @($manifest.Package.Applications.Application | Where-Object { $_.Id } | ForEach-Object { [string]$_.Id })
@@ -99,13 +103,14 @@ function Resolve-R5AppxIdentity {
     param([object]$Payload)
     if ($Payload -is [string]) {
         if ([string]::IsNullOrWhiteSpace($Payload)) { throw 'AppX discovery payload is empty' }
+        if ($Payload.Trim() -eq '[]') { throw 'ZERO_PACKAGES_BLOCKED' }
         try { $Payload = $Payload | ConvertFrom-Json -ErrorAction Stop } catch { throw 'AppX discovery payload is invalid JSON' }
     }
     if ($null -eq $Payload) { throw 'AppX discovery payload is null' }
     # Windows PowerShell unwraps a one-element JSON array during pipeline output;
     # normalize that transport quirk while validating the package object strictly.
     $packages = @($Payload)
-    if ($packages.Count -eq 0) { throw 'Codex AppX package discovery found zero matching packages' }
+    if ($packages.Count -eq 0) { throw 'ZERO_PACKAGES_BLOCKED' }
     if ($packages.Count -ne 1) { throw "Codex AppX package discovery found multiple matching packages count=$($packages.Count)" }
     $package = $packages[0]
     $allowed = @('identity','version','installLocation','packageFamily','applications')
@@ -115,7 +120,8 @@ function Resolve-R5AppxIdentity {
         $value = $package.$name
         if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value)) { throw "AppX discovery payload field is missing or malformed: $name" }
     }
-    if ($package.identity -notmatch '(?i)OpenAI.*Codex|Codex.*OpenAI' -or $package.packageFamily -notmatch '(?i)Codex') { throw 'AppX discovery payload is not an OpenAI Codex package' }
+    if ($package.identity -cne $script:R5AppxIdentity) { throw 'AppX discovery payload has unexpected package identity' }
+    if ($package.packageFamily -cne $script:R5AppxPackageFamily) { throw 'AppX discovery payload has unexpected package family' }
     try { $null = [Version]$package.version } catch { throw 'AppX discovery payload version is malformed' }
     try { $installLocation = [IO.Path]::GetFullPath($package.installLocation) } catch { throw 'AppX discovery payload installLocation is malformed' }
     if ($package.applications -isnot [array]) { throw 'AppX discovery applications field is malformed' }
@@ -200,7 +206,7 @@ function New-R5FakeProvider([string]$StateRoot, [string]$Scenario = '') {
     foreach ($n in 'CODEX_CLI_PATH','CODEX_BRIDGE_NODE_PATH','CODEX_BRIDGE_WRAPPER_PATH','CODEX_BRIDGE_CHILD_PATH','CODEX_BRIDGE_CHILD_SHA256','CODEX_BRIDGE_APPROVAL_SINK_PATH') { $p.Env[$n] = [ordered]@{ present = $true; value = "value-$n" } }
     if ($Scenario -match 'hook') { $p.HookPass = $false }; if ($Scenario -match 'route-timeout') { $p.RoutePass = $false }; if ($Scenario -match 'stock-fail') { $p.StockPass = $false }; if ($Scenario -match 'tray-fail') { $p.RestoreTrayPass = $false }; if ($Scenario -match 'logging-fail') { $p.RestoreLoggingPass = $false }; if ($Scenario -match 'env-fail') { $p.RestoreEnvPass = $false }; if ($Scenario -match 'tray-stopped') { $p.PermanentRunning = $false }; if ($Scenario -match 'machine-drift') { $p.MachineDrift = $true }; if ($Scenario -match 'live') { $p.Live = $true }
     $p | Add-Member ScriptMethod DiscoverChild { $this.DiscoverCount++; if ($this.Scenario -match 'child-ambiguous') { throw 'filesystem child ambiguity count=2' }; return [ordered]@{ path = $(if ($this.Scenario -match 'child-live') { 'live-child' } else { 'fallback-child' }); sha256 = 'fake-child'; commandLineToken = $(if ($this.Scenario -match 'child-live') { 'app-server' } else { 'NOT_OBSERVED' }) } }
-    $p | Add-Member ScriptMethod DiscoverAppxPackage { if ($this.Scenario -match 'package-ambiguous') { throw 'Codex AppX package identity is ambiguous count=2' }; return [ordered]@{ identity = 'OpenAI.Codex'; version = '1.2.3.4'; installLocation = 'C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3.4_x64'; packageFamily = 'OpenAI.Codex_abc123'; appUserModelId = 'OpenAI.Codex_abc123!App' } }
+    $p | Add-Member ScriptMethod DiscoverAppxPackage { if ($this.Scenario -match 'package-ambiguous') { throw 'Codex AppX package identity is ambiguous count=2' }; return [ordered]@{ identity = 'OpenAI.Codex'; version = '1.2.3.4'; installLocation = 'C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3.4_x64'; packageFamily = 'OpenAI.Codex_2p2nqsd0c76g0'; appUserModelId = 'OpenAI.Codex_2p2nqsd0c76g0!App' } }
     $p | Add-Member ScriptMethod RepoPreflight { return 'FAKE-MAIN' }
     $p | Add-Member ScriptMethod HookHealth { return [pscustomobject]@{ Pass = $this.HookPass; Detail = $(if ($this.HookPass) { 'canonical Status Lab hook health' } else { 'hook health mismatch' }) } }
     $p | Add-Member ScriptMethod Publish { param($child); if (!$child) { throw 'pinned child snapshot is required' }; $package = $this.DiscoverAppxPackage(); $out = Join-Path $this.StateRoot 'artifacts'; New-Item $out -ItemType Directory -Force | Out-Null; foreach ($f in 'adapter\K15.CodexBridge.WindowsAdapter.exe','tray\Vorotex.K15.StatusTray.exe') { $path = Join-Path $out $f; New-Item (Split-Path $path) -ItemType Directory -Force | Out-Null; Set-Content $path 'fake artifact' }; return [ordered]@{ schema = 'k15-codex-bridge/production-manifest-v1'; adapterPath = Join-Path $out 'adapter\K15.CodexBridge.WindowsAdapter.exe'; adapterSha256 = 'fake-adapter'; nodePath = 'fake-node'; wrapperPath = 'fake-wrapper'; transparentWrapperPath = 'fake-transparent'; bridgeCorePath = 'fake-core'; childPath = $child.path; childSha256 = $child.sha256; childCommandLineToken = $child.commandLineToken; approvalSinkPath = 'fake-journal'; desktopIdentity = $package.identity; desktopVersion = $package.version; desktopInstallLocation = $package.installLocation; desktopPackageFamily = $package.packageFamily; desktopAppUserModelId = $package.appUserModelId; trayPath = Join-Path $out 'tray\Vorotex.K15.StatusTray.exe'; traySha256 = 'fake-tray' } }

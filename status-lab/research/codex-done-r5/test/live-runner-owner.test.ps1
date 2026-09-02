@@ -60,7 +60,7 @@ try {
         $saved = Get-Content $case.Provider.ManifestPath -Raw
         Require ($saved -match $(if ($scenario -eq 'child-live') { 'live-child' } else { 'fallback-child' })) "$scenario child discovery was not persisted"
         Require ($saved -match '"desktopIdentity"\s*:\s*"OpenAI\.Codex"' -and $saved -match '"desktopInstallLocation"\s*:\s*"C:\\\\Program Files\\\\WindowsApps') 'AppX package identity was not persisted independently'
-        Require ($saved -match '"desktopAppUserModelId"\s*:\s*"OpenAI\.Codex_abc123!App"') 'AppX AppUserModelId was not persisted'
+        Require ($saved -match '"desktopAppUserModelId"\s*:\s*"OpenAI\.Codex_2p2nqsd0c76g0!App"') 'AppX AppUserModelId was not persisted'
         Require ($case.Provider.DiscoverCount -eq 1) 'DiscoverChild was invoked more than once during PREPARE'
     }
     $case = New-TestProvider 'child-ambiguous'; $cases += $case; $failed = $false
