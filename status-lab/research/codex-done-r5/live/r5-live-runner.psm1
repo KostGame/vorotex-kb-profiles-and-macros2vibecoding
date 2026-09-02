@@ -29,11 +29,14 @@ function Get-R5Transient([string]$Payload) {
     }
     @($out | ForEach-Object { $_ | ConvertTo-Json -Compress }) -join "`n"
 }
-function Test-R5HookHealth([string]$LocalAppData) {
-    $user = [Environment]::GetFolderPath('UserProfile'); $homes = @((Join-Path $user '.codex'), (Join-Path $user '.codex-agentloop')); if ($env:CODEX_HOME) { $homes += $env:CODEX_HOME }; try { $homes += @(Get-ChildItem $user -Directory -Filter '.codex-*' -ErrorAction Stop | % FullName) } catch { }
+function Test-R5HookHealth([string]$LocalAppData, [string[]]$Homes) {
+    if (!$PSBoundParameters.ContainsKey('Homes')) {
+        $user = [Environment]::GetFolderPath('UserProfile'); $Homes = @((Join-Path $user '.codex'), (Join-Path $user '.codex-agentloop')); if ($env:CODEX_HOME) { $Homes += $env:CODEX_HOME }; try { $Homes += @(Get-ChildItem $user -Directory -Filter '.codex-*' -ErrorAction Stop | % FullName) } catch { }
+    }
     $stable = [IO.Path]::GetFullPath((Join-Path $LocalAppData 'VorotexK15\app\hooks\codex-hook-logger.ps1')); $required = 'UserPromptSubmit','PermissionRequest','PreToolUse','PostToolUse','Stop','SessionEnd'; $bad = @(); if (!(Test-Path $stable -PathType Leaf)) { $bad += 'stable logger missing' }
     foreach ($home in $homes | Sort-Object -Unique) { if (!(Test-Path $home -PathType Container)) { continue }; $path = Join-Path $home 'hooks.json'; if (!(Test-Path $path -PathType Leaf)) { $bad += "$home hooks.json missing"; continue }; try { $json = Get-Content $path -Raw | ConvertFrom-Json } catch { $bad += "$home malformed hooks.json"; continue }; foreach ($property in @($json.hooks.PSObject.Properties)) { if ($required -notcontains $property.Name) { $stale = @($property.Value | % hooks | ? { ([string]($_.commandWindows ?? $_.command_windows ?? $_.command ?? '')).Contains('codex-hook-logger.ps1') }); if ($stale.Count) { $bad += "$home stale Status Lab event $($property.Name)" } } }; foreach ($event in $required) { $matches = @($json.hooks.$event | % hooks | ? { ([string]($_.commandWindows ?? $_.command_windows ?? $_.command ?? '')).Contains('codex-hook-logger.ps1') }); if ($matches.Count -ne 1) { $bad += "$home $event handler count=$($matches.Count)" }; foreach ($handler in $matches) { $command = [string]($handler.commandWindows ?? $handler.command_windows ?? $handler.command ?? ''); $m = [regex]::Match($command, '(?i)-File\s+(?:"([^"]+)"|(\S+))'); $target = if ($m.Success) { if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value } } else { '' }; if (!$target -or [IO.Path]::GetFullPath($target) -ine $stable) { $bad += "$home path drift $event" }; if ($target -match '\([^)]*\d[^)]*\)') { $bad += "$home transient numbered build path $event" } } } }
-    return [pscustomobject]@{ Pass = (($bad | Sort-Object -Unique).Count -eq 0); Detail = (($bad | Sort-Object -Unique) -join '; ') }
+    $findings = @($bad | Sort-Object -Unique)
+    return [pscustomobject]@{ Pass = ($findings.Count -eq 0); Detail = ($findings -join '; ') }
 }
 
 function New-R5RealProvider([string]$RepoRoot, [string]$StateRoot, [int]$TimeoutSeconds) {

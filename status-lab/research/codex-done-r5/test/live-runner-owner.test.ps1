@@ -3,6 +3,25 @@ $module = Join-Path $PSScriptRoot '..\live\r5-live-runner.psm1'
 Import-Module $module -Force
 
 function Require([bool]$Condition, [string]$Message) { if (!$Condition) { throw $Message } }
+function Invoke-HookHealth([string]$LocalAppData, [string[]]$Homes) {
+    $moduleObject = Get-Module (Split-Path -LeafBase $module)
+    & $moduleObject { param($local, $controlledHomes) Test-R5HookHealth $local $controlledHomes } $LocalAppData $Homes
+}
+function New-HookFixture([string]$Root, [string]$StableLogger, [string]$Variant = 'healthy') {
+    $hookHome = Join-Path $Root 'home'; $hookDir = Join-Path $Root 'LocalAppData\VorotexK15\app\hooks'
+    New-Item -Path $hookHome,$hookDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $StableLogger -ItemType File -Force | Out-Null
+    $events = 'UserPromptSubmit','PermissionRequest','PreToolUse','PostToolUse','Stop','SessionEnd'
+    $hooks = [ordered]@{}
+    foreach ($event in $events) { $hooks[$event] = @{ hooks = @(@{ commandWindows = "pwsh -File `"$StableLogger`"" }) } }
+    if ($Variant -eq 'duplicate') { $hooks.Stop.hooks += @{ commandWindows = "pwsh -File `"$StableLogger`"" } }
+    if ($Variant -eq 'stale') { $hooks.LegacyEvent = @{ hooks = @(@{ commandWindows = "pwsh -File `"$StableLogger`"" }) } }
+    if ($Variant -eq 'drift') { $hooks.Stop.hooks[0].commandWindows = 'pwsh -File "C:\other\codex-hook-logger.ps1"' }
+    if ($Variant -eq 'transient') { $hooks.Stop.hooks[0].commandWindows = "pwsh -File `"$Root\build (7)\codex-hook-logger.ps1`"" }
+    if ($Variant -eq 'multiple') { $hooks.Stop.hooks += @{ commandWindows = "pwsh -File `"$StableLogger`"" }; $hooks.LegacyEvent = @{ hooks = @(@{ commandWindows = "pwsh -File `"$StableLogger`"" }) } }
+    @{ hooks = $hooks } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $hookHome 'hooks.json') -Encoding UTF8
+    [pscustomobject]@{ Home = $hookHome }
+}
 function New-TestProvider([string]$Scenario = '') {
     $root = Join-Path ([IO.Path]::GetTempPath()) "r5-owner-test-$PID-$([Guid]::NewGuid().ToString('N'))"
     New-Item $root -ItemType Directory -Force | Out-Null
@@ -17,6 +36,24 @@ try {
     Require (Test-Path (Join-Path $case.Root 'production-manifest.json')) 'PREPARE manifest was not persisted'
     Require (Test-Path (Join-Path $case.Root 'artifacts\adapter\K15.CodexBridge.WindowsAdapter.exe')) 'adapter artifact was not published'
     Require (Test-Path (Join-Path $case.Root 'artifacts\tray\Vorotex.K15.StatusTray.exe')) 'tray artifact was not published'
+
+    $hookRoot = Join-Path ([IO.Path]::GetTempPath()) "r5-hook-health-$PID-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        $local = Join-Path $hookRoot 'LocalAppData'; $stable = Join-Path $local 'VorotexK15\app\hooks\codex-hook-logger.ps1'
+        $fixture = New-HookFixture $hookRoot $stable
+        $zero = Invoke-HookHealth $local @($fixture.Home)
+        Require $zero.Pass 'zero hook-health findings did not pass'
+        Require ($zero.Detail -eq '') 'zero hook-health findings did not produce empty Detail'
+        $oneFixture = New-HookFixture $hookRoot $stable 'drift'; $one = Invoke-HookHealth $local @($oneFixture.Home)
+        Require ((-not $one.Pass) -and $one.Detail -eq "$($oneFixture.Home) path drift Stop") 'one hook-health finding was not blocked with its exact detail'
+        $multipleFixture = New-HookFixture $hookRoot $stable 'multiple'; $multiple = Invoke-HookHealth $local @($multipleFixture.Home)
+        $multipleFindings = @($multiple.Detail -split '; ' | Sort-Object -Unique); $expectedMultiple = $multipleFindings -join '; '
+        Require ((-not $multiple.Pass) -and $multipleFindings.Count -ge 2 -and $multiple.Detail -eq $expectedMultiple) 'multiple hook-health findings were not deterministic and unique'
+        foreach ($variant in 'duplicate','stale','drift','transient') {
+            $blockedFixture = New-HookFixture $hookRoot $stable $variant; $blocked = Invoke-HookHealth $local @($blockedFixture.Home)
+            Require (-not $blocked.Pass) "$variant hook-health guard was weakened"
+        }
+    } finally { if (Test-Path $hookRoot) { Remove-Item $hookRoot -Recurse -Force -ErrorAction SilentlyContinue } }
 
     foreach ($scenario in 'child-live','child-fallback') {
         $case = New-TestProvider $scenario; $cases += $case; $manifest = Invoke-R5Prepare $case.Provider | Out-Null
