@@ -18,6 +18,18 @@ try {
     Require (Test-Path (Join-Path $case.Root 'artifacts\adapter\K15.CodexBridge.WindowsAdapter.exe')) 'adapter artifact was not published'
     Require (Test-Path (Join-Path $case.Root 'artifacts\tray\Vorotex.K15.StatusTray.exe')) 'tray artifact was not published'
 
+    foreach ($scenario in 'child-live','child-fallback') {
+        $case = New-TestProvider $scenario; $cases += $case; $manifest = Invoke-R5Prepare $case.Provider | Out-Null
+        $saved = Get-Content $case.Provider.ManifestPath -Raw
+        Require ($saved -match $(if ($scenario -eq 'child-live') { 'live-child' } else { 'fallback-child' })) "$scenario child discovery was not persisted"
+    }
+    $case = New-TestProvider 'child-ambiguous'; $cases += $case; $failed = $false
+    try { Invoke-R5Prepare $case.Provider | Out-Null } catch { $failed = $true }
+    Require $failed 'ambiguous child discovery was accepted'
+    $case = New-TestProvider 'tray-ambiguous'; $cases += $case; $failed = $false
+    try { Invoke-R5Prepare $case.Provider | Out-Null } catch { $failed = $true }
+    Require $failed 'multiple permanent StatusTray processes were accepted'
+
     foreach ($scenario in 'hook','route-timeout') {
         $case = New-TestProvider $scenario; $cases += $case
         $failed = $false; try { Invoke-R5Prepare $case.Provider | Out-Null } catch { $failed = $true }
@@ -28,12 +40,23 @@ try {
         }
     }
 
-    $case = New-TestProvider; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null; $arm = Invoke-R5Arm $case.Provider | Out-String
+    $case = New-TestProvider 'delayed'; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null; $arm = Invoke-R5Arm $case.Provider | Out-String
     Require ($arm -match 'CANARY_ARMED=YES') 'ARM did not prove adapter and child route'
+    Require ($case.Provider.PollCount -ge 3) 'route polling did not wait for delayed success'
+    $state = Get-Content $case.Provider.StatePath -Raw
+    Require ($state -notmatch 'System.Diagnostics.Process') 'raw process object leaked into state'
+    Require ($state -match '"desktopProcess"\s*:\s*\{[^}]*"pid"[^}]*"path"[^}]*"sha256"') 'Desktop process state was not normalized'
     $verify = Invoke-R5VerifyDisable $case.Provider | Out-String
     Require ($verify -match 'STOCK_ROUTE_RESTORED=PASS') 'stock route was not restored'
     Require ($verify -match 'PERMANENT_TRAY_RESTORED=PASS') 'permanent tray was not restored'
     Require ($verify -match 'DETAILED_LOGGING_RESTORED=PASS') 'detailed logging was not restored'
+    Require $case.Provider.CanaryAliveAtDiagnosis 'canary tray was stopped before diagnosis'
+    Require ($verify -match 'R5_CLASSIFICATION=NO_STOP_LIVE_DONE_ACCEPTED') 'classification was not preserved'
+    Require (Test-Path (Join-Path $case.Root 'result.txt')) 'durable result.txt was not written'
+    Require ($case.Provider.DiagnoseInput -notmatch 'unrelated') 'pre-diagnosis privacy filter leaked unrelated content'
+
+    $case = New-TestProvider 'multibyte'; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null; Invoke-R5Arm $case.Provider | Out-Null; $bytes = Invoke-R5VerifyDisable $case.Provider | Out-String
+    Require ($bytes -match 'DELTA_BYTES=4') 'delta byte length was not measured before decode'
 
     foreach ($presence in 'missing','empty','value') {
         $case = New-TestProvider; $cases += $case
@@ -54,6 +77,7 @@ try {
         $case = New-TestProvider $scenario; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null; Invoke-R5Arm $case.Provider | Out-Null
         $result = Invoke-R5VerifyDisable $case.Provider | Out-String
         Require ($result -match 'STATUS=BLOCKED') "$scenario was not fail-closed"
+        if ($scenario -eq 'stock-fail') { Require ($result -match 'R5_CLASSIFICATION=NO_STOP_LIVE_DONE_ACCEPTED') 'R5 classification was lost after cleanup failure'; Require (Test-Path (Join-Path $case.Root 'result.txt')) 'result.txt was lost after cleanup failure' }
     }
 
     $case = New-TestProvider; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null; Invoke-R5Arm $case.Provider | Out-Null; $case.Provider.Live = $true
@@ -62,6 +86,12 @@ try {
     $case = New-TestProvider; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null; Invoke-R5Arm $case.Provider | Out-Null
     $rollback = Invoke-R5Rollback $case.Provider | Out-String; $again = Invoke-R5Rollback $case.Provider | Out-String
     Require ($rollback -match 'ROLLBACK=PASS' -and $again -match 'ROLLBACK=PASS') 'rollback was not idempotent'
+
+    foreach ($phase in 'ARM','VERIFY_DISABLE','ROLLBACK') {
+        $case = New-TestProvider; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null; Invoke-R5Arm $case.Provider | Out-Null; $case.Provider.MachineDrift = $true
+        $drift = if ($phase -eq 'ARM') { $case.Provider.MachineDrift = $false; $null = Invoke-R5Rollback $case.Provider; $case.Provider.MachineDrift = $true; try { Invoke-R5Arm $case.Provider | Out-Null } catch { 'blocked' } } elseif ($phase -eq 'VERIFY_DISABLE') { Invoke-R5VerifyDisable $case.Provider | Out-String } else { Invoke-R5Rollback $case.Provider | Out-String }
+        Require ($drift -match 'blocked|STATUS=BLOCKED|ROLLBACK=FAIL') "Machine environment drift was not guarded in $phase"
+    }
 
     $case = New-TestProvider; $cases += $case
     $identity = [pscustomobject]@{ pid = 9999; path = 'other'; sha256 = 'other' }; $failed = $false
