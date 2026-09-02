@@ -39,9 +39,98 @@ function Test-R5HookHealth([string]$LocalAppData, [string[]]$Homes) {
     return [pscustomobject]@{ Pass = ($findings.Count -eq 0); Detail = ($findings -join '; ') }
 }
 
+function Get-R5WindowsPowerShellPath {
+    $systemRoot = [Environment]::GetEnvironmentVariable('SystemRoot')
+    if ([string]::IsNullOrWhiteSpace($systemRoot)) { throw 'SystemRoot is unavailable' }
+    $path = Join-Path $systemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Windows PowerShell 5.1 executable is missing' }
+    return [IO.Path]::GetFullPath($path)
+}
+
+function Invoke-R5WindowsPowerShellAppxDiscovery {
+    param(
+        [string]$ExecutablePath = (Get-R5WindowsPowerShellPath),
+        [string]$ScriptText
+    )
+    if ([string]::IsNullOrWhiteSpace($ScriptText)) {
+        $ScriptText = @'
+$ErrorActionPreference = 'Stop'
+try {
+    $packages = @(Get-AppxPackage -Name '*Codex*' | Where-Object {
+        $_.Name -match '(?i)codex' -and $_.Publisher -match '(?i)OpenAI' -and $_.InstallLocation -and $_.PackageFamilyName -and $_.Version
+    } | ForEach-Object {
+        $manifest = Get-AppxPackageManifest -Package $_
+        $applications = @($manifest.Package.Applications.Application | Where-Object { $_.Id } | ForEach-Object { [string]$_.Id })
+        [ordered]@{
+            identity = [string]$_.Name
+            version = [string]$_.Version
+            installLocation = [string]$_.InstallLocation
+            packageFamily = [string]$_.PackageFamilyName
+            applications = $applications
+        }
+    })
+    ConvertTo-Json -InputObject ([object[]]$packages) -Compress -Depth 4
+    exit 0
+} catch {
+    [Console]::Error.WriteLine('AppX discovery child failed')
+    exit 1
+}
+'@
+    }
+    if (!(Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) { throw 'Windows PowerShell 5.1 executable is missing' }
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($ScriptText))
+    $si = [Diagnostics.ProcessStartInfo]::new()
+    $si.FileName = $ExecutablePath
+    $si.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + $encoded
+    $si.UseShellExecute = $false
+    $si.CreateNoWindow = $true
+    $si.RedirectStandardOutput = $true
+    $si.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($si)
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $null = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw "AppX discovery child exited with code $($process.ExitCode)" }
+    if ([string]::IsNullOrWhiteSpace($stdout)) { throw 'AppX discovery child returned empty stdout' }
+    return $stdout
+}
+
+function Resolve-R5AppxIdentity {
+    param([object]$Payload)
+    if ($Payload -is [string]) {
+        if ([string]::IsNullOrWhiteSpace($Payload)) { throw 'AppX discovery payload is empty' }
+        try { $Payload = $Payload | ConvertFrom-Json -ErrorAction Stop } catch { throw 'AppX discovery payload is invalid JSON' }
+    }
+    if ($null -eq $Payload) { throw 'AppX discovery payload is null' }
+    # Windows PowerShell unwraps a one-element JSON array during pipeline output;
+    # normalize that transport quirk while validating the package object strictly.
+    $packages = @($Payload)
+    if ($packages.Count -eq 0) { throw 'Codex AppX package discovery found zero matching packages' }
+    if ($packages.Count -ne 1) { throw "Codex AppX package discovery found multiple matching packages count=$($packages.Count)" }
+    $package = $packages[0]
+    $allowed = @('identity','version','installLocation','packageFamily','applications')
+    $properties = @($package.PSObject.Properties.Name)
+    if (@($properties | Where-Object { $allowed -notcontains $_ }).Count -ne 0 -or @($allowed | Where-Object { $properties -notcontains $_ }).Count -ne 0) { throw 'AppX discovery payload has unexpected or missing package fields' }
+    foreach ($name in 'identity','version','installLocation','packageFamily') {
+        $value = $package.$name
+        if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value)) { throw "AppX discovery payload field is missing or malformed: $name" }
+    }
+    if ($package.identity -notmatch '(?i)OpenAI.*Codex|Codex.*OpenAI' -or $package.packageFamily -notmatch '(?i)Codex') { throw 'AppX discovery payload is not an OpenAI Codex package' }
+    try { $null = [Version]$package.version } catch { throw 'AppX discovery payload version is malformed' }
+    try { $installLocation = [IO.Path]::GetFullPath($package.installLocation) } catch { throw 'AppX discovery payload installLocation is malformed' }
+    if ($package.applications -isnot [array]) { throw 'AppX discovery applications field is malformed' }
+    $applications = @($package.applications)
+    foreach ($application in $applications) { if ($application -isnot [string] -or [string]::IsNullOrWhiteSpace($application) -or $application -match '[!\\/]') { throw 'AppX discovery application identity is malformed' } }
+    $appMatches = @($applications | Where-Object { $_ -ceq 'App' })
+    if ($appMatches.Count -eq 1) { $selectedApplication = $appMatches[0] }
+    elseif ($appMatches.Count -eq 0 -and $applications.Count -eq 1) { $selectedApplication = $applications[0] }
+    else { throw "Codex AppX application identity is ambiguous count=$($applications.Count)" }
+    return [ordered]@{ identity = $package.identity; version = $package.version; installLocation = $installLocation; packageFamily = $package.packageFamily; appUserModelId = "$($package.packageFamily)!$selectedApplication" }
+}
+
 function New-R5RealProvider([string]$RepoRoot, [string]$StateRoot, [int]$TimeoutSeconds) {
     $local = $env:LOCALAPPDATA ?? [Environment]::GetFolderPath('LocalApplicationData')
-    $p = [pscustomobject]@{ Kind = 'Real'; RepoRoot = $RepoRoot; LocalAppData = $local; ChildBin = Join-Path $local 'OpenAI\Codex\bin'; StateRoot = [IO.Path]::GetFullPath($StateRoot); StatePath = Join-Path $StateRoot 'state.json'; ManifestPath = Join-Path $StateRoot 'production-manifest.json'; TimeoutSeconds = $TimeoutSeconds; Journal = Join-Path $local 'VOROTEX\K15 Status Lab\events.jsonl'; Marker = Join-Path $local 'VOROTEX\K15 Status Lab\detailed-logging.disabled'; BridgeRoot = Join-Path $RepoRoot 'status-lab\research\codex-stdio-bridge'; Activate = Join-Path $RepoRoot 'status-lab\research\codex-stdio-bridge\production\Activate-CodexBridge.ps1' }
+    $p = [pscustomobject]@{ Kind = 'Real'; RepoRoot = $RepoRoot; LocalAppData = $local; ChildBin = Join-Path $local 'OpenAI\Codex\bin'; StateRoot = [IO.Path]::GetFullPath($StateRoot); StatePath = Join-Path $StateRoot 'state.json'; ManifestPath = Join-Path $StateRoot 'production-manifest.json'; TimeoutSeconds = $TimeoutSeconds; Journal = Join-Path $local 'VOROTEX\K15 Status Lab\events.jsonl'; Marker = Join-Path $local 'VOROTEX\K15 Status Lab\detailed-logging.disabled'; BridgeRoot = Join-Path $RepoRoot 'status-lab\research\codex-stdio-bridge'; Activate = Join-Path $RepoRoot 'status-lab\research\codex-stdio-bridge\production\Activate-CodexBridge.ps1'; AppxDiscoveryExecutor = $null }
     $p | Add-Member ScriptMethod RepoPreflight { $head = ([string](git -C $this.RepoRoot rev-parse HEAD)).Trim(); $origin = ([string](git -C $this.RepoRoot rev-parse origin/main)).Trim(); $status = [string](git -C $this.RepoRoot status --porcelain=v1); if ($head -ne $origin -or -not [string]::IsNullOrWhiteSpace($status)) { throw 'PREPARE requires clean HEAD==origin/main' }; return $head }
     $p | Add-Member ScriptMethod HookHealth { return Test-R5HookHealth $this.LocalAppData }
     $p | Add-Member ScriptMethod DiscoverChild {
@@ -53,13 +142,8 @@ function New-R5RealProvider([string]$RepoRoot, [string]$StateRoot, [int]$Timeout
         return [ordered]@{ path = $candidates[0].FullName; sha256 = (Get-FileHash $candidates[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant(); commandLineToken = 'NOT_OBSERVED' }
     }
     $p | Add-Member ScriptMethod DiscoverAppxPackage {
-        $packages = @(Get-AppxPackage -Name '*Codex*' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)codex' -and $_.Publisher -match '(?i)OpenAI' -and $_.InstallLocation -and $_.PackageFamilyName -and $_.Version })
-        if ($packages.Count -ne 1) { throw "Codex AppX package identity is ambiguous count=$($packages.Count)" }
-        $package = $packages[0]
-        $applications = @((Get-AppxPackageManifest -Package $package).Package.Applications.Application | Where-Object { $_.Id })
-        $app = @($applications | Where-Object { [string]$_.Id -eq 'App' })
-        if ($app.Count -ne 1) { if ($applications.Count -ne 1) { throw "Codex AppX application identity is ambiguous count=$($applications.Count)" }; $app = @($applications[0]) }
-        return [ordered]@{ identity = [string]$package.Name; version = [string]$package.Version; installLocation = [IO.Path]::GetFullPath([string]$package.InstallLocation); packageFamily = [string]$package.PackageFamilyName; appUserModelId = "$( [string]$package.PackageFamilyName )!$( [string]$app[0].Id )" }
+        $payload = if ($this.AppxDiscoveryExecutor) { & $this.AppxDiscoveryExecutor } else { Invoke-R5WindowsPowerShellAppxDiscovery }
+        return Resolve-R5AppxIdentity $payload
     }
     $p | Add-Member ScriptMethod Publish {
         param($child)
@@ -193,4 +277,4 @@ function Invoke-R5Rollback($Provider) {
     try { $Provider.RestoreTray($s.permanentTray) | Out-Null; $Provider.RestoreStock($s) | Out-Null } catch { $fail = $true }
     New-R5Result @{ STATUS = $(if ($fail) {'BLOCKED'} else {'PASS'}); ROLLBACK = $(if ($fail) {'FAIL'} else {'PASS'}); USER_ENV_EXACT_RESTORE = $(if ($fail) {'FAIL'} else {'PASS'}); MACHINE_ENV_MUTATION = 'NO'; MACHINE_ENV_DRIFT = $(if ($Provider.MachineValue() -ceq [string]$s.machine.CODEX_CLI_PATH) {'NO'} else {'YES'}) }
 }
-Export-ModuleMember -Function New-R5RealProvider,New-R5FakeProvider,Invoke-R5Prepare,Invoke-R5Arm,Invoke-R5VerifyDisable,Invoke-R5Rollback
+Export-ModuleMember -Function New-R5RealProvider,New-R5FakeProvider,Invoke-R5Prepare,Invoke-R5Arm,Invoke-R5VerifyDisable,Invoke-R5Rollback,Invoke-R5WindowsPowerShellAppxDiscovery,Resolve-R5AppxIdentity
