@@ -1,0 +1,28 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][ValidateSet('PREPARE','ARM','VERIFY_DISABLE','ROLLBACK')][string]$Mode,
+    [string]$StateRoot = (Join-Path ($env:LOCALAPPDATA ?? [Environment]::GetFolderPath('LocalApplicationData')) 'VorotexK15\app\codex-done-r5-live'),
+    [int]$TimeoutSeconds = 30
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$module = Join-Path $PSScriptRoot 'r5-live-runner.psm1'
+Import-Module $module -Force
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..\..'))
+$provider = New-R5RealProvider $repoRoot $StateRoot $TimeoutSeconds
+New-Item -Path $provider.StateRoot -ItemType Directory -Force | Out-Null
+
+try {
+    switch ($Mode) {
+        'PREPARE'       { Invoke-R5Prepare $provider }
+        'ARM'           { Invoke-R5Arm $provider }
+        'VERIFY_DISABLE' { Invoke-R5VerifyDisable $provider }
+        'ROLLBACK'      { Invoke-R5Rollback $provider }
+    }
+} catch {
+    "STATUS=BLOCKED"
+    "NEXT_ACTION=ROLLBACK"
+    "ERROR_CLASS=$($_.Exception.GetType().Name)"
+    exit 2
+}
