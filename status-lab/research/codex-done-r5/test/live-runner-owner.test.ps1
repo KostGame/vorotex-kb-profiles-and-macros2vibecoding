@@ -42,9 +42,36 @@ try {
         if ($scenario -eq 'hook') { Require $failed 'PREPARE hook-health failure was accepted' } else {
             $armFailed = $false; try { Invoke-R5Arm $case.Provider | Out-Null } catch { $armFailed = $true }
             Require (!$armFailed) 'route timeout should return rollback-capable BLOCKED result'
-            Require ((Get-Content $case.Provider.StatePath -Raw) -match 'DESKTOP_STARTED|BRIDGE_ENABLED') 'route timeout did not persist partial ARM state'
+            Require ((Get-Content $case.Provider.StatePath -Raw) -match 'ROUTE_BLOCKED') 'route timeout did not persist partial ARM state'
+            $timeoutState = Get-Content $case.Provider.StatePath -Raw | ConvertFrom-Json
+            Require (!$timeoutState.PSObject.Properties['adapter'] -and !$timeoutState.PSObject.Properties['child'] -and $case.Provider.StoppedPids -notcontains 2004 -and $case.Provider.StoppedPids -notcontains 2005) 'timeout invented an unobserved route identity'
         }
     }
+
+    foreach ($scenario in 'adapter-only','child-only','neither') {
+        $case = New-TestProvider $scenario; $cases += $case; $case.Provider.TimeoutSeconds = 0.02; Invoke-R5Prepare $case.Provider | Out-Null
+        $partialArm = Invoke-R5Arm $case.Provider | Out-String
+        $partialState = Get-Content $case.Provider.StatePath -Raw | ConvertFrom-Json
+        Require ($partialArm -match 'STATUS=BLOCKED' -and $partialArm -match 'CANARY_ARMED=NO' -and $partialArm -match 'NEXT_ACTION=ROLLBACK') "$scenario did not fail closed as a partial route"
+        if ($scenario -eq 'adapter-only') {
+            Require ($partialState.PSObject.Properties['adapter'] -and !$partialState.PSObject.Properties['child'] -and $partialState.adapter.pid -eq 2004 -and $partialState.adapter.sha256 -eq 'fake-adapter') 'adapter-only identity was not persisted exactly'
+            $partialRollback = Invoke-R5Rollback $case.Provider | Out-String
+            Require ($partialRollback -match 'ROLLBACK=PASS' -and $case.Provider.StoppedPids -contains 2004 -and $case.Provider.StoppedPids -notcontains 2005) 'partial adapter was not stopped through exact rollback ownership'
+        } elseif ($scenario -eq 'child-only') {
+            Require ($partialState.PSObject.Properties['child'] -and !$partialState.PSObject.Properties['adapter'] -and $partialState.child.pid -eq 2005 -and $partialState.child.sha256 -eq 'fake-child') 'child-only identity was not persisted exactly'
+            $partialRollback = Invoke-R5Rollback $case.Provider | Out-String
+            Require ($partialRollback -match 'ROLLBACK=PASS' -and $case.Provider.StoppedPids -contains 2005 -and $case.Provider.StoppedPids -notcontains 2004) 'partial child was not stopped through exact rollback ownership'
+        } else {
+            Require (!$partialState.PSObject.Properties['adapter'] -and !$partialState.PSObject.Properties['child']) 'neither-observed route invented an identity'
+            $partialRollback = Invoke-R5Rollback $case.Provider | Out-String
+            Require ($partialRollback -match 'ROLLBACK=PASS' -and $case.Provider.StoppedPids -notcontains 2004 -and $case.Provider.StoppedPids -notcontains 2005) 'neither-observed rollback attempted an invented identity'
+        }
+    }
+
+    $case = New-TestProvider 'adapter-only'; $cases += $case; $case.Provider.TimeoutSeconds = 0.02; Invoke-R5Prepare $case.Provider | Out-Null; Invoke-R5Arm $case.Provider | Out-Null
+    $mismatchedState = Get-Content $case.Provider.StatePath -Raw | ConvertFrom-Json; $mismatchedState.adapter.path = 'wrong-adapter.exe'; $mismatchedState | ConvertTo-Json -Depth 20 | Set-Content $case.Provider.StatePath -Encoding UTF8
+    $mismatchRollback = Invoke-R5Rollback $case.Provider | Out-String
+    Require ($mismatchRollback -match 'ROLLBACK=FAIL' -and $case.Provider.StoppedPids -notcontains 2004) 'partial PID identity mismatch was not fail-closed'
 
     $case = New-TestProvider 'delayed'; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null; $arm = Invoke-R5Arm $case.Provider | Out-String
     Require ($arm -match 'CANARY_ARMED=YES') 'ARM did not prove adapter and child route'
@@ -53,6 +80,7 @@ try {
     Require ($state -notmatch 'System.Diagnostics.Process') 'raw process object leaked into state'
     Require ($state -notmatch '"desktopProcess"|"pid"\s*:\s*2003|fake-desktop') 'unproven AppX shell launcher became owned Desktop state'
     Require (!$case.Provider.LauncherKillAttempted) 'launcher cleanup was attempted before verification'
+    Require ($state -match '"adapter"\s*:\s*\{[^}]*"pid"[^}]*"path"[^}]*"sha256"' -and $state -match '"child"\s*:\s*\{[^}]*"pid"[^}]*"path"[^}]*"sha256"') 'full route identities were not normalized'
     $verify = Invoke-R5VerifyDisable $case.Provider | Out-String
     Require ($verify -match 'STOCK_ROUTE_RESTORED=PASS') 'stock route was not restored'
     Require ($verify -match 'PERMANENT_TRAY_RESTORED=PASS') 'permanent tray was not restored'
