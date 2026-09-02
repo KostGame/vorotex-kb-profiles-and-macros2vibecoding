@@ -208,6 +208,14 @@ try {
     Require ($rollbackIndependent -match 'MACHINE_ENV_DRIFT=YES' -and $rollbackIndependent -match 'USER_ENV_EXACT_RESTORE=PASS') 'rollback mixed Machine drift into User environment restore'
     Require ($rollbackIndependent -match 'PRODUCTION_DISABLE=PASS' -and $rollbackIndependent -match 'DETAILED_LOGGING_RESTORED=PASS' -and $rollbackIndependent -match 'PERMANENT_TRAY_RESTORED=PASS' -and $rollbackIndependent -match 'STOCK_ROUTE_RESTORED=PASS') 'rollback did not report independent cleanup results'
 
+    $caughtError = $null; try { throw [InvalidOperationException]::new('original failure') } catch { $caughtError = $_ }
+    $withoutLastStage = New-R5ErrorReport ([pscustomobject]@{}) 'ARM' $caughtError
+    Require ($withoutLastStage.ERROR_CLASS -eq 'InvalidOperationException' -and $withoutLastStage.ERROR_STAGE -eq 'ARM') 'missing LastStage masked the original failure'
+    $withLastStage = New-R5ErrorReport ([pscustomobject]@{ LastStage = 'HOOK_HEALTH' }) 'ARM' $caughtError
+    Require ($withLastStage.ERROR_CLASS -eq 'InvalidOperationException' -and $withLastStage.ERROR_STAGE -eq 'HOOK_HEALTH') 'present LastStage did not preserve the original failure stage'
+    'ERROR_REPORTING_NO_LASTSTAGE_MASKING=PASS'
+    'ERROR_STAGE_PRESERVES_ORIGINAL_FAILURE=PASS'
+
     $case = New-TestProvider 'broadcast-fail'; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null
     $armFailed = $false; try { Invoke-R5Arm $case.Provider | Out-Null } catch { $armFailed = $true }
     Require ($armFailed -and !$case.Provider.DesktopStarted) 'ARM reached Desktop after broadcast failure'

@@ -17,6 +17,11 @@ function Test-R5OptionalStringEqual($Current, $Expected) {
     if ($null -eq $Current -or $null -eq $Expected) { return $null -eq $Current -and $null -eq $Expected }
     return ([string]$Current) -ceq ([string]$Expected)
 }
+function New-R5ErrorReport($Provider, [string]$Mode, $ErrorRecord) {
+    $stageProperty = $Provider.PSObject.Properties['LastStage']
+    $stage = if ($stageProperty -and $stageProperty.Value) { [string]$stageProperty.Value } else { $Mode }
+    [ordered]@{ ERROR_CLASS = $ErrorRecord.Exception.GetType().Name; ERROR_STAGE = $stage }
+}
 function New-R5Result($Map) { $Map.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key)=$($_.Value)" } }
 function Write-R5Result($Provider, $Map) { $lines = @(New-R5Result $Map); $lines | Set-Content -LiteralPath (Join-Path $Provider.StateRoot 'result.txt') -Encoding UTF8; $lines }
 function Get-R5Transient([string]$Payload) {
@@ -297,4 +302,4 @@ function Invoke-R5Rollback($Provider) {
     $fail = $machineDrift -or !$productionDisable -or !$userEnv -or !$logging -or !$tray -or !$stock
     New-R5Result @{ STATUS = $(if ($fail) {'BLOCKED'} else {'PASS'}); ROLLBACK = $(if ($fail) {'FAIL'} else {'PASS'}); PRODUCTION_DISABLE = $(if ($productionDisable) {'PASS'} else {'FAIL'}); USER_ENV_EXACT_RESTORE = $(if ($userEnv) {'PASS'} else {'FAIL'}); DETAILED_LOGGING_RESTORED = $(if ($logging) {'PASS'} else {'FAIL'}); PERMANENT_TRAY_RESTORED = $(if ($tray) {'PASS'} else {'FAIL'}); STOCK_ROUTE_RESTORED = $(if ($stock) {'PASS'} else {'FAIL'}); MACHINE_ENV_MUTATION = 'NO'; MACHINE_ENV_DRIFT = $(if ($machineDrift) {'YES'} else {'NO'}) }
 }
-Export-ModuleMember -Function New-R5RealProvider,New-R5FakeProvider,Invoke-R5Prepare,Invoke-R5Arm,Invoke-R5VerifyDisable,Invoke-R5Rollback,Invoke-R5WindowsPowerShellAppxDiscovery,Resolve-R5AppxIdentity
+Export-ModuleMember -Function New-R5RealProvider,New-R5FakeProvider,Invoke-R5Prepare,Invoke-R5Arm,Invoke-R5VerifyDisable,Invoke-R5Rollback,Invoke-R5WindowsPowerShellAppxDiscovery,Resolve-R5AppxIdentity,New-R5ErrorReport
