@@ -24,7 +24,9 @@ try {
     "STATUS=BLOCKED"
     "NEXT_ACTION=ROLLBACK"
     "ERROR_CLASS=$($_.Exception.GetType().Name)"
-    "ERROR_STAGE=$($provider.LastStage ?? $Mode)"
+    $stageProperty = $provider.PSObject.Properties['LastStage']
+    $errorStage = if ($stageProperty -and $stageProperty.Value) { [string]$stageProperty.Value } else { $Mode }
+    "ERROR_STAGE=$errorStage"
     $safeMessage = switch -Regex ([string]$_.Exception.Message) {
         'clean HEAD==origin.main' { 'repository preflight blocked: clean HEAD==origin/main required'; break }
         'hook health' { 'hook health validation blocked'; break }
