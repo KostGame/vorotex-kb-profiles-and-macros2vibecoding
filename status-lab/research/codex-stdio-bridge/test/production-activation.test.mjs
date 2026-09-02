@@ -201,3 +201,18 @@ test('Disable restores exact User env but remains loud and retry-safe when broad
     await readFile(state, 'utf8');
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
+
+test('fake broadcast modes require an isolated environment store before mutation', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    for (const mode of ['FakeSuccess', 'FakeFailure']) {
+      const state = path.join(temp, `${mode}.state.json`);
+      await assert.rejects(
+        powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, '-StatePath', state, '-BroadcastMode', mode]),
+        error => error.code === 2
+      );
+      await assert.rejects(readFile(state, 'utf8'));
+    }
+  } finally { await rm(temp, { recursive: true, force: true }); }
+});

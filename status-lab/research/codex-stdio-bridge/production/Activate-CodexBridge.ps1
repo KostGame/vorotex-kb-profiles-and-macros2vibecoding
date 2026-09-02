@@ -126,6 +126,9 @@ function Set-UserValue([string] $Name, $Value) {
 try {
     $resolved = Read-Manifest
     $stateFile = Get-StatePath
+    if ($BroadcastMode -ne 'Real' -and [string]::IsNullOrWhiteSpace($EnvironmentStorePath)) {
+        Fail 'fake broadcast mode requires an isolated EnvironmentStorePath'
+    }
     if ($Mode -eq 'Validate') {
         'VALID=YES'
         'PIN=EXACT'

@@ -7,7 +7,7 @@ function Invoke-UserEnvironmentBroadcast {
         [string] $Mode = 'Real',
         [int] $TimeoutMilliseconds = 5000
     )
-    if ($Mode -eq 'FakeSuccess') { return [pscustomobject]@{ Success = $true; Contract = 'FAKE' } }
+    if ($Mode -eq 'FakeSuccess') { return [pscustomobject]@{ Success = $true; Contract = 'FAKE'; Win32Error = 0; Error = '' } }
     if ($Mode -eq 'FakeFailure') { return [pscustomobject]@{ Success = $false; Contract = 'FAKE'; Win32Error = 0; Error = 'injected broadcast failure' } }
     if ($TimeoutMilliseconds -lt 1 -or $TimeoutMilliseconds -gt 60000) { throw 'broadcast timeout must be between 1 and 60000 milliseconds' }
     if (-not ('UserEnvironmentBroadcastNative' -as [type])) {
@@ -39,8 +39,8 @@ public static class UserEnvironmentBroadcastNative
     }
     $win32Error = 0
     $success = [UserEnvironmentBroadcastNative]::Send($TimeoutMilliseconds, [ref]$win32Error)
-    if (-not $success) { return [pscustomobject]@{ Success = $false; Contract = 'SENDMESSAGE_TIMEOUT_NONZERO_RETURN'; Win32Error = $win32Error } }
-    return [pscustomobject]@{ Success = $true; Contract = 'SENDMESSAGE_TIMEOUT_NONZERO_RETURN'; Win32Error = 0 }
+    if (-not $success) { return [pscustomobject]@{ Success = $false; Contract = 'SENDMESSAGE_TIMEOUT_NONZERO_RETURN'; Win32Error = $win32Error; Error = 'SendMessageTimeout returned zero' } }
+    return [pscustomobject]@{ Success = $true; Contract = 'SENDMESSAGE_TIMEOUT_NONZERO_RETURN'; Win32Error = 0; Error = '' }
 }
 
 function Assert-UserEnvironmentBroadcast {
