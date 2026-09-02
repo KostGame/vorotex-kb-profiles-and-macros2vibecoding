@@ -178,6 +178,17 @@ try {
     $identity = [pscustomobject]@{ pid = 9999; path = 'other'; sha256 = 'other' }; $failed = $false
     try { $case.Provider.StopExact($identity) | Out-Null } catch { $failed = $true }
     Require $failed 'PID identity mismatch was not rejected'
+
+    $case = New-TestProvider; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null
+    $snapshot = $case.Provider.EnvSnapshot(); $case.Provider.RestoreEnv($snapshot) | Out-Null
+    Require ($case.Provider.BroadcastCount -eq 1 -and $case.Provider.BroadcastLog[0] -eq 'restore') 'R5 RestoreEnv did not broadcast restored User environment'
+    $case = New-TestProvider 'broadcast-fail'; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null
+    $restoreFailed = $false; try { $case.Provider.RestoreEnv($case.Provider.EnvSnapshot()) | Out-Null } catch { $restoreFailed = $true }
+    Require $restoreFailed 'R5 RestoreEnv broadcast failure was not loud'
+
+    $case = New-TestProvider 'broadcast-fail'; $cases += $case; Invoke-R5Prepare $case.Provider | Out-Null
+    $armFailed = $false; try { Invoke-R5Arm $case.Provider | Out-Null } catch { $armFailed = $true }
+    Require ($armFailed -and !$case.Provider.DesktopStarted) 'ARM reached Desktop after broadcast failure'
     'LIVE_RUNNER_OWNER_BEHAVIORAL=PASS'
 } finally {
     foreach ($case in $cases) { if (Test-Path $case.Root) { Remove-Item $case.Root -Recurse -Force -ErrorAction SilentlyContinue } }
