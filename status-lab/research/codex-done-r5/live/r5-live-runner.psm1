@@ -13,6 +13,15 @@ function Save-R5State($Provider, $State) { Write-R5Json $Provider.StatePath $Sta
 function Get-R5Property($Object, [string]$Name) { if ($Object -is [System.Collections.IDictionary] -and $Object.Contains($Name)) { return $Object[$Name] }; $p = $Object.PSObject.Properties[$Name]; if ($p) { return $p.Value }; return $null }
 function Set-R5Property($Object, [string]$Name, $Value) { $p = $Object.PSObject.Properties[$Name]; if ($p) { $p.Value = $Value } else { $Object | Add-Member NoteProperty $Name $Value } }
 function Set-R5Stage($Provider, [string]$Stage) { Set-R5Property $Provider 'LastStage' $Stage }
+function Test-R5OptionalStringEqual($Current, $Expected) {
+    if ($null -eq $Current -or $null -eq $Expected) { return $null -eq $Current -and $null -eq $Expected }
+    return ([string]$Current) -ceq ([string]$Expected)
+}
+function New-R5ErrorReport($Provider, [string]$Mode, $ErrorRecord) {
+    $stageProperty = $Provider.PSObject.Properties['LastStage']
+    $stage = if ($stageProperty -and $stageProperty.Value) { [string]$stageProperty.Value } else { $Mode }
+    [ordered]@{ ERROR_CLASS = $ErrorRecord.Exception.GetType().Name; ERROR_STAGE = $stage }
+}
 function New-R5Result($Map) { $Map.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key)=$($_.Value)" } }
 function Write-R5Result($Provider, $Map) { $lines = @(New-R5Result $Map); $lines | Set-Content -LiteralPath (Join-Path $Provider.StateRoot 'result.txt') -Encoding UTF8; $lines }
 function Get-R5Transient([string]$Payload) {
@@ -248,17 +257,22 @@ function Invoke-R5Prepare($Provider) {
     Save-R5State $Provider $s; New-R5Result @{ STATUS = 'PASS'; CANARY_PREPARED = 'YES'; MAIN_SHA = $main; ENV_MUTATION = 'NO'; HOOK_MUTATION = 'NO'; PROVEN_CHILD_DISCOVERY = 'PASS' }
 }
 function Invoke-R5Arm($Provider) {
-    $s = Get-R5State $Provider; if ($Provider.MachineValue() -cne [string]$s.machine.CODEX_CLI_PATH) { throw 'Machine environment changed before ARM' }; $health = $Provider.HookHealth(); if (!$health.Pass) { throw "hook health changed before ARM: $($health.Detail)" }; if (@($Provider.LiveProcesses()).Count) { throw 'relevant process running' }; $Provider.Validate(); $s.offset = $Provider.JournalOffset(); $s.phase = 'VALIDATED'; Save-R5State $Provider $s
-    if ($s.permanentTray.running) { if (!$Provider.StopExact($s.permanentTray)) { throw 'permanent tray stop not proven' } }
-    $canary = $Provider.StartTray($s.manifest.trayPath); Set-R5Property $s 'canaryTray' $canary; $s.phase = 'TRAY_STARTED'; Save-R5State $Provider $s; $Provider.SetMarker($false); $Provider.Enable(); $s.phase = 'BRIDGE_ENABLED'; Save-R5State $Provider $s; $null = $Provider.StartDesktop($s.desktop.appUserModelId); $s.phase = 'DESKTOP_STARTED'; Save-R5State $Provider $s
-    $route = $Provider.WaitForRoute($s.manifest)
+    $s = Get-R5State $Provider; Set-R5Stage $Provider 'MACHINE_ENV_CHECK'; if (!(Test-R5OptionalStringEqual $Provider.MachineValue() $s.machine.CODEX_CLI_PATH)) { throw 'Machine environment changed before ARM' }
+    Set-R5Stage $Provider 'HOOK_HEALTH'; $health = $Provider.HookHealth(); if (!$health.Pass) { throw "hook health changed before ARM: $($health.Detail)" }
+    Set-R5Stage $Provider 'LIVE_PROCESS_CHECK'; if (@($Provider.LiveProcesses()).Count) { throw 'relevant process running' }
+    Set-R5Stage $Provider 'ACTIVATION_VALIDATE'; $Provider.Validate(); Set-R5Stage $Provider 'JOURNAL_OFFSET'; $s.offset = $Provider.JournalOffset(); $s.phase = 'VALIDATED'; Save-R5State $Provider $s
+    Set-R5Stage $Provider 'PERMANENT_TRAY_STOP'; if ($s.permanentTray.running) { if (!$Provider.StopExact($s.permanentTray)) { throw 'permanent tray stop not proven' } }
+    Set-R5Stage $Provider 'CANARY_TRAY_START'; $canary = $Provider.StartTray($s.manifest.trayPath); Set-R5Property $s 'canaryTray' $canary; $s.phase = 'TRAY_STARTED'; Save-R5State $Provider $s
+    Set-R5Stage $Provider 'LOGGING_ENABLE'; $Provider.SetMarker($false); Set-R5Stage $Provider 'BRIDGE_ENABLE'; $Provider.Enable(); $s.phase = 'BRIDGE_ENABLED'; Save-R5State $Provider $s
+    Set-R5Stage $Provider 'DESKTOP_START'; $null = $Provider.StartDesktop($s.desktop.appUserModelId); $s.phase = 'DESKTOP_STARTED'; Save-R5State $Provider $s
+    Set-R5Stage $Provider 'ROUTE_PROOF'; $route = $Provider.WaitForRoute($s.manifest)
     if (@($route.adapter).Count -eq 1) { $a = if ($route.adapter -is [System.Collections.IDictionary]) { $route.adapter } else { @($route.adapter)[0] }; Set-R5Property $s 'adapter' ([ordered]@{ pid = Get-R5Property $a 'pid'; path = Get-R5Property $a 'path'; sha256 = Get-R5Property $a 'sha256' }) }
     if (@($route.child).Count -eq 1) { $c = if ($route.child -is [System.Collections.IDictionary]) { $route.child } else { @($route.child)[0] }; Set-R5Property $s 'child' ([ordered]@{ pid = Get-R5Property $c 'pid'; path = Get-R5Property $c 'path'; sha256 = Get-R5Property $c 'sha256' }) }
     if (@($route.adapter).Count -ne 1 -or @($route.child).Count -ne 1) { $s.phase = 'ROUTE_BLOCKED'; Save-R5State $Provider $s; New-R5Result @{ STATUS = 'BLOCKED'; CANARY_ARMED = 'NO'; NEXT_ACTION = 'ROLLBACK'; ADAPTER_OBSERVED = $(if (Get-R5Property $s 'adapter') { 'YES' } else { 'NO' }); PINNED_CHILD_OBSERVED = $(if (Get-R5Property $s 'child') { 'YES' } else { 'NO' }); APP_SERVER_TOKEN_PROOF = $(if (Get-R5Property $s 'child') { 'YES' } else { 'NO' }) }; return }
     $s.phase = 'ARMED'; Save-R5State $Provider $s; New-R5Result @{ STATUS = 'PASS'; CANARY_ARMED = 'YES'; ADAPTER_OBSERVED = 'YES'; PINNED_CHILD_OBSERVED = 'YES'; APP_SERVER_ROUTE_OBSERVED = 'YES'; APP_SERVER_TOKEN_PROOF = 'YES'; BOUNDED_ROUTE_POLL = 'PASS' }
 }
 function Invoke-R5VerifyDisable($Provider) {
-    $s = Get-R5State $Provider; if ($Provider.MachineValue() -cne [string]$s.machine.CODEX_CLI_PATH) { $result = @{ STATUS = 'BLOCKED'; NEXT_ACTION = 'ROLLBACK'; MACHINE_ENV_MUTATION = 'NO'; MACHINE_ENV_DRIFT = 'YES' }; Write-R5Result $Provider $result; return }
+    $s = Get-R5State $Provider; Set-R5Stage $Provider 'MACHINE_ENV_CHECK'; if (!(Test-R5OptionalStringEqual $Provider.MachineValue() $s.machine.CODEX_CLI_PATH)) { $result = @{ STATUS = 'BLOCKED'; NEXT_ACTION = 'ROLLBACK'; MACHINE_ENV_MUTATION = 'NO'; MACHINE_ENV_DRIFT = 'YES' }; Write-R5Result $Provider $result; return }
     if (@($Provider.LiveProcesses()).Count) { $result = @{ STATUS = 'BLOCKED'; NEXT_ACTION = 'CLOSE_CODEX_COMPLETELY_AND_RETRY_VERIFY_DISABLE'; MACHINE_ENV_MUTATION = 'NO' }; Write-R5Result $Provider $result; return }
     $diag = $null; $e = @(); $deltaBytes = 0; $diagnosisOk = $false
     try {
@@ -277,12 +291,15 @@ function Invoke-R5VerifyDisable($Provider) {
     $result.PRODUCTION_DISABLE = if ($cleanup.disable) { 'PASS' } else { 'FAIL' }; $result.USER_ENV_EXACT_RESTORE = if ($cleanup.env) { 'PASS' } else { 'FAIL' }; $result.PERMANENT_TRAY_RESTORED = if ($cleanup.tray) { 'PASS' } else { 'FAIL' }; $result.DETAILED_LOGGING_RESTORED = if ($cleanup.logging) { 'PASS' } else { 'FAIL' }; $result.STOCK_ROUTE_RESTORED = if ($cleanup.stock) { 'PASS' } else { 'FAIL' }; $result.STOCK_CHILD_AFTER_DISABLE = $result.STOCK_ROUTE_RESTORED; $result.ADAPTER_AFTER_DISABLE = if ($cleanup.stock) { 'NOT_OBSERVED' } else { 'NOT_PROVEN' }; $ok = $diagnosisOk -and $cleanup.disable -and $cleanup.env -and $cleanup.logging -and $cleanup.tray -and $cleanup.stock; $result.STATUS = if ($ok) { 'PASS' } else { 'BLOCKED' }; $result.NEXT_ACTION = if ($ok) { 'OWNER_REVIEW' } else { 'ROLLBACK' }; Write-R5Result $Provider $result; New-R5Result $result
 }
 function Invoke-R5Rollback($Provider) {
-    $s = Get-R5State $Provider; $fail = $false; if ($Provider.MachineValue() -cne [string]$s.machine.CODEX_CLI_PATH) { $fail = $true }
-    foreach ($n in 'adapter','child','canaryTray') { $r = Get-R5Property $s $n; if ($r) { try { if (!$Provider.StopExact($r)) { $fail = $true } } catch { $fail = $true } } }
-    try { $Provider.Disable() } catch { $fail = $true }
-    try { $Provider.RestoreEnv($s.user); if (!$Provider.EnvMatches($s.user)) { $fail = $true } } catch { $fail = $true }
-    try { if (!$Provider.RestoreLogging($s.detailedLoggingDisabled)) { $fail = $true } } catch { $fail = $true }
-    try { $Provider.RestoreTray($s.permanentTray) | Out-Null; $Provider.RestoreStock($s) | Out-Null } catch { $fail = $true }
-    New-R5Result @{ STATUS = $(if ($fail) {'BLOCKED'} else {'PASS'}); ROLLBACK = $(if ($fail) {'FAIL'} else {'PASS'}); USER_ENV_EXACT_RESTORE = $(if ($fail) {'FAIL'} else {'PASS'}); MACHINE_ENV_MUTATION = 'NO'; MACHINE_ENV_DRIFT = $(if ($Provider.MachineValue() -ceq [string]$s.machine.CODEX_CLI_PATH) {'NO'} else {'YES'}) }
+    $s = Get-R5State $Provider; Set-R5Stage $Provider 'MACHINE_ENV_CHECK'; $machineDrift = !(Test-R5OptionalStringEqual $Provider.MachineValue() $s.machine.CODEX_CLI_PATH)
+    $productionDisable = $true; $userEnv = $true; $logging = $true; $tray = $true; $stock = $true
+    foreach ($n in 'adapter','child','canaryTray') { $r = Get-R5Property $s $n; if ($r) { try { if (!$Provider.StopExact($r)) { $productionDisable = $false } } catch { $productionDisable = $false } } }
+    try { $Provider.Disable() } catch { $productionDisable = $false }
+    try { $Provider.RestoreEnv($s.user); $userEnv = $Provider.EnvMatches($s.user) } catch { $userEnv = $false }
+    try { $logging = $Provider.RestoreLogging($s.detailedLoggingDisabled) } catch { $logging = $false }
+    try { $Provider.RestoreTray($s.permanentTray) | Out-Null } catch { $tray = $false }
+    try { $Provider.RestoreStock($s) | Out-Null } catch { $stock = $false }
+    $fail = $machineDrift -or !$productionDisable -or !$userEnv -or !$logging -or !$tray -or !$stock
+    New-R5Result @{ STATUS = $(if ($fail) {'BLOCKED'} else {'PASS'}); ROLLBACK = $(if ($fail) {'FAIL'} else {'PASS'}); PRODUCTION_DISABLE = $(if ($productionDisable) {'PASS'} else {'FAIL'}); USER_ENV_EXACT_RESTORE = $(if ($userEnv) {'PASS'} else {'FAIL'}); DETAILED_LOGGING_RESTORED = $(if ($logging) {'PASS'} else {'FAIL'}); PERMANENT_TRAY_RESTORED = $(if ($tray) {'PASS'} else {'FAIL'}); STOCK_ROUTE_RESTORED = $(if ($stock) {'PASS'} else {'FAIL'}); MACHINE_ENV_MUTATION = 'NO'; MACHINE_ENV_DRIFT = $(if ($machineDrift) {'YES'} else {'NO'}) }
 }
-Export-ModuleMember -Function New-R5RealProvider,New-R5FakeProvider,Invoke-R5Prepare,Invoke-R5Arm,Invoke-R5VerifyDisable,Invoke-R5Rollback,Invoke-R5WindowsPowerShellAppxDiscovery,Resolve-R5AppxIdentity
+Export-ModuleMember -Function New-R5RealProvider,New-R5FakeProvider,Invoke-R5Prepare,Invoke-R5Arm,Invoke-R5VerifyDisable,Invoke-R5Rollback,Invoke-R5WindowsPowerShellAppxDiscovery,Resolve-R5AppxIdentity,New-R5ErrorReport
