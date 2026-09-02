@@ -120,8 +120,12 @@ function Resolve-R5AppxIdentity {
     try { $installLocation = [IO.Path]::GetFullPath($package.installLocation) } catch { throw 'AppX discovery payload installLocation is malformed' }
     if ($package.applications -isnot [array]) { throw 'AppX discovery applications field is malformed' }
     $applications = @($package.applications)
-    if ($applications.Count -ne 1 -or $applications[0] -isnot [string] -or [string]::IsNullOrWhiteSpace($applications[0]) -or $applications[0] -match '[!\\/]') { throw "Codex AppX application identity is ambiguous count=$($applications.Count)" }
-    return [ordered]@{ identity = $package.identity; version = $package.version; installLocation = $installLocation; packageFamily = $package.packageFamily; appUserModelId = "$($package.packageFamily)!$($applications[0])" }
+    foreach ($application in $applications) { if ($application -isnot [string] -or [string]::IsNullOrWhiteSpace($application) -or $application -match '[!\\/]') { throw 'AppX discovery application identity is malformed' } }
+    $appMatches = @($applications | Where-Object { $_ -ceq 'App' })
+    if ($appMatches.Count -eq 1) { $selectedApplication = $appMatches[0] }
+    elseif ($appMatches.Count -eq 0 -and $applications.Count -eq 1) { $selectedApplication = $applications[0] }
+    else { throw "Codex AppX application identity is ambiguous count=$($applications.Count)" }
+    return [ordered]@{ identity = $package.identity; version = $package.version; installLocation = $installLocation; packageFamily = $package.packageFamily; appUserModelId = "$($package.packageFamily)!$selectedApplication" }
 }
 
 function New-R5RealProvider([string]$RepoRoot, [string]$StateRoot, [int]$TimeoutSeconds) {

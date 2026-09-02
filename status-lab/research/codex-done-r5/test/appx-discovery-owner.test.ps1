@@ -9,12 +9,17 @@ $single = '[{"identity":"OpenAI.Codex","version":"1.2.3.4","installLocation":"C:
 $identity = Resolve-R5AppxIdentity $single
 Require ($identity.identity -eq 'OpenAI.Codex' -and $identity.version -eq '1.2.3.4' -and $identity.packageFamily -eq 'OpenAI.Codex_abc123' -and $identity.appUserModelId -eq 'OpenAI.Codex_abc123!App') 'single package identity was not normalized'
 'SUPPORTED_SINGLE_PACKAGE=PASS'
+Require ((Resolve-R5AppxIdentity ($single -replace '\["App"\]', '["App","Other"]')).appUserModelId -eq 'OpenAI.Codex_abc123!App') 'App was not preferred over other application IDs'
+'APP_PREFERRED_SINGLE_PACKAGE=PASS'
+Require ((Resolve-R5AppxIdentity ($single -replace '\["App"\]', '["OnlyOne"]')).appUserModelId -eq 'OpenAI.Codex_abc123!OnlyOne') 'sole application fallback was not preserved'
+'SOLE_APPLICATION_FALLBACK=PASS'
 
 Require (Blocked { Resolve-R5AppxIdentity '[]' }) 'zero packages were accepted'
 'ZERO_PACKAGES_BLOCKED=PASS'
 Require (Blocked { Resolve-R5AppxIdentity '[{"identity":"OpenAI.Codex","version":"1","installLocation":"C:\\Codex","packageFamily":"OpenAI.Codex_a","applications":["App"]},{"identity":"OpenAI.Codex","version":"2","installLocation":"C:\\Codex2","packageFamily":"OpenAI.Codex_b","applications":["App"]}]' }) 'multiple packages were accepted'
 'MULTIPLE_PACKAGES_BLOCKED=PASS'
-Require (Blocked { Resolve-R5AppxIdentity '[{"identity":"OpenAI.Codex","version":"1.2.3.4","installLocation":"C:\\Codex","packageFamily":"OpenAI.Codex_a","applications":["App","Other"]}]' }) 'ambiguous applications were accepted'
+Require (Blocked { Resolve-R5AppxIdentity '[{"identity":"OpenAI.Codex","version":"1.2.3.4","installLocation":"C:\\Codex","packageFamily":"OpenAI.Codex_a","applications":["One","Two"]}]' }) 'ambiguous non-App applications were accepted'
+Require (Blocked { Resolve-R5AppxIdentity '[{"identity":"OpenAI.Codex","version":"1.2.3.4","installLocation":"C:\\Codex","packageFamily":"OpenAI.Codex_a","applications":["App","App"]}]' }) 'duplicate App applications were accepted'
 'AMBIGUOUS_APPLICATIONS_BLOCKED=PASS'
 Require (Blocked { Resolve-R5AppxIdentity '{not-json}' }) 'invalid JSON was accepted'
 'INVALID_JSON_BLOCKED=PASS'
