@@ -16,7 +16,11 @@ test('A: real no-Stop production transition is accepted', () => {
 });
 test('COMPLETION_AUTHORED_DONE_THEN_STOP: late matching Stop is diagnosed explicitly', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion('completed', 'S', '2026-01-01T00:00:02Z'), state('codex_turn_completed', false, 'S', '2026-01-01T00:00:03Z'), hook('Stop', '2026-01-01T00:00:04Z')]);
-  assert.equal(result.cases[0].result, RESULTS.COMPLETION_DONE_THEN_STOP); assert.equal(result.cases[0].productionDone, false);
+  assert.equal(result.cases[0].result, RESULTS.COMPLETION_DONE_THEN_STOP); assert.equal(result.cases[0].productionDone, true);
+});
+test('MIXED_EARLY_LATE_STOP_FAILS_CLOSED: every matching Stop must be after completion-authored DONE', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), hook('Stop', '2026-01-01T00:00:01Z'), completion(), state(), hook('Stop', '2026-01-01T00:00:04Z')]);
+  assert.notEqual(result.cases[0].result, RESULTS.COMPLETION_DONE_THEN_STOP); assert.equal(result.cases[0].productionDone, false);
 });
 test('NO_STOP_LIVE_DONE_ACCEPTED_STILL_PASS: no Stop remains strict acceptance', () => {
   assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state()]).cases[0].result, RESULTS.ACCEPTED);

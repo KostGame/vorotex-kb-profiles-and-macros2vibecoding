@@ -67,7 +67,7 @@ export function diagnose(inputEvents) {
     const liveCompletionDone = done.filter(event => !event.isRehydrated && event.previousState === 'RUNNING' && event.currentState === 'DONE_PENDING_ATTENTION' && event.reason === 'codex_turn_completed');
     const liveStopDone = done.filter(event => !event.isRehydrated && event.reason === 'codex_stop');
     const exact = completions.filter(completion => liveCompletionDone.some(state => state.threadId === completion.threadId && state.turnId === completion.turnId));
-    const completionDoneThenStop = exact.length === 1 && liveCompletionDone.length === 1 && stops.length > 0 && !liveStopDone.length && stops.some(stop => Date.parse(stop.timestampUtc) > Date.parse(liveCompletionDone[0].timestampUtc));
+    const completionDoneThenStop = exact.length === 1 && liveCompletionDone.length === 1 && stops.length > 0 && !liveStopDone.length && stops.every(stop => Date.parse(stop.timestampUtc) > Date.parse(liveCompletionDone[0].timestampUtc));
     const sessionThreadId = states.find(event => event.threadId)?.threadId ?? prompt._sessionThreadId ?? '';
     const sessionIdMatches = completions.filter(event => event.threadId === prompt.sessionId);
     const liveRunningWithEmptyThread = states.some(event => !event.isRehydrated && event.currentState === 'RUNNING' && event.reason === 'codex_user_prompt_submit' && event.threadId === '');
@@ -83,7 +83,7 @@ export function diagnose(inputEvents) {
     else if (completions.length && sessionThreadId && completions.some(event => event.threadId !== sessionThreadId)) result = RESULTS.IDENTITY;
     else if (completions.length && !liveCompletionDone.length) result = RESULTS.NO_PRODUCTION_DONE;
     else if (stops.length && !liveStopDone.length) result = RESULTS.NO_PRODUCTION_DONE;
-    cases.push({ sessionId: prompt.sessionId, turnId: prompt.turnId, result, stopObserved: stops.length > 0, completionObserved: completions.length > 0, productionDone: result === RESULTS.ACCEPTED || result === RESULTS.STOP, completionIgnored: completions.length > 0 && exact.length === 0, completionCount: completions.length, doneTransitionCount: done.length, chronology: completions.length && stops.length ? (Date.parse(completions[0].timestampUtc) < Date.parse(stops[0].timestampUtc) ? 'turn_completed_before_stop' : 'stop_before_turn_completed') : stops.length ? 'stop_without_completion' : 'no_stop', sessionCorrelationThreadId: sessionThreadId });
+    cases.push({ sessionId: prompt.sessionId, turnId: prompt.turnId, result, stopObserved: stops.length > 0, completionObserved: completions.length > 0, productionDone: result === RESULTS.ACCEPTED || result === RESULTS.COMPLETION_DONE_THEN_STOP || result === RESULTS.STOP, completionIgnored: completions.length > 0 && exact.length === 0, completionCount: completions.length, doneTransitionCount: done.length, chronology: completions.length && stops.length ? (Date.parse(completions[0].timestampUtc) < Date.parse(stops[0].timestampUtc) ? 'turn_completed_before_stop' : 'stop_before_turn_completed') : stops.length ? 'stop_without_completion' : 'no_stop', sessionCorrelationThreadId: sessionThreadId });
   }
   return { evidence, cases, duplicateEventsRemoved: ordered.length - unique.length };
 }
