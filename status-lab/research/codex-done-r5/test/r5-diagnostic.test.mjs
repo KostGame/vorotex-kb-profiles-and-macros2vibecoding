@@ -14,6 +14,20 @@ test('A: real no-Stop production transition is accepted', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state()]);
   assert.equal(result.cases[0].result, RESULTS.ACCEPTED); assert.equal(result.cases[0].productionDone, true);
 });
+test('COMPLETION_AUTHORED_DONE_THEN_STOP: late matching Stop is diagnosed explicitly', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion('completed', 'S', '2026-01-01T00:00:02Z'), state('codex_turn_completed', false, 'S', '2026-01-01T00:00:03Z'), hook('Stop', '2026-01-01T00:00:04Z')]);
+  assert.equal(result.cases[0].result, RESULTS.COMPLETION_DONE_THEN_STOP); assert.equal(result.cases[0].productionDone, false);
+});
+test('NO_STOP_LIVE_DONE_ACCEPTED_STILL_PASS: no Stop remains strict acceptance', () => {
+  assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state()]).cases[0].result, RESULTS.ACCEPTED);
+});
+test('STOP_AUTHORED_DONE_STILL_PASS: Stop-authored DONE keeps precedence', () => {
+  assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), hook('Stop', '2026-01-01T00:00:04Z'), state('codex_stop', false, 'S', '2026-01-01T00:00:05Z')]).cases[0].result, RESULTS.STOP);
+});
+test('STOP_BEFORE_COMPLETION_DONE_NOT_LATE_STOP: earlier Stop is not the new result', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), hook('Stop', '2026-01-01T00:00:01Z'), completion(), state('codex_turn_completed', false, 'S', '2026-01-01T00:00:03Z')]);
+  assert.equal(result.cases[0].result, RESULTS.NO_PRODUCTION_DONE);
+});
 test('A2: production status is adapted to the internal terminalStatus field', () => {
   const adapted = adaptProductionCompletionEvent(completion());
   assert.equal(adapted.terminalStatus, 'completed'); assert.equal('status' in adapted, false);
@@ -25,6 +39,9 @@ test('B: negative guard rejects completion without any production session event'
 test('B2: live completion reason with the wrong previous state is not acceptance', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state('codex_turn_completed', false, 'S', '2026-01-01T00:00:03Z', { previous: 'NORMAL' })]);
   assert.equal(result.cases[0].result, RESULTS.NO_PRODUCTION_DONE); assert.equal(result.cases[0].productionDone, false);
+});
+test('COMPLETION_WITHOUT_PRODUCTION_DONE_STILL_FAILS: completion alone is not authority', () => {
+  assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion()]).cases[0].result, RESULTS.NO_PRODUCTION_DONE);
 });
 test('C/D: real Stop transition is authoritative in either chronology', () => {
   for (const events of [[hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), hook('Stop', '2026-01-01T00:00:01Z'), state('codex_stop'), completion()], [hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), hook('Stop', '2026-01-01T00:00:03Z'), state('codex_stop')]]) assert.equal(diagnose(events).cases[0].result, RESULTS.STOP);
@@ -39,6 +56,13 @@ test('F/G: wrong and unrelated identities are not exact correlation', () => {
 });
 test('H: ambiguous duplicate completion evidence fails closed', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), completion('completed', 'S', '2026-01-01T00:00:04Z'), state()]);
+  assert.equal(result.cases[0].result, RESULTS.AMBIGUOUS);
+});
+test('DUPLICATE_COMPLETION_FAILS_CLOSED: duplicate successful completions remain ambiguous', () => {
+  assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), completion('completed', 'S', '2026-01-01T00:00:04Z'), state()]).cases[0].result, RESULTS.AMBIGUOUS);
+});
+test('DUPLICATE_COMPLETION_DONE_FAILS_CLOSED: duplicate completion-authored DONE transitions remain ambiguous', () => {
+  const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state(), state('codex_turn_completed', false, 'S', '2026-01-01T00:00:04Z'), hook('Stop', '2026-01-01T00:00:05Z')]);
   assert.equal(result.cases[0].result, RESULTS.AMBIGUOUS);
 });
 test('I: non-success statuses never become successful authority', () => {
@@ -76,6 +100,12 @@ test('K: actual nested production schema is adapted without raw correlation', ()
 test('L: rehydrated DONE is not live acceptance', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state('codex_turn_completed', true)]);
   assert.equal(result.cases[0].result, RESULTS.REHYDRATED); assert.equal(result.cases[0].productionDone, false);
+});
+test('REHYDRATED_DONE_STILL_BLOCKED: rehydrated completion DONE remains blocked', () => {
+  assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(), state('codex_turn_completed', true)]).cases[0].result, RESULTS.REHYDRATED);
+});
+test('NON_SUCCESS_TERMINAL_STILL_BLOCKED: interrupted and failed completions remain blocked', () => {
+  for (const status of ['interrupted', 'failed']) assert.equal(diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), completion(status), state()]).cases[0].result, RESULTS.NON_SUCCESS);
 });
 test('M: bare SessionEnd never creates DONE', () => {
   const result = diagnose([hook('UserPromptSubmit', '2026-01-01T00:00:00Z'), hook('SessionEnd', '2026-01-01T00:00:02Z')]);

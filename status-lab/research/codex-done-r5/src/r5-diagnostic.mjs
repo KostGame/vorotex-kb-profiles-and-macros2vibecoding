@@ -5,7 +5,7 @@ const HOOK_EVENTS = new Set(['UserPromptSubmit', 'Stop', 'SessionEnd']);
 const TERMINAL_STATUSES = new Set(['completed', 'interrupted', 'failed']);
 const COMPLETION_SCHEMA_VERSION = 'k15-codex-completion/v1';
 const MAX_FIELD_BYTES = 1024;
-const RESULTS = Object.freeze({ ACCEPTED: 'NO_STOP_LIVE_DONE_ACCEPTED', STOP: 'STOP_AUTHORED_DONE', NO_PRODUCTION_DONE: 'COMPLETION_PRESENT_BUT_NO_PRODUCTION_DONE', CANDIDATE: 'CORRELATION_FIX_CANDIDATE', IDENTITY: 'IDENTITY_MISMATCH', AMBIGUOUS: 'AMBIGUOUS_CORRELATION', NON_SUCCESS: 'NON_SUCCESS_TERMINAL_STATUS', REHYDRATED: 'REHYDRATED_DONE_NOT_LIVE_ACCEPTANCE', NO_COMPLETION: 'NO_COMPLETION' });
+const RESULTS = Object.freeze({ ACCEPTED: 'NO_STOP_LIVE_DONE_ACCEPTED', COMPLETION_DONE_THEN_STOP: 'COMPLETION_AUTHORED_DONE_THEN_STOP', STOP: 'STOP_AUTHORED_DONE', NO_PRODUCTION_DONE: 'COMPLETION_PRESENT_BUT_NO_PRODUCTION_DONE', CANDIDATE: 'CORRELATION_FIX_CANDIDATE', IDENTITY: 'IDENTITY_MISMATCH', AMBIGUOUS: 'AMBIGUOUS_CORRELATION', NON_SUCCESS: 'NON_SUCCESS_TERMINAL_STATUS', REHYDRATED: 'REHYDRATED_DONE_NOT_LIVE_ACCEPTANCE', NO_COMPLETION: 'NO_COMPLETION' });
 const text = value => typeof value === 'string' ? value : '';
 const boundedString = value => typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= MAX_FIELD_BYTES ? value : '';
 
@@ -67,6 +67,7 @@ export function diagnose(inputEvents) {
     const liveCompletionDone = done.filter(event => !event.isRehydrated && event.previousState === 'RUNNING' && event.currentState === 'DONE_PENDING_ATTENTION' && event.reason === 'codex_turn_completed');
     const liveStopDone = done.filter(event => !event.isRehydrated && event.reason === 'codex_stop');
     const exact = completions.filter(completion => liveCompletionDone.some(state => state.threadId === completion.threadId && state.turnId === completion.turnId));
+    const completionDoneThenStop = exact.length === 1 && liveCompletionDone.length === 1 && stops.length > 0 && !liveStopDone.length && stops.some(stop => Date.parse(stop.timestampUtc) > Date.parse(liveCompletionDone[0].timestampUtc));
     const sessionThreadId = states.find(event => event.threadId)?.threadId ?? prompt._sessionThreadId ?? '';
     const sessionIdMatches = completions.filter(event => event.threadId === prompt.sessionId);
     const liveRunningWithEmptyThread = states.some(event => !event.isRehydrated && event.currentState === 'RUNNING' && event.reason === 'codex_user_prompt_submit' && event.threadId === '');
@@ -76,6 +77,7 @@ export function diagnose(inputEvents) {
     else if (done.some(event => event.isRehydrated) && !exact.length) result = RESULTS.REHYDRATED;
     else if (completions.some(event => !TERMINAL_STATUSES.has(event.terminalStatus) || event.terminalStatus !== 'completed')) result = RESULTS.NON_SUCCESS;
     else if (ambiguous) result = RESULTS.AMBIGUOUS;
+    else if (completionDoneThenStop) result = RESULTS.COMPLETION_DONE_THEN_STOP;
     else if (exact.length === 1 && stops.length === 0) result = RESULTS.ACCEPTED;
     else if (sessionIdMatches.length === 1 && liveRunningWithEmptyThread && !sessionThreadId && !liveCompletionDone.length) result = RESULTS.CANDIDATE;
     else if (completions.length && sessionThreadId && completions.some(event => event.threadId !== sessionThreadId)) result = RESULTS.IDENTITY;
