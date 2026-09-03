@@ -63,7 +63,11 @@ internal sealed record CodexSessionSnapshot(
     string SessionId,
     K15NormalizedState State,
     bool IsAlive,
-    bool IsFocused);
+    bool IsFocused,
+    string Cwd = "",
+    string ThreadId = "",
+    string TurnId = "",
+    DateTimeOffset? LastActivityUtc = null);
 
 internal sealed record CodexAttentionSnapshot(
     int RunningCount,
@@ -129,7 +133,8 @@ internal sealed class StateReducer
         .Where(session => !session.Internal)
         .OrderBy(session => session.Id, StringComparer.Ordinal)
         .Select(session => new CodexSessionSnapshot(session.Id, session.State, !session.Ended,
-            string.Equals(session.Id, FocusedSessionId, StringComparison.Ordinal)))
+            string.Equals(session.Id, FocusedSessionId, StringComparison.Ordinal), session.Cwd,
+            session.ThreadId, session.TurnId, session.LastActivityUtc))
         .ToArray();
 
     public StateTransition? Apply(StatusInputEvent input)

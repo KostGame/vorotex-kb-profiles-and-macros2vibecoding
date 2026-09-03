@@ -116,6 +116,12 @@ internal static class EventJournal
             if (source == "codex_stdio_bridge")
                 return IsSanitizedApprovalRecord(root);
 
+            if (source == "state_normalizer")
+                return IsSafeNormalizerRecord(root);
+
+            if (source == "live_dashboard")
+                return IsSafeDashboardRecord(root);
+
             if (source != "windows_notification")
                 return false;
 
@@ -129,6 +135,33 @@ internal static class EventJournal
         {
             return false;
         }
+    }
+
+    private static bool IsSafeNormalizerRecord(JsonElement root)
+    {
+        var name = GetString(root, "event");
+        if (name is not ("normalized_state_changed" or "session_state_changed" or "state_rehydrated" or "normalizer_error"))
+            return false;
+        var allowed = name switch
+        {
+            "normalized_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "previous", "current", "reason", "sourceTimestampUtc", "focusedSessionId", "focusedCwd", "activeTaskSessions", "aggregatePrevious", "aggregateCurrent", "driverSessionId", "driverReason", "runningCount", "waitingCount", "doneUnreadCount" },
+            "session_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "sessionId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation" },
+            "state_rehydrated" => new[] { "timestampUtc", "source", "event", "current", "focusedSessionId", "focusedCwd", "activeTaskSessions", "attention", "replayWindowMinutes" },
+            _ => new[] { "timestampUtc", "source", "event", "exception", "hresult" }
+        };
+        return root.EnumerateObject().All(p => allowed.Contains(p.Name, StringComparer.Ordinal)) &&
+               DateTimeOffset.TryParse(GetString(root, "timestampUtc"), out _);
+    }
+
+    private static bool IsSafeDashboardRecord(JsonElement root)
+    {
+        var name = GetString(root, "event");
+        if (name is not ("started" or "stopped" or "bind_failed" or "runtime_error")) return false;
+        var allowed = name == "started"
+            ? new[] { "timestampUtc", "source", "event", "version", "loopbackPort" }
+            : new[] { "timestampUtc", "source", "event", "exceptionType", "hresult", "category" };
+        return root.EnumerateObject().All(p => allowed.Contains(p.Name, StringComparer.Ordinal)) &&
+               DateTimeOffset.TryParse(GetString(root, "timestampUtc"), out _);
     }
 
     private static void RotateIfNeededLocked()

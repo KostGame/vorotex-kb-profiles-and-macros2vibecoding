@@ -22,7 +22,23 @@ internal sealed record StatusTraySnapshot(
     int ConfigSchema,
     string DeviceState = "DISCONNECTED",
     string DeviceIdentity = "",
-    IReadOnlyList<StatusTrayDeviceCandidate>? DeviceCandidates = null);
+    IReadOnlyList<StatusTrayDeviceCandidate>? DeviceCandidates = null,
+    IReadOnlyList<StatusTraySessionSnapshot>? Sessions = null,
+    int RunningCount = 0,
+    int WaitingCount = 0,
+    int DoneUnreadCount = 0,
+    int ActiveTaskSessionCount = 0,
+    int EndedSessionCount = 0);
+
+internal sealed record StatusTraySessionSnapshot(
+    string SessionId,
+    string State,
+    bool IsAlive,
+    bool IsFocused,
+    string Cwd = "",
+    string ThreadId = "",
+    string TurnId = "",
+    DateTimeOffset? LastActivityUtc = null);
 
 internal sealed record StatusTrayDeviceCandidate(
     string CandidateId,
