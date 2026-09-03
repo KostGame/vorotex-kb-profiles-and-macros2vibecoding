@@ -337,7 +337,8 @@ internal sealed class StateReducer
             return null;
 
         var candidates = _sessions.Values.Where(session => !session.Internal && !session.Ended &&
-            string.Equals(session.ThreadId, input.ThreadId, StringComparison.Ordinal) &&
+            (string.Equals(session.ThreadId, input.ThreadId, StringComparison.Ordinal) ||
+             string.Equals(session.Id, input.ThreadId, StringComparison.Ordinal)) &&
             string.Equals(session.TurnId, input.TurnId, StringComparison.Ordinal)).ToArray();
         if (candidates.Length != 1)
             return null;

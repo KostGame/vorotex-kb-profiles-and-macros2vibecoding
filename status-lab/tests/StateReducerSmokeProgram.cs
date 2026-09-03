@@ -32,10 +32,86 @@ completion = noStop.Apply(Completion(t.AddSeconds(2), "thread-done", "turn-done"
 Require(completion?.Reason == "codex_turn_completed" && noStop.State == K15NormalizedState.DonePendingAttention &&
         noStop.LastSessionTransitions.Count == 1 && !noStop.LastSessionTransitions[0].IsRehydrated,
     "Matching turn/completed must produce one live per-session DONE transition.");
+Console.WriteLine("EXACT_THREAD_ID_COMPLETION_STILL_PASS=PASS");
 var completionDuplicate = noStop.Apply(Completion(t.AddSeconds(2.5), "thread-done", "turn-done"));
 Require(completionDuplicate is null && noStop.LastSessionTransitions.Count == 0 &&
         noStop.State == K15NormalizedState.DonePendingAttention,
     "Duplicate completion after DONE must be idempotent.");
+
+var fallback = new StateReducer();
+fallback.Apply(Hook(t, "UserPromptSubmit", "fallback-session", turn: "fallback-turn"));
+var fallbackTransition = fallback.Apply(Completion(t.AddSeconds(1), "fallback-session", "fallback-turn"));
+Require(fallbackTransition?.Reason == "codex_turn_completed" && fallback.State == K15NormalizedState.DonePendingAttention &&
+        fallback.LastSessionTransitions.Count == 1 && fallback.LastSessionTransitions[0].SessionId == "fallback-session",
+    "Session ID fallback must complete a hook-created RUNNING session exactly once.");
+Console.WriteLine("SESSION_ID_FALLBACK_COMPLETION=PASS");
+
+var fallbackWrongTurn = new StateReducer();
+fallbackWrongTurn.Apply(Hook(t, "UserPromptSubmit", "fallback-wrong-turn", turn: "fallback-turn"));
+Require(fallbackWrongTurn.Apply(Completion(t.AddSeconds(1), "fallback-wrong-turn", "other-turn")) is null &&
+        fallbackWrongTurn.State == K15NormalizedState.Running && fallbackWrongTurn.LastSessionTransitions.Count == 0,
+    "Session ID fallback must require an exact ordinal turn match.");
+Console.WriteLine("SESSION_ID_FALLBACK_WRONG_TURN_BLOCKED=PASS");
+
+var fallbackThenStop = new StateReducer();
+fallbackThenStop.Apply(Hook(t, "UserPromptSubmit", "fallback-stop", turn: "fallback-stop-turn"));
+fallbackThenStop.Apply(Completion(t.AddSeconds(1), "fallback-stop", "fallback-stop-turn"));
+fallbackThenStop.Apply(Hook(t.AddSeconds(2), "Stop", "fallback-stop", turn: "fallback-stop-turn"));
+Require(fallbackThenStop.LastSessionTransitions.Count == 0 && fallbackThenStop.State == K15NormalizedState.DonePendingAttention,
+    "Fallback completion followed by Stop must be idempotent.");
+Console.WriteLine("SESSION_ID_FALLBACK_THEN_STOP_IDEMPOTENT=PASS");
+
+var stopThenFallback = new StateReducer();
+stopThenFallback.Apply(Hook(t, "UserPromptSubmit", "stop-fallback", turn: "stop-fallback-turn"));
+stopThenFallback.Apply(Hook(t.AddSeconds(1), "Stop", "stop-fallback", turn: "stop-fallback-turn"));
+stopThenFallback.Apply(Completion(t.AddSeconds(2), "stop-fallback", "stop-fallback-turn"));
+Require(stopThenFallback.LastSessionTransitions.Count == 0 && stopThenFallback.State == K15NormalizedState.DonePendingAttention,
+    "Stop followed by fallback completion must be idempotent.");
+Console.WriteLine("STOP_THEN_SESSION_ID_FALLBACK_IDEMPOTENT=PASS");
+
+var fallbackAfterAck = new StateReducer();
+fallbackAfterAck.Apply(Hook(t, "UserPromptSubmit", "fallback-ack", turn: "fallback-ack-turn"));
+fallbackAfterAck.Apply(Completion(t.AddSeconds(1), "fallback-ack", "fallback-ack-turn"));
+fallbackAfterAck.Acknowledge(t.AddSeconds(1));
+Require(fallbackAfterAck.Apply(Completion(t.AddSeconds(2), "fallback-ack", "fallback-ack-turn")) is null &&
+        fallbackAfterAck.State == K15NormalizedState.Normal && fallbackAfterAck.LastSessionTransitions.Count == 0,
+    "Late fallback completion must not resurrect an acknowledged session.");
+Console.WriteLine("SESSION_ID_FALLBACK_AFTER_ACK_BLOCKED=PASS");
+
+var fallbackWaiting = new StateReducer();
+fallbackWaiting.Apply(Hook(t, "UserPromptSubmit", "fallback-waiting", turn: "fallback-waiting-turn"));
+fallbackWaiting.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "fallback-waiting", turn: "fallback-waiting-turn"));
+Require(fallbackWaiting.Apply(Completion(t.AddSeconds(2), "fallback-waiting", "fallback-waiting-turn")) is null &&
+        fallbackWaiting.State == K15NormalizedState.Waiting && fallbackWaiting.LastSessionTransitions.Count == 0,
+    "Fallback completion must not auto-complete WAITING.");
+Console.WriteLine("SESSION_ID_FALLBACK_WAITING_BLOCKED=PASS");
+
+var fallbackEnded = new StateReducer();
+fallbackEnded.Apply(Hook(t, "UserPromptSubmit", "fallback-ended", turn: "fallback-ended-turn"));
+fallbackEnded.Apply(Hook(t.AddSeconds(1), "SessionEnd", "fallback-ended", turn: "fallback-ended-turn"));
+Require(fallbackEnded.Apply(Completion(t.AddSeconds(2), "fallback-ended", "fallback-ended-turn")) is null &&
+        fallbackEnded.State == K15NormalizedState.Normal && fallbackEnded.LastSessionTransitions.Count == 0,
+    "Fallback completion must not resurrect an ended session.");
+Console.WriteLine("SESSION_ID_FALLBACK_ENDED_BLOCKED=PASS");
+
+var fallbackParallel = new StateReducer();
+fallbackParallel.Apply(Hook(t, "UserPromptSubmit", "fallback-parallel-A", turn: "fallback-parallel-turn-A"));
+fallbackParallel.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "fallback-parallel-B", turn: "fallback-parallel-turn-B"));
+fallbackParallel.Apply(Completion(t.AddSeconds(2), "fallback-parallel-A", "fallback-parallel-turn-A"));
+Require(fallbackParallel.SessionSnapshots.Single(s => s.SessionId == "fallback-parallel-A").State == K15NormalizedState.DonePendingAttention &&
+        fallbackParallel.SessionSnapshots.Single(s => s.SessionId == "fallback-parallel-B").State == K15NormalizedState.Running &&
+        fallbackParallel.LastSessionTransitions.Count == 1 && fallbackParallel.LastSessionTransitions[0].SessionId == "fallback-parallel-A",
+    "Fallback completion must isolate the matching parallel session.");
+Console.WriteLine("SESSION_ID_FALLBACK_PARALLEL_ISOLATION=PASS");
+
+var fallbackAmbiguous = new StateReducer();
+fallbackAmbiguous.Apply(Hook(t, "UserPromptSubmit", "fallback-ambiguous-A", turn: "fallback-ambiguous-turn"));
+fallbackAmbiguous.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "fallback-ambiguous-B", turn: "fallback-ambiguous-turn", thread: "fallback-ambiguous-A"));
+Require(fallbackAmbiguous.Apply(Completion(t.AddSeconds(2), "fallback-ambiguous-A", "fallback-ambiguous-turn")) is null &&
+        fallbackAmbiguous.SessionSnapshots.All(s => s.State == K15NormalizedState.Running) &&
+        fallbackAmbiguous.LastSessionTransitions.Count == 0,
+    "Ambiguous fallback completion must fail closed without mutation.");
+Console.WriteLine("SESSION_ID_FALLBACK_AMBIGUOUS_FAIL_CLOSED=PASS");
 noStop.Acknowledge("session-done", t.AddSeconds(3));
 Require(noStop.State == K15NormalizedState.Normal, "Explicit session ACK must clear DONE to NORMAL.");
 var lateCompletion = noStop.Apply(Completion(t.AddSeconds(4), "thread-done", "turn-done"));
