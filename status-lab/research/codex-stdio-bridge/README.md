@@ -28,6 +28,22 @@ Run the deterministic, dependency-free suite with:
 npm.cmd test
 ```
 
+## Read-only unread probe
+
+`src/unread-probe-cli.mjs` reads only the bounded
+`electron-persisted-atom-state/unread-thread-ids-by-host-v1` atom from an
+explicit state file. It requires an explicit host discriminator and emits
+only sanitized metadata; it does not connect to Codex, open a chat, or write
+state:
+
+```text
+node src/unread-probe-cli.mjs --state-path <state-file> --host local --thread-id <opaque-thread-id>
+```
+
+The probe is diagnostic-only and is not connected to Status Lab state,
+lighting, or tray authority. An owner-controlled before/after read proof is
+still required before using it as acknowledgement evidence.
+
 
 ## Phase B transparent wrapper
 
