@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { probeStateText, UNREAD_PROBE_SOURCE } from '../src/unread-probe.mjs';
 import { parseUnreadProbeArgs } from '../src/unread-probe-cli-args.mjs';
+import { mapUnreadThreadToSession } from '../src/unread-session-mapping.mjs';
 
 const now = () => new Date('2026-09-05T00:00:00.000Z');
 const state = (value) => JSON.stringify({
@@ -65,4 +66,53 @@ test('CLI requires exactly one occurrence of each selector', () => {
   assert.equal(parseUnreadProbeArgs(['--state-path', 'state.json', '--host', 'local', '--thread-id', 'thread-A', '--thread-id', 'thread-B']), undefined);
   assert.equal(parseUnreadProbeArgs(['--state-path', 'state-a.json', '--state-path', 'state-b.json', '--host', 'local', '--thread-id', 'thread-A']), undefined);
   assert.equal(parseUnreadProbeArgs([...exact, '--unknown', 'value']), undefined);
+});
+
+const doneEvent = (sessionId, threadId, turnId, extra = {}) => ({
+  source: 'state_normalizer', event: 'session_state_changed', plane: 'per_session',
+  sessionId, current: 'DONE_PENDING_ATTENTION', isRehydrated: false,
+  correlation: { threadId, turnId, rpcIdType: '', rpcId: '' }, ...extra
+});
+
+test('exact DONE session correlation maps persisted thread to one session', () => {
+  assert.deepEqual(mapUnreadThreadToSession('thread-A', [
+    doneEvent('session-A', 'thread-A', 'turn-A'),
+    doneEvent('session-B', 'thread-B', 'turn-B')
+  ]), { state: 'Found', threadId: 'thread-A', sessionId: 'session-A', turnId: 'turn-A', matched: true });
+});
+
+test('missing or ambiguous mappings fail closed without cross-session fallback', () => {
+  assert.equal(mapUnreadThreadToSession('thread-missing', [doneEvent('session-A', 'thread-A', 'turn-A')]).state, 'Unknown');
+  assert.equal(mapUnreadThreadToSession('session-A', [doneEvent('session-A', 'thread-A', 'turn-A')]).state, 'Unknown');
+  assert.equal(mapUnreadThreadToSession('thread-A', [
+    doneEvent('session-A', 'thread-A', 'turn-A'), doneEvent('session-B', 'thread-A', 'turn-B')
+  ]).state, 'Unknown');
+});
+
+test('mapping ignores non-DONE, malformed, oversized, and privacy-content fields', () => {
+  const actual = mapUnreadThreadToSession('thread-A', [
+    doneEvent('session-A', 'thread-A', 'turn-A', { current: 'RUNNING', prompt: 'PRIVATE' }),
+    doneEvent('session-A', 'thread-A', 'turn-A', { response: 'PRIVATE' })
+  ]);
+  assert.equal(actual.state, 'Found');
+  assert.equal(actual.sessionId, 'session-A');
+  assert.equal(JSON.stringify(actual).includes('PRIVATE'), false);
+});
+
+test('a malformed target correlation fails closed', () => {
+  assert.equal(mapUnreadThreadToSession('thread-A', [
+    doneEvent('session-A', 'thread-A', '')
+  ]).state, 'Unknown');
+  assert.equal(mapUnreadThreadToSession('thread-A', [
+    doneEvent('x'.repeat(1025), 'thread-A', 'turn-A')
+  ]).state, 'Unknown');
+});
+
+test('duplicate evidence is safe and multiple turns do not select by ordering', () => {
+  const actual = mapUnreadThreadToSession('thread-A', [
+    doneEvent('session-A', 'thread-A', 'turn-A'),
+    doneEvent('session-A', 'thread-A', 'turn-A'),
+    doneEvent('session-A', 'thread-A', 'turn-B')
+  ]);
+  assert.deepEqual(actual, { state: 'Found', threadId: 'thread-A', sessionId: 'session-A', turnId: '', matched: true });
 });
