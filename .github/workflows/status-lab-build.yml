@@ -37,7 +37,11 @@ jobs:
 
       - name: Live Dashboard deterministic safety tests
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/live-dashboard-smoke.ps1
+          run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/live-dashboard-smoke.ps1
+
+      - name: Published Live Candidate acceptance
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/published-package-smoke.ps1
 
       - name: Device UX regression smoke tests
         shell: powershell
