@@ -111,6 +111,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         };
         control.Click += (_, _) => OpenControlCenterProcess();
         menu.Items.Add(control);
+        menu.Items.Add("Открыть Live Dashboard", null, (_, _) => OpenLiveDashboard());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_stateStatusItem);
         menu.Items.Add(_trackingStatusItem);
@@ -245,7 +246,16 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             _config.SchemaVersion,
             DeviceStateName(_deviceManager.ConnectionState),
             _deviceManager.SelectedDevice?.ProductString ?? string.Empty,
-            _deviceManager.Candidates.Select(ToDeviceSnapshot).ToArray());
+            _deviceManager.Candidates.Select(ToDeviceSnapshot).ToArray(),
+            _stateNormalizer.SessionSnapshots.Select(session => new StatusTraySessionSnapshot(
+                session.SessionId, JournalStateNormalizer.ToWireName(session.State), session.IsAlive,
+                session.IsFocused, session.Cwd, session.ThreadId, session.TurnId,
+                session.LastActivityUtc)).ToArray(),
+            _stateNormalizer.AttentionSnapshot.RunningCount,
+            _stateNormalizer.AttentionSnapshot.ApprovalWaitingCount,
+            _stateNormalizer.AttentionSnapshot.DoneUnreadCount,
+            _stateNormalizer.AttentionSnapshot.ActiveTaskSessionCount,
+            _stateNormalizer.AttentionSnapshot.EndedSessionCount);
     }
 
     private async Task ScanDevicesAsync()
@@ -383,6 +393,29 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         }
 
         Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+    }
+
+    private void OpenLiveDashboard()
+    {
+        const int port = 17815;
+        var path = Path.Combine(AppContext.BaseDirectory, "Vorotex.K15.LiveDashboard.exe");
+        if (!File.Exists(path))
+        {
+            EventJournal.Append(new { timestampUtc = DateTimeOffset.UtcNow, source = "status_tray", @event = "live_dashboard_missing" });
+            ShowBalloon("Live Dashboard не найден рядом с Status Tray.");
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+            Process.Start(new ProcessStartInfo { FileName = $"http://127.0.0.1:{port}/", UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            EventJournal.Append(new { timestampUtc = DateTimeOffset.UtcNow, source = "status_tray", @event = "live_dashboard_start_failed", exception = ex.GetType().Name, hresult = ex.HResult });
+            ShowBalloon("Не удалось открыть Live Dashboard.");
+        }
     }
 
     private void OpenSibling(string executable)

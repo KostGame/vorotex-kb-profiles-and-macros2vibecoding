@@ -35,6 +35,14 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/rc2-smoke.ps1
 
+      - name: Live Dashboard deterministic safety tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/live-dashboard-smoke.ps1
+
+      - name: Published Live Candidate acceptance
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/published-package-smoke.ps1
+
       - name: Device UX regression smoke tests
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/device-ux-smoke.ps1
@@ -60,6 +68,9 @@ jobs:
       - name: Restore Control Center
         run: dotnet restore status-lab/control-center/Vorotex.K15.ControlCenter.csproj
 
+      - name: Restore Live Dashboard
+        run: dotnet restore status-lab/live-dashboard/Vorotex.K15.LiveDashboard.csproj
+
       - name: Restore Lighting Lab
         run: dotnet restore status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj
 
@@ -71,6 +82,9 @@ jobs:
 
       - name: Build Control Center
         run: dotnet build status-lab/control-center/Vorotex.K15.ControlCenter.csproj -c Release --no-restore
+
+      - name: Build Live Dashboard
+        run: dotnet build status-lab/live-dashboard/Vorotex.K15.LiveDashboard.csproj -c Release --no-restore
 
       - name: Build Lighting Lab
         run: dotnet build status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj -c Release --no-restore
@@ -88,6 +102,9 @@ jobs:
       - name: Publish Control Center win-x64
         run: dotnet publish status-lab/control-center/Vorotex.K15.ControlCenter.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
 
+      - name: Publish Live Dashboard win-x64
+        run: dotnet publish status-lab/live-dashboard/Vorotex.K15.LiveDashboard.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
+
       - name: Publish Lighting Lab win-x64
         run: dotnet publish status-lab/lighting-lab/Vorotex.K15.LightingLab.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true --no-restore
 
@@ -101,7 +118,8 @@ jobs:
           $control = 'status-lab/control-center/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.ControlCenter.exe'
           $lighting = 'status-lab/lighting-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.LightingLab.exe'
           $research = 'status-lab/hid-research-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.HidResearchLab.exe'
-          foreach ($file in @($tray,$control,$lighting,$research)) {
+          $dashboard = 'status-lab/live-dashboard/bin/Release/net8.0/win-x64/publish/Vorotex.K15.LiveDashboard.exe'
+          foreach ($file in @($tray,$control,$lighting,$research,$dashboard)) {
             if (-not (Test-Path -LiteralPath $file)) { throw "Split executable missing: $file" }
           }
 

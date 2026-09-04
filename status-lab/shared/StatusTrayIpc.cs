@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Vorotex.K15.StatusLab;
 
-internal sealed record StatusTraySnapshot(
+public sealed record StatusTraySnapshot(
     string State,
     string Reason,
     DateTimeOffset StateSinceUtc,
@@ -22,9 +22,25 @@ internal sealed record StatusTraySnapshot(
     int ConfigSchema,
     string DeviceState = "DISCONNECTED",
     string DeviceIdentity = "",
-    IReadOnlyList<StatusTrayDeviceCandidate>? DeviceCandidates = null);
+    IReadOnlyList<StatusTrayDeviceCandidate>? DeviceCandidates = null,
+    IReadOnlyList<StatusTraySessionSnapshot>? Sessions = null,
+    int RunningCount = 0,
+    int WaitingCount = 0,
+    int DoneUnreadCount = 0,
+    int ActiveTaskSessionCount = 0,
+    int EndedSessionCount = 0);
 
-internal sealed record StatusTrayDeviceCandidate(
+public sealed record StatusTraySessionSnapshot(
+    string SessionId,
+    string State,
+    bool IsAlive,
+    bool IsFocused,
+    string Cwd = "",
+    string ThreadId = "",
+    string TurnId = "",
+    DateTimeOffset? LastActivityUtc = null);
+
+public sealed record StatusTrayDeviceCandidate(
     string CandidateId,
     string ProductString,
     string VendorProduct,
