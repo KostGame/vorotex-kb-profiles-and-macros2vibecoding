@@ -144,7 +144,7 @@ internal static class EventJournal
             return false;
         var allowed = name switch
         {
-            "normalized_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "previous", "current", "reason", "sourceTimestampUtc", "focusedSessionId", "focusedCwd", "activeTaskSessions", "aggregatePrevious", "aggregateCurrent", "driverSessionId", "driverReason", "runningCount", "waitingCount", "doneUnreadCount" },
+            "normalized_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "previous", "current", "reason", "sourceTimestampUtc", "focusedSessionId", "focusedCwd", "activeTaskSessions", "attention", "aggregatePrevious", "aggregateCurrent", "driverSessionId", "driverReason", "runningCount", "waitingCount", "doneUnreadCount" },
             "session_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "sessionId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation" },
             "state_rehydrated" => new[] { "timestampUtc", "source", "event", "current", "focusedSessionId", "focusedCwd", "activeTaskSessions", "attention", "replayWindowMinutes" },
             _ => new[] { "timestampUtc", "source", "event", "exception", "hresult" }
@@ -160,6 +160,8 @@ internal static class EventJournal
         }
         if (root.TryGetProperty("reason", out var reason) &&
             (reason.ValueKind != JsonValueKind.String || !IsSafeReason(reason.GetString()))) return false;
+        if (root.TryGetProperty("driverReason", out var driverReason) &&
+            (driverReason.ValueKind != JsonValueKind.String || !IsSafeReason(driverReason.GetString()))) return false;
         if (root.TryGetProperty("correlation", out var correlation) && !IsSafeCorrelation(correlation)) return false;
         if (root.TryGetProperty("attention", out var attention) && !IsSafeAttention(attention)) return false;
         foreach (var property in root.EnumerateObject())
@@ -172,7 +174,7 @@ internal static class EventJournal
     }
 
     private static bool IsSafeState(string? value) => value is "NORMAL" or "RUNNING" or "WAITING" or "DONE_PENDING_ATTENTION" or "ERROR" or "ENDED";
-    private static bool IsSafeReason(string? value) => value is "codex_user_prompt_submit" or "codex_permission_request" or "codex_pre_tool_use" or "codex_post_tool_use" or "codex_stop" or "codex_session_end" or "codex_approval_resolved" or "codex_turn_completed" or "state_rehydrated" or "stale_attention_timeout";
+    private static bool IsSafeReason(string? value) => value is "codex_user_prompt_submit" or "codex_permission_request" or "codex_pre_tool_use" or "codex_post_tool_use" or "codex_stop" or "codex_session_end" or "codex_approval_resolved" or "codex_turn_completed" or "state_rehydrated" or "stale_attention_timeout" or "aggregate_precedence_normal" or "aggregate_precedence_running" or "aggregate_precedence_waiting" or "aggregate_precedence_donependingattention";
     private static bool IsSafeCorrelation(JsonElement value)
     {
         var allowed = new[] { "threadId", "turnId", "rpcIdType", "rpcId" };
@@ -188,7 +190,10 @@ internal static class EventJournal
             if (p.Name is "runningCount" or "approvalWaitingCount" or "doneUnreadCount" or "activeTaskSessionCount" or "endedSessionCount")
             { if (p.Value.ValueKind != JsonValueKind.Number || !p.Value.TryGetInt32(out var n) || n < 0 || n > 100000) return false; }
             else if (p.Name == "aggregateState") { if (p.Value.ValueKind != JsonValueKind.String || !IsSafeState(p.Value.GetString())) return false; }
-            else if (p.Value.ValueKind != JsonValueKind.String || Encoding.UTF8.GetByteCount(p.Value.GetString() ?? string.Empty) > 128) return false;
+            else if (p.Name is "noRunningSinceUtc" or "staleResetDueUtc") { if (p.Value.ValueKind == JsonValueKind.Null) continue; if (p.Value.ValueKind != JsonValueKind.String || !DateTimeOffset.TryParse(p.Value.GetString(), out _)) return false; }
+            else if (p.Name == "driverSessionId") { if (p.Value.ValueKind == JsonValueKind.Null) continue; if (p.Value.ValueKind != JsonValueKind.String || Encoding.UTF8.GetByteCount(p.Value.GetString() ?? string.Empty) > 128) return false; }
+            else if (p.Name == "driverReason") { if (p.Value.ValueKind != JsonValueKind.String || !IsSafeReason(p.Value.GetString())) return false; }
+            else return false;
         }
         return true;
     }
