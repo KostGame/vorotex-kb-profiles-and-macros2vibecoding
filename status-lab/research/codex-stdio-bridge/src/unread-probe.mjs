@@ -143,7 +143,7 @@ export function probeStateText(text, { threadId, host, now = () => new Date() } 
   const atomText = text.slice(atom.found.start, atom.found.end);
   const hostSpan = findObjectPropertyValue(atomText, 0, safeHost);
   if (hostSpan.malformed) return unknown(timestampUtc, safeHost, safeThreadId);
-  if (!hostSpan.found) return result({ timestampUtc, host: safeHost, threadId: safeThreadId, state: UNREAD_STATES.NO_UNREAD, unreadCount: 0, matched: false });
+  if (!hostSpan.found) return unknown(timestampUtc, safeHost, safeThreadId);
   const ids = validateIds(decodeValue(text.slice(atom.found.start, atom.found.end), hostSpan.found), safeThreadId);
   if (!ids) return unknown(timestampUtc, safeHost, safeThreadId);
   return result({ timestampUtc, host: safeHost, threadId: safeThreadId, state: ids.matched ? UNREAD_STATES.HAS_UNREAD : UNREAD_STATES.NO_UNREAD, unreadCount: ids.count, matched: ids.matched });

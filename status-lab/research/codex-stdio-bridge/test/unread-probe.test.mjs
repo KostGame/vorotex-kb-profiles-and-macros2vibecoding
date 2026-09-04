@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { probeStateText, UNREAD_PROBE_SOURCE } from '../src/unread-probe.mjs';
+import { parseUnreadProbeArgs } from '../src/unread-probe-cli-args.mjs';
 
 const now = () => new Date('2026-09-05T00:00:00.000Z');
 const state = (value) => JSON.stringify({
@@ -19,6 +20,12 @@ test('absent target is NoUnread and host partitions stay isolated', () => {
   assert.equal(actual.state, 'NoUnread');
   assert.equal(actual.matched, false);
   assert.equal(probe(state({ local: ['thread-B'], remote: ['thread-A'] }), 'thread-A', 'remote').state, 'HasUnread');
+});
+
+test('missing host partition fails closed as Unknown', () => {
+  const actual = probe(state({ remote: ['thread-A'] }));
+  assert.equal(actual.state, 'Unknown');
+  assert.equal(actual.matched, false);
 });
 
 test('malformed state fails closed without emitting content', () => {
@@ -49,4 +56,13 @@ test('result is diagnostic-only and cannot mutate K15 state', () => {
   probe(state({ local: ['thread-A'] }));
   assert.equal(JSON.stringify(normalizedState), before);
   assert.equal(normalizedState.state, 'DONE_PENDING_ATTENTION');
+});
+
+test('CLI requires exactly one occurrence of each selector', () => {
+  const exact = ['--state-path', 'state.json', '--host', 'local', '--thread-id', 'thread-A'];
+  assert.deepEqual(parseUnreadProbeArgs(exact), { statePath: 'state.json', host: 'local', threadId: 'thread-A' });
+  assert.equal(parseUnreadProbeArgs(['--state-path', 'state.json', '--host', 'local', '--host', 'remote', '--thread-id', 'thread-A']), undefined);
+  assert.equal(parseUnreadProbeArgs(['--state-path', 'state.json', '--host', 'local', '--thread-id', 'thread-A', '--thread-id', 'thread-B']), undefined);
+  assert.equal(parseUnreadProbeArgs(['--state-path', 'state-a.json', '--state-path', 'state-b.json', '--host', 'local', '--thread-id', 'thread-A']), undefined);
+  assert.equal(parseUnreadProbeArgs([...exact, '--unknown', 'value']), undefined);
 });
