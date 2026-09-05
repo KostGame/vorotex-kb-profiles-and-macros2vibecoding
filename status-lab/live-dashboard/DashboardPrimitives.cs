@@ -16,7 +16,7 @@ public static class LoopbackPolicy
 public static class EventSanitizer
 {
     private static readonly HashSet<string> States = new(StringComparer.Ordinal) { "NORMAL", "RUNNING", "WAITING", "DONE_PENDING_ATTENTION", "ERROR", "ENDED" };
-    private static readonly HashSet<string> Reasons = new(StringComparer.Ordinal) { "codex_user_prompt_submit", "codex_permission_request", "codex_pre_tool_use", "codex_post_tool_use", "codex_stop", "codex_session_end", "codex_approval_resolved", "codex_turn_completed", "state_rehydrated", "stale_attention_timeout" };
+    private static readonly HashSet<string> Reasons = new(StringComparer.Ordinal) { "codex_read_ack", "codex_user_prompt_submit", "codex_permission_request", "codex_pre_tool_use", "codex_post_tool_use", "codex_stop", "codex_session_end", "codex_approval_resolved", "codex_turn_completed", "state_rehydrated", "stale_attention_timeout" };
     public static SafeEvent? Project(string line)
     {
         try { using var doc = JsonDocument.Parse(line); var r = doc.RootElement; var source = Text(r, "source"); var name = Text(r, "event"); if (!DateTimeOffset.TryParse(Text(r, "timestampUtc"), out var timestamp) || !AllowedShape(r, source, name) || !AllowedEvent(source, name)) return null;

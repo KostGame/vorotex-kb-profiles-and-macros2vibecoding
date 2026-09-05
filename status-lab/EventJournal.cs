@@ -140,6 +140,7 @@ internal static class EventJournal
     private static bool IsSafeNormalizerRecord(JsonElement root)
     {
         var name = GetString(root, "event");
+        if (name == "read_ack_evidence") return IsSafeReadAckEvidence(root);
         if (name is not ("normalized_state_changed" or "session_state_changed" or "state_rehydrated" or "normalizer_error"))
             return false;
         var allowed = name switch
@@ -174,7 +175,27 @@ internal static class EventJournal
     }
 
     private static bool IsSafeState(string? value) => value is "NORMAL" or "RUNNING" or "WAITING" or "DONE_PENDING_ATTENTION" or "ERROR" or "ENDED";
-    private static bool IsSafeReason(string? value) => value is "codex_user_prompt_submit" or "codex_permission_request" or "codex_pre_tool_use" or "codex_post_tool_use" or "codex_stop" or "codex_session_end" or "codex_approval_resolved" or "codex_turn_completed" or "state_rehydrated" or "stale_attention_timeout" or "aggregate_precedence_normal" or "aggregate_precedence_running" or "aggregate_precedence_waiting" or "aggregate_precedence_donependingattention";
+    private static bool IsSafeReason(string? value) => value is "codex_read_ack" or "codex_user_prompt_submit" or "codex_permission_request" or "codex_pre_tool_use" or "codex_post_tool_use" or "codex_stop" or "codex_session_end" or "codex_approval_resolved" or "codex_turn_completed" or "state_rehydrated" or "stale_attention_timeout" or "aggregate_precedence_normal" or "aggregate_precedence_running" or "aggregate_precedence_waiting" or "aggregate_precedence_donependingattention";
+    private static bool IsSafeReadAckEvidence(JsonElement root)
+    {
+        var allowed = new[] { "timestampUtc", "source", "event", "reason", "host", "sessionId", "threadId", "turnId", "runtimeEpoch", "completionGeneration", "completedUtc", "hasUnreadUtc", "firstNoUnreadUtc", "secondNoUnreadUtc" };
+        if (root.EnumerateObject().Count() != allowed.Length ||
+            root.EnumerateObject().Any(p => !allowed.Contains(p.Name, StringComparer.Ordinal)) ||
+            root.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != allowed.Length ||
+            GetString(root, "host") != "local" || GetString(root, "reason") != "codex_read_ack" ||
+            !Guid.TryParse(GetString(root, "runtimeEpoch"), out _) ||
+            !root.TryGetProperty("completionGeneration", out var generation) || generation.ValueKind != JsonValueKind.Number ||
+            !generation.TryGetInt64(out var number) || number < 1)
+            return false;
+        foreach (var name in new[] { "sessionId", "threadId", "turnId" })
+        {
+            var value = GetString(root, name);
+            if (string.IsNullOrWhiteSpace(value) || value.Any(char.IsControl) || Encoding.UTF8.GetByteCount(value) > 128) return false;
+        }
+        foreach (var name in new[] { "timestampUtc", "completedUtc", "hasUnreadUtc", "firstNoUnreadUtc", "secondNoUnreadUtc" })
+            if (!DateTimeOffset.TryParse(GetString(root, name), out _)) return false;
+        return true;
+    }
     private static bool IsSafeCorrelation(JsonElement value)
     {
         var allowed = new[] { "threadId", "turnId", "rpcIdType", "rpcId" };

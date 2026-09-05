@@ -4,6 +4,12 @@ using Vorotex.K15.StatusLab;
 
 static void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
 var now = DateTimeOffset.UtcNow.ToString("o");
+var readAckLine = JsonSerializer.Serialize(new { timestampUtc = now, source = "state_normalizer", @event = "session_state_changed",
+    plane = "per_session", sessionId = "read-session", previous = "DONE_PENDING_ATTENTION", current = "NORMAL", reason = "codex_read_ack",
+    sourceTimestampUtc = now, isRehydrated = false, correlation = new { threadId = "read-thread", turnId = "read-turn", rpcIdType = "", rpcId = "" } });
+Require(EventSanitizer.Project(readAckLine)?.Reason == "codex_read_ack", "read ACK reason must survive dashboard sanitization");
+Require(EventSanitizer.Project(readAckLine[..^1] + ",\"prompt\":\"PRIVATE\"}") is null, "read ACK must not widen the privacy allowlist");
+Console.WriteLine("READ_ACK_DASHBOARD_REASON_AND_PRIVACY=PASS");
 string Hook(string extra = "") => $"{{\"timestampUtc\":\"{now}\",\"source\":\"codex_hook\",\"event\":\"Stop\",\"sessionId\":\"s1\",\"turnId\":\"t1\"{extra}}}";
 Require(EventSanitizer.Project(Hook()) is not null, "safe hook was rejected");
 foreach (var bad in new[] { Hook(",\"prompt\":\"secret\""), Hook(",\"unknown\":\"secret\""), $"{{\"timestampUtc\":\"{now}\",\"source\":\"state_normalizer\",\"event\":\"session_state_changed\",\"current\":\"RUNNING\",\"reason\":\"secret\",\"correlation\":{{\"prompt\":\"secret\"}}}}", $"{{\"timestampUtc\":\"{now}\",\"source\":\"codex_stdio_bridge\",\"event\":\"turn_completed\",\"status\":\"secret\"}}" }) Require(EventSanitizer.Project(bad) is null, "adversarial content survived sanitizer");

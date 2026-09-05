@@ -19,19 +19,22 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private Task? _loopTask;
     private long _readOffset;
     private string _tailRemainder = string.Empty;
+    private readonly object _sync = new();
+    private readonly CodexReadAckObserver? _readAckObserver;
 
-    public JournalStateNormalizer(double staleAttentionTimeoutSeconds = 18000)
+    public JournalStateNormalizer(double staleAttentionTimeoutSeconds = 18000, ICodexUnreadStateReader? unreadReader = null)
     {
         _reducer = new StateReducer(staleAttentionTimeoutSeconds);
+        if (unreadReader is not null) _readAckObserver = new(unreadReader, "local");
     }
 
     public event Action<K15NormalizedState, StateTransition?>? StateChanged;
 
-    public K15NormalizedState State => _reducer.State;
-    public string? FocusedSessionId => _reducer.FocusedSessionId;
-    public string FocusedCwd => _reducer.FocusedCwd;
-    public CodexAttentionSnapshot AttentionSnapshot => _reducer.Snapshot;
-    public IReadOnlyList<CodexSessionSnapshot> SessionSnapshots => _reducer.SessionSnapshots;
+    public K15NormalizedState State { get { lock (_sync) return _reducer.State; } }
+    public string? FocusedSessionId { get { lock (_sync) return _reducer.FocusedSessionId; } }
+    public string FocusedCwd { get { lock (_sync) return _reducer.FocusedCwd; } }
+    public CodexAttentionSnapshot AttentionSnapshot { get { lock (_sync) return _reducer.Snapshot; } }
+    public IReadOnlyList<CodexSessionSnapshot> SessionSnapshots { get { lock (_sync) return _reducer.SessionSnapshots; } }
 
     public void Start()
     {
@@ -65,11 +68,14 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 
     public void Acknowledge()
     {
-        var transition = _reducer.Acknowledge(DateTimeOffset.UtcNow);
-        foreach (var sessionTransition in _reducer.LastSessionTransitions)
-            PublishSessionTransition(sessionTransition);
-        if (transition is not null)
-            PublishTransition(transition);
+        lock (_sync)
+        {
+            var transition = _reducer.Acknowledge(DateTimeOffset.UtcNow);
+            foreach (var sessionTransition in _reducer.LastSessionTransitions)
+                PublishSessionTransition(sessionTransition);
+            if (transition is not null)
+                PublishTransition(transition);
+        }
     }
 
     private IReadOnlyList<SessionStateTransition> RehydrateFromRecentJournal(string[] lines)
@@ -93,6 +99,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         }
 
         _reducer.Rehydrate(events);
+        _reducer.RestoreCompletionCorrelations(lines.Skip(start).Select(ParseDoneCorrelation)
+            .OfType<SessionStateTransition>().Where(record => record.TimestampUtc >= cutoff));
         return _reducer.LastSessionTransitions;
     }
 
@@ -102,12 +110,16 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         {
             try
             {
-                CollectNewEvents();
-                var nowUtc = DateTimeOffset.UtcNow;
-                FlushReadyEvents(nowUtc - ReorderDelay);
-                var timedTransition = _reducer.Tick(nowUtc);
-                if (timedTransition is not null)
-                    PublishTransition(timedTransition);
+                lock (_sync)
+                {
+                    CollectNewEvents();
+                    var nowUtc = DateTimeOffset.UtcNow;
+                    FlushReadyEvents(nowUtc - ReorderDelay);
+                    var timedTransition = _reducer.Tick(nowUtc);
+                    if (timedTransition is not null)
+                        PublishTransition(timedTransition);
+                    PollReadAcknowledgments(nowUtc);
+                }
             }
             catch (Exception ex)
             {
@@ -131,8 +143,41 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             }
         }
 
-        FlushReadyEvents(DateTimeOffset.MaxValue);
+        lock (_sync) FlushReadyEvents(DateTimeOffset.MaxValue);
     }
+
+    private void PollReadAcknowledgments(DateTimeOffset nowUtc)
+    {
+        if (_readAckObserver is null) return;
+        var evidence = _readAckObserver.Poll(_reducer.ReadAckCandidates, nowUtc);
+        if (evidence.Count == 0) return;
+        // New journal activity may have arrived during the file read. Apply it
+        // first; never acknowledge over a queued prompt/turn change.
+        CollectNewEvents();
+        FlushReadyEvents(DateTimeOffset.UtcNow - ReorderDelay);
+        foreach (var item in evidence)
+        {
+            if (_pending.Any(input => MayAffectCompletion(input, item.Completion))) continue;
+            var transition = _reducer.ApplyReadAck(item);
+            if (_reducer.LastSessionTransitions.Count == 0) continue;
+            _readAckObserver.ConfirmApplied(item);
+            foreach (var sessionTransition in _reducer.LastSessionTransitions) PublishSessionTransition(sessionTransition);
+            if (transition is not null) PublishTransition(transition);
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow, source = "state_normalizer", @event = "read_ack_evidence",
+                reason = "codex_read_ack", host = item.Host, sessionId = item.Completion.SessionId,
+                threadId = item.Completion.ThreadId, turnId = item.Completion.TurnId,
+                runtimeEpoch = item.Completion.RuntimeEpoch, completionGeneration = item.Completion.Generation,
+                completedUtc = item.Completion.CompletedUtc, hasUnreadUtc = item.HasUnreadUtc,
+                firstNoUnreadUtc = item.FirstNoUnreadUtc, secondNoUnreadUtc = item.SecondNoUnreadUtc
+            });
+        }
+    }
+
+    internal static bool MayAffectCompletion(StatusInputEvent input, CodexCompletionKey completion) =>
+        (input.Source == "codex_hook" && (input.SessionId == completion.SessionId || input.ThreadId == completion.ThreadId)) ||
+        (input.Source == ApprovalSource && (input.ThreadId == completion.ThreadId || input.ThreadId == completion.SessionId));
 
     private void CollectNewEvents()
     {
@@ -280,7 +325,39 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     }
 
     private static string BoundOpaque(string value) =>
-        string.IsNullOrEmpty(value) ? string.Empty : value.Length <= 128 ? value : value[..128];
+        CodexUnreadStateReader.Bounded(value) ? value : string.Empty;
+
+    internal static SessionStateTransition? ParseDoneCorrelation(string line)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || GetString(root, "source") != "state_normalizer" ||
+                GetString(root, "event") != "session_state_changed" || GetString(root, "plane") != "per_session" ||
+                GetString(root, "current") != "DONE_PENDING_ATTENTION" ||
+                !root.TryGetProperty("isRehydrated", out var replay) || replay.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
+                !DateTimeOffset.TryParse(GetString(root, "sourceTimestampUtc"), out var timestamp) ||
+                !root.TryGetProperty("correlation", out var correlation) || correlation.ValueKind != JsonValueKind.Object)
+                return null;
+            var allowed = new[] { "timestampUtc", "source", "event", "plane", "sessionId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation" };
+            if (root.EnumerateObject().Any(p => !allowed.Contains(p.Name, StringComparer.Ordinal)) ||
+                root.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != root.EnumerateObject().Count() ||
+                correlation.EnumerateObject().Any(p => p.Name is not ("threadId" or "turnId" or "rpcIdType" or "rpcId")) ||
+                correlation.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != correlation.EnumerateObject().Count()) return null;
+            var session = GetString(root, "sessionId");
+            var thread = GetString(correlation, "threadId");
+            var turn = GetString(correlation, "turnId");
+            if (!CodexUnreadStateReader.Bounded(session)) return null;
+            // Retain incomplete bindings as uncertainty so a conflicting valid
+            // record cannot make the same persisted completion look unambiguous.
+            if (!CodexUnreadStateReader.Bounded(thread)) thread = string.Empty;
+            if (!CodexUnreadStateReader.Bounded(turn)) turn = string.Empty;
+            return new(session, K15NormalizedState.Running, K15NormalizedState.DonePendingAttention,
+                "state_rehydrated", timestamp, thread, turn, "", "", true);
+        }
+        catch (JsonException) { return null; }
+    }
 
     internal static StatusInputEvent? ParseInput(string line)
     {

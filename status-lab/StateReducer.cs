@@ -101,15 +101,22 @@ internal sealed class StateReducer
         public DateTimeOffset? LastStopUtc { get; set; }
         public DateTimeOffset? DoneEnteredUtc { get; set; }
         public DateTimeOffset? AcknowledgedUtc { get; set; }
+        public long CompletionGeneration { get; set; }
+        public CodexCompletionKey? Completion { get; set; }
+        public CodexCompletionKey? ReadAcknowledgedCompletion { get; set; }
+        public DateTimeOffset? CompletionEnteredUtc { get; set; }
+        public bool CompletionCorrelationRejected { get; set; }
     }
 
     private readonly TimeSpan? _staleAttentionTimeout;
     private readonly Dictionary<string, SessionRuntime> _sessions = new(StringComparer.Ordinal);
     private DateTimeOffset? _noRunningSinceUtc;
+    private Guid _runtimeEpoch = Guid.NewGuid();
+    private readonly DateTimeOffset _runtimeStartedUtc;
 
     public IReadOnlyList<SessionStateTransition> LastSessionTransitions { get; private set; } = Array.Empty<SessionStateTransition>();
 
-    public StateReducer(double staleAttentionTimeoutSeconds = 18000)
+    public StateReducer(double staleAttentionTimeoutSeconds = 18000, DateTimeOffset? runtimeStartedUtc = null)
     {
         if (staleAttentionTimeoutSeconds < 0 || staleAttentionTimeoutSeconds > 259200)
             throw new ArgumentOutOfRangeException(nameof(staleAttentionTimeoutSeconds));
@@ -117,6 +124,7 @@ internal sealed class StateReducer
         _staleAttentionTimeout = staleAttentionTimeoutSeconds == 0
             ? null
             : TimeSpan.FromSeconds(staleAttentionTimeoutSeconds);
+        _runtimeStartedUtc = runtimeStartedUtc ?? DateTimeOffset.UtcNow;
     }
 
     public K15NormalizedState State { get; private set; } = K15NormalizedState.Normal;
@@ -136,6 +144,66 @@ internal sealed class StateReducer
             string.Equals(session.Id, FocusedSessionId, StringComparison.Ordinal), session.Cwd,
             session.ThreadId, session.TurnId, session.LastActivityUtc))
         .ToArray();
+
+    public IReadOnlyList<CodexCompletionKey> ReadAckCandidates => _sessions.Values
+        .Where(session => !session.Internal && session.State == K15NormalizedState.DonePendingAttention &&
+            session.Completion is not null && session.TurnId == session.Completion.TurnId &&
+            (session.ThreadId.Length == 0 || session.ThreadId == session.Completion.ThreadId))
+        .Select(session => session.Completion!)
+        .GroupBy(key => key.ThreadId, StringComparer.Ordinal)
+        .Where(group => group.Count() == 1)
+        .Select(group => group.Single())
+        .Where(key => !_sessions.Values.Any(other => other.Id != key.SessionId &&
+            (other.ThreadId == key.ThreadId || other.Completion?.ThreadId == key.ThreadId)))
+        .ToArray();
+
+    public StateTransition? ApplyReadAck(CodexReadAckEvidence evidence)
+    {
+        LastSessionTransitions = Array.Empty<SessionStateTransition>();
+        var key = evidence.Completion;
+        if (evidence.Host != "local" || key.RuntimeEpoch != _runtimeEpoch ||
+            evidence.HasUnreadUtc <= key.CompletedUtc || evidence.HasUnreadUtc <= _runtimeStartedUtc ||
+            evidence.FirstNoUnreadUtc <= evidence.HasUnreadUtc || evidence.SecondNoUnreadUtc <= evidence.FirstNoUnreadUtc ||
+            !ReadAckCandidates.Contains(key)) return null;
+        var session = _sessions[key.SessionId];
+        session.ReadAcknowledgedCompletion = key;
+        SetSessionState(session, K15NormalizedState.Normal, "codex_read_ack", evidence.SecondNoUnreadUtc,
+            new(evidence.SecondNoUnreadUtc, "codex_unread_observer", "read_ack", ThreadId: key.ThreadId, TurnId: key.TurnId));
+        session.LastStopUtc = null;
+        session.DoneEnteredUtc = null;
+        session.AcknowledgedUtc = evidence.SecondNoUnreadUtc;
+        return RecomputeAggregate("codex_read_ack", evidence.SecondNoUnreadUtc);
+    }
+
+    // Journal diagnostics can restore correlation, never unread observations or
+    // an ACK. Only the exact replayed DONE transition may receive that binding.
+    public void RestoreCompletionCorrelations(IEnumerable<SessionStateTransition> persisted)
+    {
+        var records = persisted.ToArray();
+        foreach (var session in _sessions.Values.Where(s => s.State == K15NormalizedState.DonePendingAttention))
+        {
+            if (session.CompletionCorrelationRejected) continue;
+            var matches = records.Where(r => r.SessionId == session.Id && r.Current == K15NormalizedState.DonePendingAttention &&
+                r.TimestampUtc == session.CompletionEnteredUtc).ToArray();
+            if (matches.Length == 0) continue;
+            // An earlier Stop diagnostic may lack T. It must not erase a full
+            // binding recovered from the later raw sanitized bridge event.
+            if (session.Completion is not null)
+                matches = matches.Where(r => ValidCorrelation(r.SessionId, r.ThreadId, r.TurnId)).ToArray();
+            if (matches.Length == 0) continue;
+            var pairs = matches.Select(r => (r.ThreadId, r.TurnId)).Distinct().ToArray();
+            if (pairs.Length != 1 || !ValidCorrelation(session.Id, pairs[0].ThreadId, pairs[0].TurnId) ||
+                pairs[0].TurnId != session.TurnId || (session.ThreadId.Length != 0 && pairs[0].ThreadId != session.ThreadId) ||
+                (session.Completion is not null && (session.Completion.ThreadId != pairs[0].ThreadId || session.Completion.TurnId != pairs[0].TurnId)))
+            { session.Completion = null; session.CompletionCorrelationRejected = true; continue; }
+            session.Completion = new(session.Id, pairs[0].ThreadId, pairs[0].TurnId,
+                session.CompletionGeneration, _runtimeEpoch, session.CompletionEnteredUtc!.Value);
+        }
+    }
+
+    private static bool ValidCorrelation(string session, string thread, string turn) =>
+        session != LegacySessionId && CodexUnreadStateReader.Bounded(session) &&
+        CodexUnreadStateReader.Bounded(thread) && CodexUnreadStateReader.Bounded(turn);
 
     public StateTransition? Apply(StatusInputEvent input)
     {
@@ -233,6 +301,21 @@ internal sealed class StateReducer
     private StateTransition? ApplyCodex(StatusInputEvent input)
     {
         var session = GetOrCreateSession(input);
+        var acknowledged = session.ReadAcknowledgedCompletion;
+        if (input.EventName == "Stop" && acknowledged is not null && session.Completion == acknowledged &&
+            session.CompletionGeneration == acknowledged.Generation && session.TurnId == acknowledged.TurnId &&
+            input.TurnId == acknowledged.TurnId && (input.ThreadId.Length == 0 || input.ThreadId == acknowledged.ThreadId))
+            return null;
+        if (input.EventName is "UserPromptSubmit" or "PermissionRequest" or "PreToolUse" or "PostToolUse" ||
+            (input.TurnId.Length != 0 && input.TurnId != session.TurnId) ||
+            (input.ThreadId.Length != 0 && session.Completion is not null && input.ThreadId != session.Completion.ThreadId))
+        {
+            session.Completion = null;
+            session.CompletionEnteredUtc = null;
+            session.CompletionCorrelationRejected = false;
+            session.ReadAcknowledgedCompletion = null;
+            session.CompletionGeneration++;
+        }
         if (!string.IsNullOrWhiteSpace(input.Cwd))
             session.Cwd = input.Cwd;
         if (!string.IsNullOrWhiteSpace(input.ThreadId))
@@ -350,7 +433,24 @@ internal sealed class StateReducer
 
         var session = candidates[0];
         if (session.State == K15NormalizedState.DonePendingAttention)
+        {
+            // Stop can precede the sanitized bridge event and carry no threadId.
+            // Enrich only this already accepted completion; do not emit DONE again.
+            if (session.CompletionEnteredUtc is not DateTimeOffset completedUtc || session.CompletionCorrelationRejected ||
+                !ValidCorrelation(session.Id, input.ThreadId, input.TurnId)) return null;
+            if ((session.ThreadId.Length != 0 && session.ThreadId != input.ThreadId) ||
+                (session.Completion is not null && (session.Completion.ThreadId != input.ThreadId ||
+                    session.Completion.TurnId != input.TurnId || session.Completion.Generation != session.CompletionGeneration ||
+                    session.Completion.RuntimeEpoch != _runtimeEpoch)))
+            {
+                session.Completion = null;
+                session.CompletionCorrelationRejected = true;
+                return null;
+            }
+            session.Completion ??= new(session.Id, input.ThreadId, input.TurnId,
+                session.CompletionGeneration, _runtimeEpoch, completedUtc);
             return null;
+        }
         if (session.State != K15NormalizedState.Running)
             return null;
 
@@ -458,6 +558,7 @@ internal sealed class StateReducer
 
     private void ResetAll()
     {
+        _runtimeEpoch = Guid.NewGuid();
         _sessions.Clear();
         FocusedSessionId = null;
         State = K15NormalizedState.Normal;
@@ -473,10 +574,21 @@ internal sealed class StateReducer
 
         var previous = session.State;
         session.State = next;
+        var threadId = input is not null && !string.IsNullOrWhiteSpace(input.ThreadId) ? input.ThreadId : session.ThreadId;
+        var turnId = input is not null && !string.IsNullOrWhiteSpace(input.TurnId) ? input.TurnId : session.TurnId;
+        if (next == K15NormalizedState.DonePendingAttention)
+        {
+            session.CompletionEnteredUtc = timestampUtc;
+            session.CompletionCorrelationRejected = false;
+            session.CompletionGeneration++;
+            session.ReadAcknowledgedCompletion = null;
+            session.Completion = ValidCorrelation(session.Id, threadId, turnId)
+                ? new(session.Id, threadId, turnId, session.CompletionGeneration, _runtimeEpoch, timestampUtc) : null;
+        }
         var transition = new SessionStateTransition(
             session.Id, previous, next, reason, timestampUtc,
-            input is not null && !string.IsNullOrWhiteSpace(input.ThreadId) ? input.ThreadId : session.ThreadId,
-            input is not null && !string.IsNullOrWhiteSpace(input.TurnId) ? input.TurnId : session.TurnId,
+            threadId,
+            turnId,
             input?.RpcIdType ?? string.Empty,
             input?.RpcId ?? string.Empty,
             false);

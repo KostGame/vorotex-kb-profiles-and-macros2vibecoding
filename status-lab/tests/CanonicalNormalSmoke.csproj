@@ -10,6 +10,8 @@
   <ItemGroup>
     <Compile Include="CanonicalNormalSmokeProgram.cs" />
     <Compile Include="..\StateReducer.cs" Link="StateReducer.cs" />
+    <Compile Include="..\CodexReadAck.cs" Link="CodexReadAck.cs" />
+    <Compile Include="..\CodexUnreadStateReader.cs" Link="CodexUnreadStateReader.cs" />
     <Compile Include="..\K15HidProtocol.cs" Link="K15HidProtocol.cs" />
     <Compile Include="..\StatusLabConfig.cs" Link="StatusLabConfig.cs" />
     <Compile Include="..\ConfigToml.cs" Link="ConfigToml.cs" />
