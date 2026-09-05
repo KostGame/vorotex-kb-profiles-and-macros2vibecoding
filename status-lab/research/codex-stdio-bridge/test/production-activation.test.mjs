@@ -31,6 +31,10 @@ async function readJson(filePath) {
   return JSON.parse((await readFile(filePath, 'utf8')).replace(/^\uFEFF/, ''));
 }
 
+async function writeProcessInventory(filePath, entries) {
+  await writeFile(filePath, JSON.stringify(entries), 'utf8');
+}
+
 function powershellSingleQuoted(value) {
   return "'" + value.replace(/'/g, "''") + "'";
 }
@@ -173,6 +177,71 @@ test('production activation rejects approval-wrapper replacement-in-place', asyn
 test('production activation rejects transparent-wrapper and bridge-core replacement-in-place', async () => {
   await assertReplacementRejected('transparent');
   await assertReplacementRejected('core');
+});
+
+async function assertGuardBlocked(inventory, expectedMessage) {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const inventoryPath = path.join(temp, 'processes.json');
+    await writeProcessInventory(inventoryPath, inventory);
+    const result = await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-ProcessInventoryPath', inventoryPath, '-BroadcastMode', 'FakeSuccess']),
+      error => error.code === 2 && error.stderr.includes(expectedMessage)
+    );
+    assert.equal(result, undefined);
+    await assert.rejects(readFile(state, 'utf8'));
+    await assert.rejects(readFile(environment, 'utf8'));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+}
+
+test('CODEX_UI_CHATGPT_ALIVE_BACKEND_ABSENT_BLOCKED', async () => {
+  await assertGuardBlocked([{ name: 'ChatGPT.exe', path: '' }], 'CODEX_PROCESS_GUARD=CHATGPT_UI_ALIVE');
+});
+
+test('CODEX_BACKEND_ALIVE_BLOCKED', async () => {
+  await assertGuardBlocked([{ name: 'codex.exe', path: '' }], 'CODEX_PROCESS_GUARD=BACKEND_ALIVE');
+});
+
+test('NO_CODEX_PROCESS_ALLOWED', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const inventoryPath = path.join(temp, 'processes.json');
+    await writeProcessInventory(inventoryPath, []);
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-ProcessInventoryPath', inventoryPath, '-BroadcastMode', 'FakeSuccess'];
+    const enabled = await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+    assert.match(enabled.stdout, /ACTIVE=YES/);
+    const disabled = await powershell(['-File', script, '-Mode', 'Disable', ...common]);
+    assert.match(disabled.stdout, /ACTIVE=NO/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('AMBIGUOUS_CHATGPT_IDENTITY_FAILS_CLOSED', async () => {
+  await assertGuardBlocked([{ name: 'ChatGPT', path: '' }], 'CODEX_PROCESS_GUARD=CHATGPT_UI_ALIVE');
+});
+
+test('ISOLATED_PROCESS_FIXTURE_CANNOT_BYPASS_REAL_TARGET', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const inventoryPath = path.join(temp, 'processes.json');
+    await writeProcessInventory(inventoryPath, []);
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, '-StatePath', path.join(temp, 'state.json'), '-ProcessInventoryPath', inventoryPath]),
+      error => error.code === 2
+    );
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
 });
 
 test('production activation rejects noncanonical and reparse child paths before environment mutation', async () => {

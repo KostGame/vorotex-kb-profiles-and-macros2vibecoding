@@ -8,6 +8,7 @@ param(
     [string] $EnvironmentStorePath,
     [string] $EnvironmentStoreFailOnSet,
     [string] $EnvironmentStorePostcheckMismatch,
+    [string] $ProcessInventoryPath,
     [string] $UserEnvironmentRegistrySubKey = 'Environment',
     [ValidateSet('Real', 'FakeSuccess', 'FakeFailure')]
     [string] $BroadcastMode = 'Real'
@@ -171,6 +172,30 @@ function Test-IsolatedEnvironmentTarget {
     return -not [string]::IsNullOrWhiteSpace($EnvironmentStorePath) -or $UserEnvironmentRegistrySubKey -ne 'Environment'
 }
 
+function Get-CodexProcessInventory {
+    if (-not [string]::IsNullOrWhiteSpace($ProcessInventoryPath)) {
+        if (-not (Test-IsolatedEnvironmentTarget)) { Fail 'process inventory injection requires an isolated environment target' }
+        if (-not (Test-Path -LiteralPath $ProcessInventoryPath -PathType Leaf)) { Fail 'process inventory injection file is missing' }
+        $injected = Get-Content -LiteralPath $ProcessInventoryPath -Raw | ConvertFrom-Json
+        if ($injected -isnot [array]) { Fail 'process inventory injection must be an array' }
+        foreach ($entry in $injected) {
+            Assert-ExactPropertyNames $entry @('name', 'path') 'process inventory entry'
+            if ($entry.name -isnot [string] -or $entry.path -isnot [string]) { Fail 'process inventory entry has invalid fields' }
+        }
+        return @($injected)
+    }
+    if (Test-IsolatedEnvironmentTarget) { return @() }
+    $inventory = @()
+    foreach ($name in @('codex', 'ChatGPT')) {
+        foreach ($process in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+            $path = ''
+            try { $path = [string] $process.MainModule.FileName } catch { $path = '' }
+            $inventory += [pscustomobject]@{ name = [string] $process.ProcessName; path = $path }
+        }
+    }
+    return $inventory
+}
+
 function Open-UserEnvironmentRegistryKey([bool] $Writable, [bool] $CreateIfMissing) {
     Assert-UserEnvironmentRegistrySubKey
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($UserEnvironmentRegistrySubKey, $Writable)
@@ -324,9 +349,16 @@ function Read-ActivationState([string] $Path) {
 }
 
 function Assert-CodexDesktopClosed {
-    if (Test-IsolatedEnvironmentTarget) { return }
-    if (@(Get-Process -Name 'Codex' -ErrorAction SilentlyContinue).Count -gt 0) {
-        Fail 'Codex Desktop must be closed before User environment mutation'
+    $inventory = Get-CodexProcessInventory
+    $backendAlive = @($inventory | Where-Object { [StringComparer]::OrdinalIgnoreCase.Equals(($_.name -replace '\.exe$', ''), 'codex') })
+    if ($backendAlive.Count -gt 0) {
+        [Console]::Error.WriteLine('CODEX_PROCESS_GUARD=BACKEND_ALIVE')
+        Fail 'Codex backend (codex.exe) must be closed before User environment mutation'
+    }
+    $uiAlive = @($inventory | Where-Object { [StringComparer]::OrdinalIgnoreCase.Equals(($_.name -replace '\.exe$', ''), 'ChatGPT') })
+    if ($uiAlive.Count -gt 0) {
+        [Console]::Error.WriteLine('CODEX_PROCESS_GUARD=CHATGPT_UI_ALIVE')
+        Fail 'Codex Desktop UI (ChatGPT.exe) must be closed before User environment mutation'
     }
 }
 
@@ -339,6 +371,9 @@ try {
     $stateFile = Get-StatePath
     if ([string]::IsNullOrWhiteSpace($EnvironmentStorePath) -and (-not [string]::IsNullOrWhiteSpace($EnvironmentStoreFailOnSet) -or -not [string]::IsNullOrWhiteSpace($EnvironmentStorePostcheckMismatch))) {
         Fail 'environment fault injection requires an isolated EnvironmentStorePath'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ProcessInventoryPath) -and -not (Test-IsolatedEnvironmentTarget)) {
+        Fail 'process inventory injection requires an isolated environment target'
     }
     if ($BroadcastMode -ne 'Real' -and -not (Test-IsolatedEnvironmentTarget)) {
         Fail 'fake broadcast mode requires an isolated environment target'

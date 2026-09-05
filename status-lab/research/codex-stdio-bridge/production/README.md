@@ -25,7 +25,7 @@ pwsh -NoProfile -File .\Activate-CodexBridge.ps1 -Mode Status -ManifestPath .\ma
 pwsh -NoProfile -File .\Activate-CodexBridge.ps1 -Mode Disable -ManifestPath .\manifest.json
 ```
 
-Codex Desktop must be closed before `Enable` or `Disable`: the script checks this and refuses to mutate the real User environment while it is running. It never kills Codex automatically. Launch Codex only after the successful operation so a newly launched process receives the changed User environment.
+Codex Desktop must be closed before `Enable` or `Disable`: the script checks both the `codex.exe` backend and the `ChatGPT.exe` Desktop UI and refuses to mutate the real User environment while either is running. This is intentionally conservative: any `ChatGPT.exe` blocks activation, including a regular ChatGPT Desktop instance, because an ambiguous UI identity must fail closed. Isolated tests may inject a process inventory; production `HKCU\Environment` always performs real process inspection, and the script never kills processes automatically. Launch Codex only after the successful operation so a newly launched process receives the changed User environment.
 
 After active writes, `Enable` independently rereads all six variables and requires the exact active presence/value state before reporting `ACTIVE=YES`. `Disable` restores and independently rereads the recorded presence/value baseline, broadcasts the environment change, and only then removes activation state. A failed postcheck reports only the variable name, expected/current presence, and whether the value matched; it never prints the value. Failed postchecks or broadcasts retain retryable state. `USER_ENV_MUTATED=YES` is emitted whenever this invocation actually writes or deletes a User-environment value.
 
