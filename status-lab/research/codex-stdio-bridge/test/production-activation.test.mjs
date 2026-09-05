@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -14,6 +14,14 @@ const script = path.join(bridgeRoot, 'production', 'Activate-CodexBridge.ps1');
 const approvalWrapper = path.join(bridgeRoot, 'src', 'approval-wrapper.mjs');
 const transparentWrapper = path.join(bridgeRoot, 'src', 'transparent-wrapper.mjs');
 const bridgeCore = path.join(bridgeRoot, 'src', 'bridge-core.mjs');
+const managedVariables = [
+  'CODEX_CLI_PATH',
+  'CODEX_BRIDGE_NODE_PATH',
+  'CODEX_BRIDGE_WRAPPER_PATH',
+  'CODEX_BRIDGE_CHILD_PATH',
+  'CODEX_BRIDGE_CHILD_SHA256',
+  'CODEX_BRIDGE_APPROVAL_SINK_PATH'
+];
 
 async function powershell(argumentsList) {
   return execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', ...argumentsList], { windowsHide: true });
@@ -21,6 +29,70 @@ async function powershell(argumentsList) {
 
 async function readJson(filePath) {
   return JSON.parse((await readFile(filePath, 'utf8')).replace(/^\uFEFF/, ''));
+}
+
+async function writeProcessInventory(filePath, entries) {
+  await writeFile(filePath, JSON.stringify(entries), 'utf8');
+}
+
+function powershellSingleQuoted(value) {
+  return "'" + value.replace(/'/g, "''") + "'";
+}
+
+function base64(value) {
+  return Buffer.from(value, 'utf8').toString('base64');
+}
+
+async function registryCommand(command) {
+  return powershell(['-Command', command]);
+}
+
+async function writeIsolatedRegistryEnvironment(subKey, entries) {
+  await registryCommand(
+    [
+      '$subKey = ' + powershellSingleQuoted(subKey),
+      '$entries = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(' + powershellSingleQuoted(base64(JSON.stringify(entries))) + ')) | ConvertFrom-Json',
+      '$key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($subKey, $true)',
+      'try {',
+      '  foreach ($property in $entries.PSObject.Properties) {',
+      "    if ($property.Value.presence -eq 'PRESENT') {",
+      '      $kind = [Microsoft.Win32.RegistryValueKind]::$($property.Value.registryKind)',
+      '      $key.SetValue($property.Name, [string]$property.Value.value, $kind)',
+      '    }',
+      '  }',
+      '} finally { $key.Dispose() }'
+    ].join('; ')
+  );
+}
+
+async function readIsolatedRegistryEnvironment(subKey) {
+  const result = await registryCommand(
+    [
+      '$subKey = ' + powershellSingleQuoted(subKey),
+      '$names = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(' + powershellSingleQuoted(base64(JSON.stringify(managedVariables))) + ')) | ConvertFrom-Json',
+      '$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subKey, $false)',
+      '$output = [ordered]@{}',
+      'try {',
+      '  foreach ($name in $names) {',
+      "    $actualName = @($key.GetValueNames() | Where-Object { [StringComparer]::OrdinalIgnoreCase.Equals($_, $name) }) | Select-Object -First 1",
+      '    if ($null -eq $actualName) {',
+      "      $output[$name] = [ordered]@{ presence = 'ABSENT'; value = ''; registryKind = 'None' }",
+      '    } else {',
+      '      $value = $key.GetValue($actualName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)',
+      "      $output[$name] = [ordered]@{ presence = 'PRESENT'; value = [string]$value; registryKind = $key.GetValueKind($actualName).ToString() }",
+      '    }',
+      '  }',
+      '  $output | ConvertTo-Json -Compress',
+      '} finally { if ($null -ne $key) { $key.Dispose() } }'
+    ].join('; ')
+  );
+  return JSON.parse(result.stdout);
+}
+
+async function removeIsolatedRegistryEnvironment(subKey) {
+  await registryCommand(
+    '[Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree(' + powershellSingleQuoted(subKey) + ', $false)'
+  );
 }
 
 async function createBundle(temp, approvalSinkPath = '') {
@@ -107,12 +179,138 @@ test('production activation rejects transparent-wrapper and bridge-core replacem
   await assertReplacementRejected('core');
 });
 
+async function assertGuardBlocked(inventory, expectedMessage) {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const inventoryPath = path.join(temp, 'processes.json');
+    await writeProcessInventory(inventoryPath, inventory);
+    const result = await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-ProcessInventoryPath', inventoryPath, '-BroadcastMode', 'FakeSuccess']),
+      error => error.code === 2 && error.stderr.includes(expectedMessage)
+    );
+    assert.equal(result, undefined);
+    await assert.rejects(readFile(state, 'utf8'));
+    await assert.rejects(readFile(environment, 'utf8'));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+}
+
+test('CODEX_UI_CHATGPT_ALIVE_BACKEND_ABSENT_BLOCKED', async () => {
+  await assertGuardBlocked([{ name: 'ChatGPT.exe', path: '' }], 'CODEX_PROCESS_GUARD=CHATGPT_UI_ALIVE');
+});
+
+test('CODEX_BACKEND_ALIVE_BLOCKED', async () => {
+  await assertGuardBlocked([{ name: 'codex.exe', path: '' }], 'CODEX_PROCESS_GUARD=BACKEND_ALIVE');
+});
+
+test('NO_CODEX_PROCESS_ALLOWED', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const inventoryPath = path.join(temp, 'processes.json');
+    await writeProcessInventory(inventoryPath, []);
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-ProcessInventoryPath', inventoryPath, '-BroadcastMode', 'FakeSuccess'];
+    const enabled = await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+    assert.match(enabled.stdout, /ACTIVE=YES/);
+    const disabled = await powershell(['-File', script, '-Mode', 'Disable', ...common]);
+    assert.match(disabled.stdout, /ACTIVE=NO/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('AMBIGUOUS_CHATGPT_IDENTITY_FAILS_CLOSED', async () => {
+  await assertGuardBlocked([{ name: 'ChatGPT', path: '' }], 'CODEX_PROCESS_GUARD=CHATGPT_UI_ALIVE');
+});
+
+test('ISOLATED_PROCESS_FIXTURE_CANNOT_BYPASS_REAL_TARGET', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const inventoryPath = path.join(temp, 'processes.json');
+    await writeProcessInventory(inventoryPath, []);
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, '-StatePath', path.join(temp, 'state.json'), '-ProcessInventoryPath', inventoryPath]),
+      error => error.code === 2
+    );
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('production activation rejects noncanonical and reparse child paths before environment mutation', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  const bundle = path.join(temp, 'bundle');
+  const junction = path.join(temp, 'bundle-junction');
+  try {
+    await mkdir(bundle);
+    const { manifest } = await createBundle(bundle);
+    const noncanonical = await readJson(manifest);
+    noncanonical.childPath = bundle + '\\..\\bundle\\child.mjs';
+    await writeFile(manifest, JSON.stringify(noncanonical), 'utf8');
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Validate', '-ManifestPath', manifest]),
+      error => error.code === 2
+    );
+
+    await symlink(bundle, junction, 'junction');
+    const reparse = await readJson(manifest);
+    reparse.childPath = path.join(junction, 'child.mjs');
+    await writeFile(manifest, JSON.stringify(reparse), 'utf8');
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Validate', '-ManifestPath', manifest]),
+      error => error.code === 2
+    );
+  } finally {
+    await rm(junction, { recursive: true, force: true });
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
 test('activation script documents bounded disable, no Machine env, and no package/injection path', async () => {
   const source = await readFile(script, 'utf8');
   assert.match(source, /Validate.*Enable.*Disable.*Status/);
-  assert.match(source, /'User'/);
+  assert.match(source, /Registry\]::CurrentUser/);
+  assert.match(source, /DoNotExpandEnvironmentNames/);
   assert.doesNotMatch(source, /EnvironmentVariableTarget\.Machine/);
   assert.doesNotMatch(source, /WindowsApps|CreateRemoteThread|OpenProcess|VirtualAllocEx/);
+});
+
+test('isolated Windows registry primitive preserves mixed absent, present-empty, and present values exactly', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  const registrySubKey = 'Software\\KostGame\\K15CodexBridgeTests\\' + createHash('sha256').update(temp).digest('hex').slice(0, 32);
+  const baseline = {
+    CODEX_CLI_PATH: { presence: 'ABSENT', value: '', registryKind: 'None' },
+    CODEX_BRIDGE_NODE_PATH: { presence: 'PRESENT', value: '', registryKind: 'String' },
+    CODEX_BRIDGE_WRAPPER_PATH: { presence: 'PRESENT', value: 'stock-wrapper', registryKind: 'String' },
+    CODEX_BRIDGE_CHILD_PATH: { presence: 'PRESENT', value: '%USERPROFILE%\\stock-child.exe', registryKind: 'ExpandString' },
+    CODEX_BRIDGE_CHILD_SHA256: { presence: 'ABSENT', value: '', registryKind: 'None' },
+    CODEX_BRIDGE_APPROVAL_SINK_PATH: { presence: 'PRESENT', value: '', registryKind: 'String' }
+  };
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    await writeIsolatedRegistryEnvironment(registrySubKey, baseline);
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-UserEnvironmentRegistrySubKey', registrySubKey, '-BroadcastMode', 'FakeSuccess'];
+    const enabled = await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+    assert.match(enabled.stdout, /ACTIVE=YES/);
+    assert.match(enabled.stdout, /USER_ENV_MUTATED=YES/);
+    const activationState = await readJson(state);
+    assert.equal(activationState.schema, 'k15-codex-bridge/activation-state-v2');
+    assert.deepEqual(activationState.original, baseline);
+    await powershell(['-File', script, '-Mode', 'Disable', ...common]);
+    assert.deepEqual(await readIsolatedRegistryEnvironment(registrySubKey), baseline);
+    await assert.rejects(readFile(state, 'utf8'));
+  } finally {
+    await removeIsolatedRegistryEnvironment(registrySubKey);
+    await rm(temp, { recursive: true, force: true });
+  }
 });
 
 test('isolated Enable, Status, Disable round-trip clears stale empty sink and restores exact state', async () => {
@@ -164,12 +362,38 @@ test('isolated Enable failure restores all pre-existing state and removes activa
     const original = { CODEX_CLI_PATH: 'stock-codex', CODEX_BRIDGE_APPROVAL_SINK_PATH: 'stale-sink' };
     await writeFile(environment, JSON.stringify(original), 'utf8');
     const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-EnvironmentStoreFailOnSet', 'CODEX_BRIDGE_CHILD_PATH', '-BroadcastMode', 'FakeSuccess'];
-    await assert.rejects(powershell(['-File', script, '-Mode', 'Enable', ...common]));
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Enable', ...common]),
+      error => error.code === 2 && /USER_ENV_MUTATED=YES/.test(error.stderr)
+    );
     assert.deepEqual(await readJson(environment), original);
     await assert.rejects(readFile(state, 'utf8'));
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
+});
+
+test('Enable active postcheck failure restores the exact baseline and reports the safe mismatch', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const original = { CODEX_CLI_PATH: 'stock-codex', CODEX_BRIDGE_NODE_PATH: '' };
+    await writeFile(environment, JSON.stringify(original), 'utf8');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Enable', ...common, '-EnvironmentStorePostcheckMismatch', 'EnableActive:CODEX_CLI_PATH']),
+      error => error.code === 2
+        && /VARIABLE=CODEX_CLI_PATH/.test(error.stderr)
+        && /EXPECTED=PRESENT/.test(error.stderr)
+        && /CURRENT=ABSENT/.test(error.stderr)
+        && /VALUE_MATCH=NO/.test(error.stderr)
+        && /USER_ENV_MUTATED=YES/.test(error.stderr)
+    );
+    assert.deepEqual(await readJson(environment), original);
+    await assert.rejects(readFile(state, 'utf8'));
+  } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
 test('Enable broadcasts after exact writes and blocks on broadcast failure without Desktop launch', async () => {
@@ -199,6 +423,36 @@ test('Disable restores exact User env but remains loud and retry-safe when broad
     await assert.rejects(powershell(['-File', script, '-Mode', 'Disable', ...common, '-BroadcastMode', 'FakeFailure']));
     assert.deepEqual(await readJson(environment), original);
     await readFile(state, 'utf8');
+  } finally { await rm(temp, { recursive: true, force: true }); }
+});
+
+test('Disable restore postcheck failure retains activation state and a retry completes safely', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const original = { CODEX_CLI_PATH: 'stock-codex', CODEX_BRIDGE_NODE_PATH: '' };
+    await writeFile(environment, JSON.stringify(original), 'utf8');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+    await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Disable', ...common, '-EnvironmentStorePostcheckMismatch', 'DisableBaseline:CODEX_CLI_PATH']),
+      error => error.code === 2
+        && /VARIABLE=CODEX_CLI_PATH/.test(error.stderr)
+        && /EXPECTED=PRESENT/.test(error.stderr)
+        && /CURRENT=ABSENT/.test(error.stderr)
+        && /VALUE_MATCH=NO/.test(error.stderr)
+        && /USER_ENV_MUTATED=YES/.test(error.stderr)
+    );
+    await readFile(state, 'utf8');
+    assert.deepEqual(await readJson(environment), original);
+    const retried = await powershell(['-File', script, '-Mode', 'Disable', ...common]);
+    assert.match(retried.stdout, /ACTIVE=NO/);
+    assert.match(retried.stdout, /USER_ENV_MUTATED=YES/);
+    const repeated = await powershell(['-File', script, '-Mode', 'Disable', ...common]);
+    assert.match(repeated.stdout, /ACTIVE=NO/);
+    assert.match(repeated.stdout, /USER_ENV_MUTATED=NO/);
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
