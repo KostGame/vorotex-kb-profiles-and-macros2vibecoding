@@ -406,11 +406,61 @@ Require(preStop.State == K15NormalizedState.DonePendingAttention,
 
 var timeout = new StateReducer(30);
 timeout.Apply(Hook(t, "UserPromptSubmit", "timeout-main"));
-timeout.Apply(Hook(t.AddSeconds(1), "Stop", "timeout-main"));
-Require(timeout.Tick(t.AddSeconds(30.9)) is null, "DONE fallback must not fire before 30 seconds from Stop.");
+timeout.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "timeout-main"));
+Require(timeout.Tick(t.AddSeconds(30.9)) is null && timeout.State == K15NormalizedState.Waiting,
+    "WAITING stale reset must not fire before 30 seconds from the waiting transition.");
 var timeoutTransition = timeout.Tick(t.AddSeconds(31.1));
 Require(timeoutTransition?.Current == K15NormalizedState.Normal && timeoutTransition.Reason == "stale_attention_timeout",
-    "Configured stale reset must use an explicit stale_attention_timeout reason.");
+    "Configured stale reset must clear WAITING with an explicit stale_attention_timeout reason.");
+
+var doneTimeout = new StateReducer(30);
+doneTimeout.Apply(Hook(t, "Stop", "done-timeout"));
+Require(doneTimeout.Tick(t.AddDays(2)) is null && doneTimeout.State == K15NormalizedState.DonePendingAttention &&
+        doneTimeout.Snapshot.DoneUnreadCount == 1 && doneTimeout.Snapshot.StaleResetDueUtc is null,
+    "DONE_PENDING_ATTENTION must not be cleared by elapsed wall time.");
+
+var mixedTimeout = new StateReducer(30);
+mixedTimeout.Apply(Hook(t, "Stop", "mixed-done"));
+mixedTimeout.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "mixed-waiting"));
+mixedTimeout.Apply(Hook(t.AddSeconds(2), "PermissionRequest", "mixed-waiting"));
+var mixedTimeoutTransition = mixedTimeout.Tick(t.AddSeconds(32.1));
+Require(mixedTimeoutTransition?.Current == K15NormalizedState.DonePendingAttention &&
+        mixedTimeoutTransition.Reason == "stale_attention_timeout" &&
+        mixedTimeout.Snapshot.ApprovalWaitingCount == 0 && mixedTimeout.Snapshot.DoneUnreadCount == 1 &&
+        mixedTimeout.Snapshot.StaleResetDueUtc is null,
+    "Stale timeout must clear WAITING while retaining DONE_PENDING_ATTENTION.");
+
+var ackEpoch = new StateReducer(30);
+ackEpoch.Apply(Hook(t, "Stop", "ack-done"));
+ackEpoch.Apply(Hook(t.AddSeconds(10), "UserPromptSubmit", "ack-waiting"));
+ackEpoch.Apply(Hook(t.AddSeconds(10), "PermissionRequest", "ack-waiting"));
+Require(ackEpoch.Snapshot.StaleResetDueUtc == t.AddSeconds(40),
+    "WAITING must establish its stale timeout epoch.");
+ackEpoch.Acknowledge("ack-waiting", t.AddSeconds(20));
+Require(ackEpoch.State == K15NormalizedState.DonePendingAttention && ackEpoch.Snapshot.DoneUnreadCount == 1 &&
+        ackEpoch.Snapshot.ApprovalWaitingCount == 0 && ackEpoch.Snapshot.NoRunningSinceUtc is null &&
+        ackEpoch.Snapshot.StaleResetDueUtc is null,
+    "Session acknowledgement must clear the last WAITING timer while retaining DONE.");
+ackEpoch.Apply(Hook(t.AddSeconds(1000), "UserPromptSubmit", "ack-new-waiting"));
+ackEpoch.Apply(Hook(t.AddSeconds(1001), "PermissionRequest", "ack-new-waiting"));
+Require(ackEpoch.Snapshot.StaleResetDueUtc == t.AddSeconds(1031),
+    "A later WAITING must start a fresh stale timeout epoch.");
+Require(ackEpoch.Tick(t.AddSeconds(1030.9)) is null &&
+        ackEpoch.SessionSnapshots.Single(session => session.SessionId == "ack-new-waiting").State == K15NormalizedState.Waiting,
+    "A later WAITING must survive until its fresh deadline.");
+ackEpoch.Tick(t.AddSeconds(1031.1));
+Require(ackEpoch.SessionSnapshots.Single(session => session.SessionId == "ack-new-waiting").State == K15NormalizedState.Normal &&
+        ackEpoch.SessionSnapshots.Single(session => session.SessionId == "ack-done").State == K15NormalizedState.DonePendingAttention,
+    "A later WAITING must clear at its own deadline while the old DONE remains.");
+
+var sessionEndEpoch = new StateReducer(30);
+sessionEndEpoch.Apply(Hook(t, "Stop", "end-done"));
+sessionEndEpoch.Apply(Hook(t.AddSeconds(10), "UserPromptSubmit", "end-waiting"));
+sessionEndEpoch.Apply(Hook(t.AddSeconds(11), "PermissionRequest", "end-waiting"));
+sessionEndEpoch.Apply(Hook(t.AddSeconds(20), "SessionEnd", "end-waiting"));
+Require(sessionEndEpoch.Snapshot.DoneUnreadCount == 1 && sessionEndEpoch.Snapshot.ApprovalWaitingCount == 0 &&
+        sessionEndEpoch.Snapshot.NoRunningSinceUtc is null && sessionEndEpoch.Snapshot.StaleResetDueUtc is null,
+    "SessionEnd must clear the last WAITING timer while retaining DONE.");
 
 var parallel = new StateReducer();
 parallel.Apply(Hook(t, "UserPromptSubmit", "main-A", @"D:\AI_AGENT_PROJECTS\agentloop-exchange-manual-win-001"));
@@ -482,8 +532,9 @@ Require(blockedTimer.Tick(t.AddSeconds(40)) is null && blockedTimer.Snapshot.Don
 blockedTimer.Apply(Hook(t.AddSeconds(41), "Stop", "running"));
 Require(blockedTimer.Tick(t.AddSeconds(70)) is null && blockedTimer.Snapshot.DoneUnreadCount == 2,
     "Scenario H: a new zero-running interval must start a fresh timer.");
-Require(blockedTimer.Tick(t.AddSeconds(72))?.Reason == "stale_attention_timeout" && blockedTimer.State == K15NormalizedState.Normal,
-    "Scenarios G/H: stale reset must occur only after the fresh idle interval.");
+Require(blockedTimer.Tick(t.AddSeconds(72)) is null && blockedTimer.State == K15NormalizedState.DonePendingAttention &&
+        blockedTimer.Snapshot.DoneUnreadCount == 2,
+    "Scenarios G/H: stale timeout must not clear DONE_PENDING_ATTENTION after the idle interval.");
 
 var disabledTimer = new StateReducer(0);
 disabledTimer.Apply(Hook(t, "Stop", "done"));

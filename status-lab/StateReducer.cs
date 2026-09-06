@@ -242,7 +242,7 @@ internal sealed class StateReducer
         var snapshot = CreateSnapshot();
         if (_staleAttentionTimeout is not TimeSpan timeout ||
             snapshot.RunningCount != 0 ||
-            (snapshot.ApprovalWaitingCount == 0 && snapshot.DoneUnreadCount == 0) ||
+            snapshot.ApprovalWaitingCount == 0 ||
             _noRunningSinceUtc is not DateTimeOffset idleSince ||
             nowUtc - idleSince < timeout)
         {
@@ -250,7 +250,7 @@ internal sealed class StateReducer
         }
 
         foreach (var session in _sessions.Values.Where(session => !session.Internal &&
-                     session.State is K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
+                     session.State == K15NormalizedState.Waiting))
         {
             SetSessionState(session, K15NormalizedState.Normal, "stale_attention_timeout", nowUtc);
             session.LastPermissionUtc = null;
@@ -531,8 +531,8 @@ internal sealed class StateReducer
             sessions.Count(session => !session.Ended),
             sessions.Count(session => session.Ended),
             aggregate,
-            _noRunningSinceUtc,
-            _staleAttentionTimeout is TimeSpan timeout && _noRunningSinceUtc is DateTimeOffset since
+            waiting > 0 ? _noRunningSinceUtc : null,
+            waiting > 0 && _staleAttentionTimeout is TimeSpan timeout && _noRunningSinceUtc is DateTimeOffset since
                 ? since + timeout
                 : null)
         {
@@ -545,10 +545,10 @@ internal sealed class StateReducer
     {
         var before = State;
         var running = _sessions.Values.Count(session => !session.Internal && !session.Ended && session.State == K15NormalizedState.Running);
-        if (running > 0)
+        var waiting = _sessions.Values.Count(session => !session.Internal && !session.Ended && session.State == K15NormalizedState.Waiting);
+        if (running > 0 || waiting == 0)
             _noRunningSinceUtc = null;
-        else if (_noRunningSinceUtc is null && _sessions.Values.Any(session => !session.Internal &&
-                     session.State is K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
+        else if (_noRunningSinceUtc is null)
             _noRunningSinceUtc = timestampUtc;
 
         var next = CreateSnapshot().AggregateState;
