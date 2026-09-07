@@ -106,6 +106,9 @@ public sealed record RuntimeHealthSnapshot(
     public static RuntimeHealthSnapshot Healthy(
         string runtimeVersion = RuntimeContractMetadata.CurrentRuntimeVersion) =>
         new(runtimeVersion, IsHealthy: true, Detail: "READY");
+
+    public static RuntimeHealthSnapshot Degraded(string runtimeVersion, string reason) =>
+        new(runtimeVersion, IsHealthy: false, Detail: reason);
 }
 
 public sealed record RuntimeSnapshot(

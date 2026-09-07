@@ -28,6 +28,13 @@ if (mode === 'argv') {
     }
   }) + '\n');
   process.stdin.pipe(process.stdout);
+} else if (mode === 'native') {
+  process.stdout.write(JSON.stringify({
+    jsonrpc: '2.0', method: 'thread/status/changed',
+    params: { threadId: 'thread-native-fixture', status: { type: 'active', activeFlags: ['waitingOnApproval'] } },
+    emittedAtMs: 1788854400000
+  }) + '\n');
+  process.stdin.pipe(process.stdout);
 } else {
   process.stderr.write('fake-child: unsupported test mode\n');
   process.exit(64);

@@ -207,8 +207,12 @@ export class ApprovalObserver {
 }
 
 export class NativeThreadStatusObserver {
-  #sink; #queue = []; #busy = false; #accepted = 0; #delivered = 0; #overflow = 0; #sinkFailures = 0; #partial = Buffer.alloc(0);
-  constructor({ authoritySink = () => {} } = {}) { this.#sink = authoritySink; }
+  #sink; #classify; #receiptClock; #queue = []; #busy = false; #accepted = 0; #delivered = 0; #overflow = 0; #sinkFailures = 0; #partial = Buffer.alloc(0);
+  constructor({ authoritySink = () => {}, classificationResolver = () => undefined, receiptClock = () => new Date() } = {}) {
+    this.#sink = authoritySink;
+    this.#classify = classificationResolver;
+    this.#receiptClock = receiptClock;
+  }
   observeServerChunk(chunk) {
     const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     const combined = this.#partial.length === 0 ? input : Buffer.concat([this.#partial, input]);
@@ -236,8 +240,11 @@ export class NativeThreadStatusObserver {
     const statusObject = params.status;
     const status = typeof statusObject === 'string' ? statusObject : optionalString(statusObject?.type);
     const flagsValue = Array.isArray(params.activeFlags) ? params.activeFlags : statusObject?.activeFlags;
-    const timestamp = optionalString(params.timestamp ?? statusObject?.timestamp);
-    const classification = optionalString(params.classification);
+    const hasEmittedAt = Object.hasOwn(message, 'emittedAtMs');
+    const emittedAtMs = message.emittedAtMs;
+    const timestamp = hasEmittedAt && Number.isSafeInteger(emittedAtMs) && emittedAtMs >= 0 && emittedAtMs <= 8640000000000000
+      ? new Date(emittedAtMs).toISOString() : hasEmittedAt ? undefined : this.#receiptTimestamp();
+    const classification = optionalString(this.#classify(threadId));
     if (!threadId || !THREAD_STATUSES.has(status) || !Array.isArray(flagsValue) || flagsValue.length > 8 ||
         !timestamp || Number.isNaN(Date.parse(timestamp)) || (classification !== undefined && !THREAD_CLASSIFICATIONS.has(classification))) return;
     const activeFlags = [];
@@ -247,10 +254,17 @@ export class NativeThreadStatusObserver {
     }
     activeFlags.sort((left, right) => left === 'waitingOnApproval' ? -1 : right === 'waitingOnApproval' ? 1 : 0);
     const event = { schemaVersion: THREAD_STATUS_SCHEMA_VERSION, source: 'codex_stdio_bridge', event: 'thread_status_changed',
-      timestampUtc: new Date(timestamp).toISOString(), threadId, status, activeFlags };
+      timestampUtc: timestamp, threadId, status, activeFlags };
     if (classification !== undefined) event.classification = classification;
     if (this.#queue.length >= MAX_AUTHORITY_QUEUE) { this.#overflow += 1; return; }
     this.#queue.push(event); this.#accepted += 1; this.#drain();
+  }
+
+  #receiptTimestamp() {
+    try {
+      const value = this.#receiptClock();
+      return value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString() : undefined;
+    } catch { return undefined; }
   }
   #drain() {
     if (this.#busy || this.#queue.length === 0) return;

@@ -8,6 +8,7 @@ internal static class Program
         {
             ("initial snapshot is deterministic and healthy", ContractTests.InitialSnapshotIsDeterministicAndHealthy),
             ("enum wire names are explicit and stable", ContractTests.EnumWireNamesAreExplicitAndStable),
+            ("thread classification wire names are stable and fail closed", ContractTests.ThreadClassificationWireNamesAreStableAndFailClosed),
             ("active flags are plural immutable and deterministic", ContractTests.ActiveFlagsArePluralImmutableAndDeterministic),
             ("unknown wire values fail closed", ContractTests.UnknownWireValuesFailClosed),
             ("host enforces single instance ownership", RuntimeHostTests.HostEnforcesSingleInstanceOwnership),
@@ -23,6 +24,7 @@ internal static class Program
             ("native adapter fails closed for invalid payloads", NativeThreadStatusAdapterTests.FailsClosed),
             ("native adapter feeds the real state engine lifecycle", NativeThreadStatusAdapterTests.FeedsRuntimeLifecycle),
             ("native transport preserves ordered authority and health", NativeThreadStatusAdapterTests.TransportPreservesOrderedAuthorityAndHealth),
+            ("native queue has explicit concurrent overflow health", NativeThreadStatusAdapterTests.ConcurrentQueueNeverReportsAcceptedLoss),
         };
 
         var failures = 0;

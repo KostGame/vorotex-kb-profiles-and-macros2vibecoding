@@ -109,4 +109,19 @@ internal static class NativeThreadStatusAdapterTests
         TestAssert.Equal(RuntimeState.Unknown, transport.Snapshot.State, "idle without attention should not invent DONE state");
         TestAssert.True(queue.Health.IsHealthy, "healthy queue was marked degraded");
     }
+
+    public static async Task ConcurrentQueueNeverReportsAcceptedLoss()
+    {
+        var transport = new NativeStatusTransport();
+        await using var queue = new NativeStatusDeliveryQueue(transport, capacity: 8);
+        var payload = Payload("\"threadId\":\"concurrent\",\"status\":\"active\",\"activeFlags\":[],\"timestampUtc\":\"2026-09-08T08:00:00Z\"");
+        Parallel.For(0, 200, _ => queue.TryEnqueue(payload));
+        for (var attempt = 0; attempt < 100 && queue.Health.Queued != 0; attempt++)
+            await Task.Delay(5).ConfigureAwait(false);
+
+        TestAssert.Equal(queue.Health.Accepted, queue.Health.Delivered, "an admitted authority record was lost");
+        TestAssert.True(queue.Health.Overflow > 0, "concurrent pressure did not expose overflow");
+        TestAssert.False(transport.Snapshot.Health.IsHealthy, "overflow did not degrade canonical runtime health");
+        TestAssert.Equal("NATIVE_AUTHORITY_DEGRADED_OVERFLOW", transport.Snapshot.Health.Detail, "degraded reason is not bounded");
+    }
 }

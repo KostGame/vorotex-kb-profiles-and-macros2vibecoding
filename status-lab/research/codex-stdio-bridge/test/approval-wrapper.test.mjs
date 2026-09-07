@@ -90,3 +90,21 @@ test('approval wrapper rejects a relative sink without touching transport', asyn
   assert.equal(code, APPROVAL_CONFIG_ERROR_EXIT_CODE);
   assert.match(Buffer.concat(diagnostics).toString('utf8'), /invalid approval sink configuration/);
 });
+
+test('real approval wrapper seam observes native status while preserving bytes', async () => {
+  const stdin = new PassThrough(); const stdout = new PassThrough(); const stderr = new PassThrough();
+  const output = collect(stdout); const events = [];
+  const run = runApprovalWrapper({
+    argv: ['app-server'],
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CODEX_BRIDGE_'))), CODEX_BRIDGE_CHILD_PATH: fakeChild, FAKE_CHILD_MODE: 'native' },
+    stdin, stdout, stderr,
+    authoritySink: event => events.push(event),
+    spawnProcess: (childPath, childArgs, options) => spawn(process.execPath, [childPath, ...childArgs], { ...options })
+  });
+  stdout.once('data', () => stdin.end(Buffer.from('transparent-client-bytes')));
+  assert.equal(await run, 0);
+  const bytes = await output;
+  assert.match(bytes.toString('utf8'), /thread\/status\/changed/);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].threadId, 'thread-native-fixture');
+});

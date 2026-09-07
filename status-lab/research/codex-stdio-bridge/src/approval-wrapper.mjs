@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
   ApprovalObserver,
+  NativeThreadStatusObserver,
   createSanitizedJsonlSink
 } from './bridge-core.mjs';
 import { runTransparentWrapper } from './transparent-wrapper.mjs';
@@ -42,7 +43,10 @@ export async function runApprovalWrapper(options = {}) {
     env = process.env,
     stdin = process.stdin,
     stderr = process.stderr,
-    telemetrySink
+    telemetrySink,
+    authoritySink,
+    classificationResolver,
+    receiptClock
   } = options;
 
   let sinkPath;
@@ -57,6 +61,7 @@ export async function runApprovalWrapper(options = {}) {
   const observer = new ApprovalObserver({
     telemetrySink: telemetrySink ?? createSanitizedJsonlSink(sinkPath)
   });
+  const nativeStatusObserver = new NativeThreadStatusObserver({ authoritySink, classificationResolver, receiptClock });
 
   return runTransparentWrapper({
     ...options,
@@ -65,7 +70,10 @@ export async function runApprovalWrapper(options = {}) {
     stderr,
     wrapperPath: options.wrapperPath ?? APPROVAL_WRAPPER_PATH,
     onClientChunk: (chunk) => observer.observeClientChunk(chunk),
-    onServerChunk: (chunk) => observer.observeServerChunk(chunk)
+    onServerChunk: (chunk) => {
+      observer.observeServerChunk(chunk);
+      nativeStatusObserver.observeServerChunk(chunk);
+    }
   });
 }
 

@@ -74,11 +74,37 @@ public enum ThreadFocusHint
     NotFocused = 2,
 }
 
+[JsonConverter(typeof(ThreadClassificationJsonConverter))]
 public enum ThreadClassification
 {
-    User = 0,
-    Service = 1,
-    Canary = 2,
+    Unknown = 0,
+    User = 1,
+    Service = 2,
+    Canary = 3,
+}
+
+public sealed class ThreadClassificationJsonConverter : JsonConverter<ThreadClassification>
+{
+    public override bool HandleNull => true;
+    public override ThreadClassification Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String) { reader.Skip(); return ThreadClassification.Unknown; }
+        return reader.GetString() switch
+        {
+            "USER" => ThreadClassification.User,
+            "SERVICE" => ThreadClassification.Service,
+            "CANARY" => ThreadClassification.Canary,
+            _ => ThreadClassification.Unknown,
+        };
+    }
+    public override void Write(Utf8JsonWriter writer, ThreadClassification value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value switch
+        {
+            ThreadClassification.User => "USER",
+            ThreadClassification.Service => "SERVICE",
+            ThreadClassification.Canary => "CANARY",
+            _ => "UNKNOWN",
+        });
 }
 
 public sealed class RuntimeStateJsonConverter : JsonConverter<RuntimeState>

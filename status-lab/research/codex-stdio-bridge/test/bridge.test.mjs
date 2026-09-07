@@ -45,11 +45,14 @@ test('transport is byte-transparent in both directions and stderr remains separa
 
 test('native status notification becomes bounded ordered authority events', async () => {
   const events = [];
-  const observer = new NativeThreadStatusObserver({ authoritySink: async (event) => events.push(event) });
+  const observer = new NativeThreadStatusObserver({
+    authoritySink: async (event) => events.push(event),
+    classificationResolver: threadId => threadId === 'thread-native' ? 'canary' : undefined
+  });
   const message = (status, activeFlags = []) => JSON.stringify({
     jsonrpc: '2.0', method: 'thread/status/changed', params: {
-      threadId: 'thread-native', status, activeFlags, timestamp: '2026-09-08T08:00:00Z'
-    }
+      threadId: 'thread-native', status: { type: status, activeFlags }
+    }, emittedAtMs: 1788854400000
   }) + '\n';
   const first = message('active');
   observer.observeServerChunk(Buffer.from(first.slice(0, 20)));
@@ -63,9 +66,10 @@ test('native status notification becomes bounded ordered authority events', asyn
     { status: 'idle', activeFlags: [] }
   ]);
   assert.deepEqual(Object.keys(events[0]).sort(), [
-    'activeFlags', 'event', 'schemaVersion', 'source', 'status', 'threadId', 'timestampUtc'
+    'activeFlags', 'classification', 'event', 'schemaVersion', 'source', 'status', 'threadId', 'timestampUtc'
   ].sort());
   assert.equal(observer.authorityHealth().healthy, true);
+  assert.equal(events[0].classification, 'canary');
 });
 
 test('native authority rejects malformed or unknown state without leaking input', () => {
@@ -77,6 +81,18 @@ test('native authority rejects malformed or unknown state without leaking input'
   assert.doesNotMatch(JSON.stringify(observer.authorityHealth()), /SECRET|futureFlag/);
 });
 
+test('native status uses bounded receipt time only when emittedAtMs is absent', () => {
+  const events = [];
+  const observer = new NativeThreadStatusObserver({
+    authoritySink: event => events.push(event),
+    receiptClock: () => new Date('2026-09-08T08:01:02.003Z')
+  });
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/status/changed', params: {
+    threadId: 'fallback', status: { type: 'idle', activeFlags: [] }
+  }}) + '\n'));
+  assert.equal(events[0].timestampUtc, '2026-09-08T08:01:02.003Z');
+});
+
 test('slow authority sink preserves order and reports bounded overflow', async () => {
   const events = []; let release;
   const observer = new NativeThreadStatusObserver({ authoritySink: event => {
@@ -84,8 +100,8 @@ test('slow authority sink preserves order and reports bounded overflow', async (
     return events.length === 1 ? new Promise(resolve => { release = resolve; }) : undefined;
   }});
   const line = i => JSON.stringify({ method: 'thread/status/changed', params: {
-    threadId: `thread-${i}`, status: 'active', activeFlags: [], timestamp: '2026-09-08T08:00:00Z'
-  }}) + '\n';
+    threadId: `thread-${i}`, status: { type: 'active', activeFlags: [] }
+  }, emittedAtMs: 1788854400000 }) + '\n';
   observer.observeServerChunk(Buffer.from(line(0) + Array.from({ length: 70 }, (_, i) => line(i + 1)).join('')));
   assert.equal(observer.authorityHealth().overflow, 6);
   release(); await tick(); await tick();

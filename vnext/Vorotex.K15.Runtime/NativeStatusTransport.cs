@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Threading.Channels;
 using Vorotex.K15.Runtime.Contracts;
 
 namespace Vorotex.K15.Runtime;
@@ -13,20 +12,26 @@ public sealed record NativeStatusTransportResult(
 public sealed class NativeStatusTransport
 {
     private readonly RuntimeStateEngine _engine;
+    private RuntimeHealthSnapshot _health;
 
-    public NativeStatusTransport(RuntimeStateEngine? engine = null) =>
+    public NativeStatusTransport(RuntimeStateEngine? engine = null)
+    {
         _engine = engine ?? new RuntimeStateEngine();
+        _health = RuntimeHealthSnapshot.Healthy(_engine.Snapshot.Health.RuntimeVersion);
+    }
 
-    public RuntimeSnapshot Snapshot => _engine.Snapshot;
+    public RuntimeSnapshot Snapshot => _engine.Snapshot with { Health = _health };
+
+    public void MarkDegraded(string reason) => _health = RuntimeHealthSnapshot.Degraded(_engine.Snapshot.Health.RuntimeVersion, reason);
 
     public NativeStatusTransportResult Accept(string json)
     {
         var parsed = NativeThreadStatusAdapter.Parse(json);
         if (!parsed.IsValid)
-            return new(false, _engine.Snapshot, parsed.Diagnostics);
+            return new(false, Snapshot, parsed.Diagnostics);
 
         var result = _engine.Apply(NativeThreadStatusAdapter.ToObservation(parsed.Event!));
-        return new(true, result.Snapshot, result.Diagnostics);
+        return new(true, result.Snapshot with { Health = _health }, result.Diagnostics);
     }
 }
 
@@ -45,9 +50,11 @@ public sealed record NativeStatusDeliveryHealth(
 public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
 {
     private readonly NativeStatusTransport _transport;
-    private readonly Channel<string> _channel;
+    private readonly Queue<string> _queue = new();
+    private readonly object _gate = new();
     private readonly int _capacity;
     private readonly CancellationTokenSource _stop = new();
+    private readonly SemaphoreSlim _signal = new(0);
     private readonly Task _worker;
     private long _accepted;
     private long _delivered;
@@ -60,13 +67,6 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
         if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
         _transport = transport;
         _capacity = capacity;
-        _channel = Channel.CreateBounded<string>(new BoundedChannelOptions(capacity)
-        {
-            FullMode = BoundedChannelFullMode.DropWrite,
-            SingleReader = true,
-            SingleWriter = false,
-            AllowSynchronousContinuations = false,
-        });
         _worker = Task.Run(ConsumeAsync);
     }
 
@@ -74,23 +74,28 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
     {
         if (string.IsNullOrWhiteSpace(json) || json.Length > 64 * 1024)
         {
-            Interlocked.Increment(ref _overflow);
+            Overflow();
             return false;
         }
 
-        if (_channel.Reader.Count >= _capacity || !_channel.Writer.TryWrite(json))
+        lock (_gate)
         {
-            Interlocked.Increment(ref _overflow);
-            return false;
+            if (_queue.Count >= _capacity)
+            {
+                Overflow();
+                return false;
+            }
+            _queue.Enqueue(json);
         }
 
         Interlocked.Increment(ref _accepted);
+        _signal.Release();
         return true;
     }
 
     public NativeStatusDeliveryHealth Health => new(
         IsHealthy: Volatile.Read(ref _overflow) == 0 && Volatile.Read(ref _sinkFailures) == 0,
-        Queued: _channel.Reader.Count,
+        Queued: QueueCount(),
         Accepted: Volatile.Read(ref _accepted),
         Delivered: Volatile.Read(ref _delivered),
         Overflow: Volatile.Read(ref _overflow),
@@ -100,17 +105,24 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
     {
         try
         {
-            await foreach (var json in _channel.Reader.ReadAllAsync(_stop.Token).ConfigureAwait(false))
+            while (true)
             {
+                await _signal.WaitAsync(_stop.Token).ConfigureAwait(false);
+                string json;
+                lock (_gate)
+                {
+                    if (_queue.Count == 0) continue;
+                    json = _queue.Dequeue();
+                }
                 try
                 {
                     var result = _transport.Accept(json);
                     if (result.Accepted) Interlocked.Increment(ref _delivered);
-                    else Interlocked.Increment(ref _sinkFailures);
+                    else SinkFailure();
                 }
                 catch
                 {
-                    Interlocked.Increment(ref _sinkFailures);
+                    SinkFailure();
                 }
             }
         }
@@ -119,9 +131,14 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _channel.Writer.TryComplete();
         _stop.Cancel();
+        _signal.Release();
         try { await _worker.ConfigureAwait(false); } catch (OperationCanceledException) { }
+        _signal.Dispose();
         _stop.Dispose();
     }
+
+    private int QueueCount() { lock (_gate) return _queue.Count; }
+    private void Overflow() { Interlocked.Increment(ref _overflow); _transport.MarkDegraded("NATIVE_AUTHORITY_DEGRADED_OVERFLOW"); }
+    private void SinkFailure() { Interlocked.Increment(ref _sinkFailures); _transport.MarkDegraded("NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE"); }
 }

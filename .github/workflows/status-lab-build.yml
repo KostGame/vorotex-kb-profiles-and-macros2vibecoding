@@ -18,6 +18,7 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,6 +27,10 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      - name: Node bridge regression suite
+        working-directory: status-lab/research/codex-stdio-bridge
+        run: npm.cmd test
 
       - name: Smoke tests
         shell: powershell
