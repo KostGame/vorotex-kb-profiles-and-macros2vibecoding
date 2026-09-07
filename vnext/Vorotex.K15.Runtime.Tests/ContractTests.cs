@@ -46,16 +46,49 @@ internal static class ContractTests
         return Task.CompletedTask;
     }
 
+    public static Task ActiveFlagsArePluralImmutableAndDeterministic()
+    {
+        var snapshot = new RuntimeSnapshot(
+            RuntimeContractMetadata.CurrentSchemaVersion,
+            RuntimeState.Running,
+            [
+                ThreadSnapshot.Create(
+                    "thread-1",
+                    ThreadRuntimeStatus.Active,
+                    [
+                        ThreadActiveFlag.WaitingOnUserInput,
+                        ThreadActiveFlag.Unknown,
+                        ThreadActiveFlag.WaitingOnApproval,
+                    ]),
+            ],
+            RuntimeHealthSnapshot.Healthy());
+
+        var json = RuntimeContractJson.Serialize(snapshot);
+        TestAssert.True(json.Contains("\"activeFlags\":[\"WAITING_ON_APPROVAL\",\"WAITING_ON_USER_INPUT\",\"UNKNOWN\"]", StringComparison.Ordinal), "activeFlags wire order is not canonical");
+        TestAssert.False(json.Contains("\"activeFlag\":", StringComparison.Ordinal), "singular activeFlag field is still present");
+
+        var roundTrip = RuntimeContractJson.Deserialize<RuntimeSnapshot>(json);
+        TestAssert.NotNull(roundTrip, "plural activeFlags snapshot did not deserialize");
+        TestAssert.Equal(3, roundTrip!.Threads[0].ActiveFlags.Length, "active flag collection lost an element");
+        TestAssert.Equal(ThreadActiveFlag.WaitingOnApproval, roundTrip.Threads[0].ActiveFlags[0], "approval flag order changed");
+        TestAssert.Equal(ThreadActiveFlag.WaitingOnUserInput, roundTrip.Threads[0].ActiveFlags[1], "input flag order changed");
+        TestAssert.Equal(ThreadActiveFlag.Unknown, roundTrip.Threads[0].ActiveFlags[2], "unknown flag order changed");
+        return Task.CompletedTask;
+    }
+
     public static Task UnknownWireValuesFailClosed()
     {
-        const string futureJson = "{\"schemaVersion\":1,\"state\":\"FUTURE_STATE\",\"threads\":[{\"threadId\":\"future-thread\",\"runtimeStatus\":\"FUTURE_STATUS\",\"activeFlag\":\"FUTURE_FLAG\"}],\"health\":{\"runtimeVersion\":\"0.1.0-vnext\",\"isHealthy\":true,\"detail\":\"READY\"}}";
+        const string futureJson = "{\"schemaVersion\":1,\"state\":\"FUTURE_STATE\",\"threads\":[{\"threadId\":\"future-thread\",\"runtimeStatus\":\"FUTURE_STATUS\",\"activeFlags\":[\"WAITING_ON_APPROVAL\",\"FUTURE_FLAG\",\"WAITING_ON_USER_INPUT\"]}],\"health\":{\"runtimeVersion\":\"0.1.0-vnext\",\"isHealthy\":true,\"detail\":\"READY\"}}";
         var future = RuntimeContractJson.Deserialize<RuntimeSnapshot>(futureJson);
 
         TestAssert.NotNull(future, "future wire values should deserialize");
         TestAssert.Equal(RuntimeState.Unknown, future!.State, "future runtime state must not become healthy NORMAL");
         TestAssert.Equal(1, future.Threads.Length, "future thread was lost");
         TestAssert.Equal(ThreadRuntimeStatus.Unknown, future.Threads[0].RuntimeStatus, "future thread status must be UNKNOWN");
-        TestAssert.Equal(ThreadActiveFlag.Unknown, future.Threads[0].ActiveFlag, "future active flag must be UNKNOWN");
+        TestAssert.Equal(3, future.Threads[0].ActiveFlags.Length, "future active flags were lost");
+        TestAssert.Equal(ThreadActiveFlag.WaitingOnApproval, future.Threads[0].ActiveFlags[0], "known approval flag was lost");
+        TestAssert.Equal(ThreadActiveFlag.WaitingOnUserInput, future.Threads[0].ActiveFlags[1], "known input flag was lost");
+        TestAssert.Equal(ThreadActiveFlag.Unknown, future.Threads[0].ActiveFlags[2], "future active flag must be UNKNOWN");
 
         const string invalidJson = "{\"schemaVersion\":1,\"state\":999,\"threads\":[],\"health\":{\"runtimeVersion\":\"0.1.0-vnext\",\"isHealthy\":true,\"detail\":\"READY\"}}";
         var invalid = RuntimeContractJson.Deserialize<RuntimeSnapshot>(invalidJson);

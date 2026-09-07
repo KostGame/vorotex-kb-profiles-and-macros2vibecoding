@@ -3,21 +3,68 @@ using System.Text.Json.Serialization;
 
 namespace Vorotex.K15.Runtime.Contracts;
 
-public sealed record ThreadSnapshot(
-    [property: JsonPropertyOrder(0)] string ThreadId,
-    [property: JsonPropertyOrder(1)] ThreadRuntimeStatus RuntimeStatus,
-    [property: JsonPropertyOrder(2)] ThreadActiveFlag? ActiveFlag = null,
-    [property: JsonPropertyOrder(3)] DateTimeOffset? LastObservedUtc = null)
+public sealed record ThreadSnapshot
 {
-    public static ThreadSnapshot Create(
+    [JsonConstructor]
+    public ThreadSnapshot(
         string threadId,
         ThreadRuntimeStatus runtimeStatus,
-        ThreadActiveFlag? activeFlag = null,
+        ImmutableArray<ThreadActiveFlag> activeFlags = default,
         DateTimeOffset? lastObservedUtc = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
-        return new ThreadSnapshot(threadId, runtimeStatus, activeFlag, lastObservedUtc);
+        ThreadId = threadId;
+        RuntimeStatus = runtimeStatus;
+        ActiveFlags = CanonicalizeActiveFlags(activeFlags);
+        LastObservedUtc = lastObservedUtc;
     }
+
+    [JsonPropertyOrder(0)]
+    public string ThreadId { get; }
+
+    [JsonPropertyOrder(1)]
+    public ThreadRuntimeStatus RuntimeStatus { get; }
+
+    [JsonPropertyOrder(2)]
+    public ImmutableArray<ThreadActiveFlag> ActiveFlags { get; }
+
+    [JsonPropertyOrder(3)]
+    public DateTimeOffset? LastObservedUtc { get; }
+
+    public static ThreadSnapshot Create(
+        string threadId,
+        ThreadRuntimeStatus runtimeStatus,
+        IEnumerable<ThreadActiveFlag>? activeFlags = null,
+        DateTimeOffset? lastObservedUtc = null)
+    {
+        return new ThreadSnapshot(
+            threadId,
+            runtimeStatus,
+            activeFlags?.ToImmutableArray() ?? ImmutableArray<ThreadActiveFlag>.Empty,
+            lastObservedUtc);
+    }
+
+    private static ImmutableArray<ThreadActiveFlag> CanonicalizeActiveFlags(
+        ImmutableArray<ThreadActiveFlag> activeFlags)
+    {
+        if (activeFlags.IsDefaultOrEmpty)
+        {
+            return ImmutableArray<ThreadActiveFlag>.Empty;
+        }
+
+        return activeFlags
+            .OrderBy(GetActiveFlagOrder)
+            .ThenBy(flag => (int)flag)
+            .ToImmutableArray();
+    }
+
+    private static int GetActiveFlagOrder(ThreadActiveFlag activeFlag) => activeFlag switch
+    {
+        ThreadActiveFlag.WaitingOnApproval => 0,
+        ThreadActiveFlag.WaitingOnUserInput => 1,
+        ThreadActiveFlag.Unknown => 2,
+        _ => 3,
+    };
 }
 
 public sealed record RuntimeHealthSnapshot(

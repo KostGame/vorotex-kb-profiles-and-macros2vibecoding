@@ -8,6 +8,7 @@ internal static class Program
         {
             ("initial snapshot is deterministic and healthy", ContractTests.InitialSnapshotIsDeterministicAndHealthy),
             ("enum wire names are explicit and stable", ContractTests.EnumWireNamesAreExplicitAndStable),
+            ("active flags are plural immutable and deterministic", ContractTests.ActiveFlagsArePluralImmutableAndDeterministic),
             ("unknown wire values fail closed", ContractTests.UnknownWireValuesFailClosed),
             ("host enforces single instance ownership", RuntimeHostTests.HostEnforcesSingleInstanceOwnership),
             ("host shuts down through cancellation", RuntimeHostTests.HostShutsDownThroughCancellation),

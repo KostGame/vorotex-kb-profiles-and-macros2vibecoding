@@ -19,7 +19,7 @@ The vNext runtime is the future sole owner of normalized state. UI processes wil
 
 ## Current scope
 
-- `Vorotex.K15.Runtime.Contracts` defines immutable runtime/thread snapshots, health/version data, schema versioning, and explicit string wire names.
+- `Vorotex.K15.Runtime.Contracts` defines immutable runtime/thread snapshots, plural immutable `activeFlags`, health/version data, schema versioning, and explicit string wire names.
 - `Vorotex.K15.Runtime` is a console host with deterministic startup/shutdown behavior.
 - A BCL named `System.Threading.Mutex` is the single-instance ownership primitive. A dedicated owner thread holds and releases it so shutdown can be requested from any host thread. It is a process guard only; it is not a Windows Service dependency.
 - Unknown or invalid enum wire values deserialize to `Unknown` and serialize as `UNKNOWN`. They never silently become `Normal` or another healthy state.
