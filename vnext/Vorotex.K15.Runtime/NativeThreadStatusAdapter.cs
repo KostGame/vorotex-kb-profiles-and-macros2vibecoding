@@ -65,7 +65,7 @@ public static class NativeThreadStatusAdapter
             {
                 if (!AllowedProperties.Contains(property.Name))
                 {
-                    diagnostics.Add("UNSUPPORTED_NATIVE_STATUS_FIELD:" + property.Name);
+                    diagnostics.Add("UNSUPPORTED_NATIVE_STATUS_FIELD");
                 }
             }
 
@@ -96,7 +96,7 @@ public static class NativeThreadStatusAdapter
             var status = ParseStatus(statusText);
             if (status == ThreadRuntimeStatus.Unknown)
             {
-                diagnostics.Add("UNKNOWN_NATIVE_STATUS:" + (statusText ?? "null"));
+                diagnostics.Add("UNKNOWN_NATIVE_STATUS");
             }
 
             var flags = ImmutableArray.CreateBuilder<ThreadActiveFlag>();
@@ -119,7 +119,7 @@ public static class NativeThreadStatusAdapter
                     var flag = ParseFlag(flagText);
                     if (flag == ThreadActiveFlag.Unknown)
                     {
-                        diagnostics.Add("UNKNOWN_NATIVE_ACTIVE_FLAG:" + (flagText ?? "null"));
+                        diagnostics.Add("UNKNOWN_NATIVE_ACTIVE_FLAG");
                     }
                     flags.Add(flag);
                 }
