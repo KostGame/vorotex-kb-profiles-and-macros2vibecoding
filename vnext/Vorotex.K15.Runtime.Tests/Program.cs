@@ -15,6 +15,7 @@ internal static class Program
             ("state engine maps native status and attention evidence", RuntimeStateEngineTests.MapsNativeStatusAndAttentionEvidence),
             ("state engine preserves owner-live sticky waiting regression", RuntimeStateEngineTests.OwnerLiveStickyWaitingRegression),
             ("state engine applies exact aggregate priority", RuntimeStateEngineTests.AggregatePriorityIsExactAndDeterministic),
+            ("state engine excludes not-loaded threads from live aggregate", RuntimeStateEngineTests.NotLoadedDoesNotPoisonAggregate),
             ("state engine rejects stale duplicate and legacy inputs", RuntimeStateEngineTests.StaleDuplicateAndLegacyInputsFailClosed),
             ("state engine keeps focus orthogonal and rehydrates deterministically", RuntimeStateEngineTests.FocusIsOrthogonalAndRehydrationIsDeterministic),
         };

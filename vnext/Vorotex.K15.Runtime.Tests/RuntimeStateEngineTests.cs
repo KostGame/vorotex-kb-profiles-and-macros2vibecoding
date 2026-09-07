@@ -38,7 +38,7 @@ internal static class RuntimeStateEngineTests
         var notLoaded = new RuntimeStateEngine();
         var notLoadedResult = notLoaded.Apply(new ThreadRuntimeObservation("thread", ThreadRuntimeStatus.NotLoaded));
         TestAssert.True(notLoadedResult.Diagnostics.Contains("NOT_LOADED_NO_LIVE_RUNTIME_AUTHORITY"), "NOT_LOADED did not produce diagnostics");
-        TestAssert.Equal(RuntimeState.Unknown, notLoadedResult.Snapshot.State, "NOT_LOADED manufactured live authority");
+        TestAssert.Equal(RuntimeState.Normal, notLoadedResult.Snapshot.State, "NOT_LOADED manufactured live authority");
 
         var unknown = new RuntimeStateEngine();
         var unknownResult = unknown.Apply(new ThreadRuntimeObservation("thread", ThreadRuntimeStatus.Unknown));
@@ -58,21 +58,23 @@ internal static class RuntimeStateEngineTests
     public static Task OwnerLiveStickyWaitingRegression()
     {
         var engine = new RuntimeStateEngine();
+        var timestamp = DateTimeOffset.Parse("2026-09-08T08:00:00Z");
 
-        engine.Apply(new ThreadRuntimeObservation("thread", ThreadRuntimeStatus.Active));
+        engine.Apply(new ThreadRuntimeObservation("thread", ThreadRuntimeStatus.Active, observedUtc: timestamp));
         TestAssert.Equal(RuntimeState.Running, engine.Snapshot.State, "initial ACTIVE did not become RUNNING");
 
         engine.Apply(new ThreadRuntimeObservation(
             "thread",
             ThreadRuntimeStatus.Active,
-            [ThreadActiveFlag.WaitingOnApproval]));
+            [ThreadActiveFlag.WaitingOnApproval],
+            timestamp));
         TestAssert.Equal(RuntimeState.Waiting, engine.Snapshot.State, "approval wait did not become WAITING");
 
-        engine.Apply(new ThreadRuntimeObservation("thread", ThreadRuntimeStatus.Active));
+        engine.Apply(new ThreadRuntimeObservation("thread", ThreadRuntimeStatus.Active, observedUtc: timestamp));
         TestAssert.Equal(RuntimeState.Running, engine.Snapshot.State, "ACTIVE after wait remained sticky WAITING");
 
-        engine.Apply(new ThreadAttentionObservation("thread", ThreadAttentionState.Unread));
-        engine.Apply(new ThreadRuntimeObservation("thread", ThreadRuntimeStatus.Idle));
+        engine.Apply(new ThreadAttentionObservation("thread", ThreadAttentionState.Unread, timestamp));
+        engine.Apply(new ThreadRuntimeObservation("thread", ThreadRuntimeStatus.Idle, observedUtc: timestamp));
         TestAssert.Equal(RuntimeState.DonePendingAttention, engine.Snapshot.State, "IDLE did not use independent attention evidence");
         return Task.CompletedTask;
     }
@@ -96,6 +98,36 @@ internal static class RuntimeStateEngineTests
         done.Apply(new ThreadRuntimeObservation("done", ThreadRuntimeStatus.Idle));
         done.Apply(new ThreadAttentionObservation("done", ThreadAttentionState.Unread));
         TestAssert.Equal(RuntimeState.DonePendingAttention, done.Snapshot.State, "DONE_PENDING_ATTENTION did not outrank RUNNING");
+        return Task.CompletedTask;
+    }
+
+    public static Task NotLoadedDoesNotPoisonAggregate()
+    {
+        var running = new RuntimeStateEngine();
+        running.Apply(new ThreadRuntimeObservation("running", ThreadRuntimeStatus.Active));
+        running.Apply(new ThreadRuntimeObservation("not-loaded", ThreadRuntimeStatus.NotLoaded));
+        TestAssert.Equal(RuntimeState.Running, running.Snapshot.State, "NOT_LOADED overrode RUNNING");
+
+        var waiting = new RuntimeStateEngine();
+        waiting.Apply(new ThreadRuntimeObservation("waiting", ThreadRuntimeStatus.Active, [ThreadActiveFlag.WaitingOnApproval]));
+        waiting.Apply(new ThreadRuntimeObservation("not-loaded", ThreadRuntimeStatus.NotLoaded));
+        TestAssert.Equal(RuntimeState.Waiting, waiting.Snapshot.State, "NOT_LOADED overrode WAITING");
+
+        var blocked = new RuntimeStateEngine();
+        blocked.Apply(new ThreadRuntimeObservation("blocked", ThreadRuntimeStatus.SystemError));
+        blocked.Apply(new ThreadRuntimeObservation("not-loaded", ThreadRuntimeStatus.NotLoaded));
+        TestAssert.Equal(RuntimeState.Blocked, blocked.Snapshot.State, "NOT_LOADED overrode BLOCKED");
+
+        var done = new RuntimeStateEngine();
+        done.Apply(new ThreadRuntimeObservation("done", ThreadRuntimeStatus.Idle));
+        done.Apply(new ThreadAttentionObservation("done", ThreadAttentionState.Unread));
+        done.Apply(new ThreadRuntimeObservation("not-loaded", ThreadRuntimeStatus.NotLoaded));
+        TestAssert.Equal(RuntimeState.DonePendingAttention, done.Snapshot.State, "NOT_LOADED overrode DONE_PENDING_ATTENTION");
+
+        var onlyNotLoaded = new RuntimeStateEngine();
+        var result = onlyNotLoaded.Apply(new ThreadRuntimeObservation("not-loaded", ThreadRuntimeStatus.NotLoaded));
+        TestAssert.Equal(RuntimeState.Normal, result.Snapshot.State, "only NOT_LOADED threads manufactured UNKNOWN live state");
+        TestAssert.True(result.Diagnostics.Contains("NOT_LOADED_NO_LIVE_RUNTIME_AUTHORITY"), "NOT_LOADED diagnostic disappeared");
         return Task.CompletedTask;
     }
 

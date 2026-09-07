@@ -296,12 +296,18 @@ public sealed class RuntimeStateEngine
 
     private static RuntimeState Aggregate(ImmutableArray<ThreadSnapshot> threads)
     {
-        if (threads.IsDefaultOrEmpty)
+        var liveThreads = threads
+            .Where(thread => thread.RuntimeStatus != ThreadRuntimeStatus.NotLoaded)
+            .ToImmutableArray();
+
+        if (liveThreads.IsDefaultOrEmpty)
         {
+            // NOT_LOADED is explicitly not live authority. With no live
+            // evidence, retain the bounded empty-runtime baseline.
             return RuntimeState.Normal;
         }
 
-        if (threads.Any(thread => thread.State == RuntimeState.Unknown))
+        if (liveThreads.Any(thread => thread.State == RuntimeState.Unknown))
         {
             return RuntimeState.Unknown;
         }
@@ -315,7 +321,7 @@ public sealed class RuntimeStateEngine
                      RuntimeState.Normal,
                  })
         {
-            if (threads.Any(thread => thread.State == state))
+            if (liveThreads.Any(thread => thread.State == state))
             {
                 return state;
             }
@@ -357,11 +363,16 @@ public sealed class RuntimeStateEngine
             {
                 return timestampComparison < 0 ? 1 : -1;
             }
+
+            // Equal timestamps do not establish an ordering between
+            // different payloads. Preserve event-stream arrival order; only
+            // an exact same-timestamp duplicate is ignored.
+            return string.Equals(currentFingerprint, incomingFingerprint, StringComparison.Ordinal)
+                ? 0
+                : -1;
         }
 
-        return string.Equals(currentFingerprint, incomingFingerprint, StringComparison.Ordinal)
-            ? 0
-            : string.CompareOrdinal(incomingFingerprint, currentFingerprint) < 0 ? 1 : -1;
+        return 0;
     }
 
     private static string RuntimeFingerprint(ThreadRuntimeObservation observation) =>
