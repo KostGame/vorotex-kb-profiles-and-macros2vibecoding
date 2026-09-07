@@ -18,6 +18,10 @@ internal static class Program
             ("state engine excludes not-loaded threads from live aggregate", RuntimeStateEngineTests.NotLoadedDoesNotPoisonAggregate),
             ("state engine rejects stale duplicate and legacy inputs", RuntimeStateEngineTests.StaleDuplicateAndLegacyInputsFailClosed),
             ("state engine keeps focus orthogonal and rehydrates deterministically", RuntimeStateEngineTests.FocusIsOrthogonalAndRehydrationIsDeterministic),
+            ("native adapter parses bounded status metadata", NativeThreadStatusAdapterTests.ParsesBoundedNativeStatus),
+            ("native adapter preserves plural flags and classifications", NativeThreadStatusAdapterTests.PreservesFlagsAndClassifications),
+            ("native adapter fails closed for invalid payloads", NativeThreadStatusAdapterTests.FailsClosed),
+            ("native adapter feeds the real state engine lifecycle", NativeThreadStatusAdapterTests.FeedsRuntimeLifecycle),
         };
 
         var failures = 0;
