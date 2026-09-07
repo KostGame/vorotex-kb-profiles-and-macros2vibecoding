@@ -10,13 +10,19 @@ public sealed record ThreadSnapshot
         string threadId,
         ThreadRuntimeStatus runtimeStatus,
         ImmutableArray<ThreadActiveFlag> activeFlags = default,
-        DateTimeOffset? lastObservedUtc = null)
+        DateTimeOffset? lastObservedUtc = null,
+        RuntimeState state = RuntimeState.Unknown,
+        ThreadAttentionState attention = ThreadAttentionState.Unknown,
+        DateTimeOffset? lastAttentionObservedUtc = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
         ThreadId = threadId;
         RuntimeStatus = runtimeStatus;
         ActiveFlags = CanonicalizeActiveFlags(activeFlags);
         LastObservedUtc = lastObservedUtc;
+        State = state;
+        Attention = attention;
+        LastAttentionObservedUtc = lastAttentionObservedUtc;
     }
 
     [JsonPropertyOrder(0)]
@@ -31,17 +37,35 @@ public sealed record ThreadSnapshot
     [JsonPropertyOrder(3)]
     public DateTimeOffset? LastObservedUtc { get; }
 
+    [JsonPropertyOrder(4)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public RuntimeState State { get; }
+
+    [JsonPropertyOrder(5)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public ThreadAttentionState Attention { get; }
+
+    [JsonPropertyOrder(6)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? LastAttentionObservedUtc { get; }
+
     public static ThreadSnapshot Create(
         string threadId,
         ThreadRuntimeStatus runtimeStatus,
         IEnumerable<ThreadActiveFlag>? activeFlags = null,
-        DateTimeOffset? lastObservedUtc = null)
+        DateTimeOffset? lastObservedUtc = null,
+        RuntimeState state = RuntimeState.Unknown,
+        ThreadAttentionState attention = ThreadAttentionState.Unknown,
+        DateTimeOffset? lastAttentionObservedUtc = null)
     {
         return new ThreadSnapshot(
             threadId,
             runtimeStatus,
             activeFlags?.ToImmutableArray() ?? ImmutableArray<ThreadActiveFlag>.Empty,
-            lastObservedUtc);
+            lastObservedUtc,
+            state,
+            attention,
+            lastAttentionObservedUtc);
     }
 
     private static ImmutableArray<ThreadActiveFlag> CanonicalizeActiveFlags(

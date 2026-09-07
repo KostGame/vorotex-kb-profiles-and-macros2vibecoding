@@ -41,6 +41,39 @@ public enum ThreadActiveFlag
     WaitingOnUserInput = 2,
 }
 
+/// <summary>
+/// Read/unread evidence is kept separate from native runtime activity.
+/// </summary>
+[JsonConverter(typeof(ThreadAttentionStateJsonConverter))]
+public enum ThreadAttentionState
+{
+    Unknown = 0,
+    Unread = 1,
+    Read = 2,
+}
+
+/// <summary>
+/// The only source currently allowed to author runtime state is native state.
+/// Legacy hook observations are retained as a diagnosable input boundary but
+/// never override native authority.
+/// </summary>
+public enum RuntimeObservationSource
+{
+    Unknown = 0,
+    Native = 1,
+    LegacyHook = 2,
+}
+
+/// <summary>
+/// Focus is an orthogonal UI hint and never participates in state mapping.
+/// </summary>
+public enum ThreadFocusHint
+{
+    Unknown = 0,
+    Focused = 1,
+    NotFocused = 2,
+}
+
 public sealed class RuntimeStateJsonConverter : JsonConverter<RuntimeState>
 {
     public override bool HandleNull => true;
@@ -122,6 +155,33 @@ public sealed class ThreadActiveFlagJsonConverter : JsonConverter<ThreadActiveFl
     }
 }
 
+public sealed class ThreadAttentionStateJsonConverter : JsonConverter<ThreadAttentionState>
+{
+    public override bool HandleNull => true;
+
+    public override ThreadAttentionState Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            return ThreadAttentionStateWire.Parse(reader.GetString());
+        }
+
+        reader.Skip();
+        return ThreadAttentionState.Unknown;
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        ThreadAttentionState value,
+        JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(ThreadAttentionStateWire.Format(value));
+    }
+}
+
 internal static class RuntimeStateWire
 {
     public static string Format(RuntimeState value) => value switch
@@ -180,5 +240,22 @@ internal static class ThreadActiveFlagWire
         "WAITING_ON_APPROVAL" => ThreadActiveFlag.WaitingOnApproval,
         "WAITING_ON_USER_INPUT" => ThreadActiveFlag.WaitingOnUserInput,
         _ => ThreadActiveFlag.Unknown,
+    };
+}
+
+internal static class ThreadAttentionStateWire
+{
+    public static string Format(ThreadAttentionState value) => value switch
+    {
+        ThreadAttentionState.Unread => "UNREAD",
+        ThreadAttentionState.Read => "READ",
+        _ => "UNKNOWN",
+    };
+
+    public static ThreadAttentionState Parse(string? value) => value switch
+    {
+        "UNREAD" => ThreadAttentionState.Unread,
+        "READ" => ThreadAttentionState.Read,
+        _ => ThreadAttentionState.Unknown,
     };
 }
