@@ -14,7 +14,8 @@ public sealed record ThreadRuntimeObservation
         IEnumerable<ThreadActiveFlag>? activeFlags = null,
         DateTimeOffset? observedUtc = null,
         RuntimeObservationSource source = RuntimeObservationSource.Native,
-        ThreadFocusHint focusHint = ThreadFocusHint.Unknown)
+        ThreadFocusHint focusHint = ThreadFocusHint.Unknown,
+        ThreadClassification classification = ThreadClassification.User)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
         ThreadId = threadId;
@@ -23,6 +24,7 @@ public sealed record ThreadRuntimeObservation
         ObservedUtc = observedUtc;
         Source = source;
         FocusHint = focusHint;
+        Classification = classification;
     }
 
     public string ThreadId { get; }
@@ -31,6 +33,7 @@ public sealed record ThreadRuntimeObservation
     public DateTimeOffset? ObservedUtc { get; }
     public RuntimeObservationSource Source { get; }
     public ThreadFocusHint FocusHint { get; }
+    public ThreadClassification Classification { get; }
 
     private static ImmutableArray<ThreadActiveFlag> CanonicalizeFlags(
         IEnumerable<ThreadActiveFlag>? activeFlags) =>
@@ -164,6 +167,7 @@ public sealed class RuntimeStateEngine
                 RuntimeStatus = observation.RuntimeStatus,
                 ActiveFlags = observation.ActiveFlags,
                 LastObservedUtc = observation.ObservedUtc,
+                Classification = observation.Classification,
             };
 
             var decision = CompareEvidence(
@@ -389,6 +393,7 @@ public sealed class RuntimeStateEngine
         string RuntimeFingerprint,
         ThreadAttentionState Attention,
         DateTimeOffset? LastAttentionObservedUtc,
+        ThreadClassification Classification,
         string AttentionFingerprint)
     {
         public static ThreadState Create(string threadId) => new(
@@ -399,6 +404,7 @@ public sealed class RuntimeStateEngine
             string.Empty,
             ThreadAttentionState.Unknown,
             null,
+            ThreadClassification.User,
             string.Empty);
 
         public static ThreadState FromSnapshot(ThreadSnapshot snapshot)
@@ -407,7 +413,8 @@ public sealed class RuntimeStateEngine
                 snapshot.ThreadId,
                 snapshot.RuntimeStatus,
                 snapshot.ActiveFlags,
-                snapshot.LastObservedUtc);
+                snapshot.LastObservedUtc,
+                classification: snapshot.Classification);
             return new ThreadState(
                 snapshot.ThreadId,
                 snapshot.RuntimeStatus,
@@ -416,6 +423,7 @@ public sealed class RuntimeStateEngine
                 RuntimeStateEngine.RuntimeFingerprint(runtimeObservation),
                 snapshot.Attention,
                 snapshot.LastAttentionObservedUtc,
+                snapshot.Classification,
                 RuntimeStateEngine.AttentionFingerprint(snapshot.Attention));
         }
 
@@ -429,7 +437,8 @@ public sealed class RuntimeStateEngine
                 LastObservedUtc,
                 state,
                 Attention,
-                LastAttentionObservedUtc);
+                LastAttentionObservedUtc,
+                Classification);
         }
 
         private static RuntimeState Evaluate(

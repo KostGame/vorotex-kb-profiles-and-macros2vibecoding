@@ -15,6 +15,7 @@ public sealed class RuntimeHost : IDisposable
     private readonly string _singleInstanceName;
     private SingleInstanceLease? _singleInstanceLease;
     private TaskCompletionSource<bool> _stopped = NewStopSignal();
+    private NativeStatusTransport _nativeStatusTransport;
 
     public RuntimeHost(RuntimeHostOptions? options = null)
     {
@@ -24,12 +25,22 @@ public sealed class RuntimeHost : IDisposable
 
         _runtimeVersion = options.RuntimeVersion;
         _singleInstanceName = options.SingleInstanceName;
-        Snapshot = RuntimeSnapshot.CreateInitial(_runtimeVersion);
+        _nativeStatusTransport = new NativeStatusTransport(new RuntimeStateEngine(_runtimeVersion));
     }
 
     public bool IsRunning { get; private set; }
 
-    public RuntimeSnapshot Snapshot { get; private set; }
+    public RuntimeSnapshot Snapshot => _nativeStatusTransport.Snapshot;
+
+    public NativeStatusTransport NativeStatusTransport => _nativeStatusTransport;
+
+    public NativeStatusTransportResult ApplyNativeStatusJson(string json)
+    {
+        lock (_gate)
+        {
+            return _nativeStatusTransport.Accept(json);
+        }
+    }
 
     public bool TryStart()
     {
@@ -47,7 +58,7 @@ public sealed class RuntimeHost : IDisposable
 
             _singleInstanceLease = lease;
             _stopped = NewStopSignal();
-            Snapshot = RuntimeSnapshot.CreateInitial(_runtimeVersion);
+            _nativeStatusTransport = new NativeStatusTransport(new RuntimeStateEngine(_runtimeVersion));
             IsRunning = true;
             return true;
         }

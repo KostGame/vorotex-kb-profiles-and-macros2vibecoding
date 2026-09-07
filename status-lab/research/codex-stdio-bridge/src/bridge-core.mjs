@@ -12,7 +12,12 @@ const MAX_PARTIAL_BYTES = 64 * 1024;
 const MAX_FIELD_BYTES = 1024;
 export const APPROVAL_SCHEMA_VERSION = 'k15-codex-approval/v1';
 export const COMPLETION_SCHEMA_VERSION = 'k15-codex-completion/v1';
+export const THREAD_STATUS_SCHEMA_VERSION = 'k15-codex-thread-status/v1';
 const COMPLETION_STATUSES = new Set(['completed', 'interrupted', 'failed']);
+const THREAD_STATUSES = new Set(['notLoaded', 'idle', 'active', 'systemError']);
+const THREAD_FLAGS = new Set(['waitingOnApproval', 'waitingOnUserInput']);
+const THREAD_CLASSIFICATIONS = new Set(['user', 'service', 'canary']);
+const MAX_AUTHORITY_QUEUE = 64;
 
 function optionalString(value) {
   return typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= MAX_FIELD_BYTES
@@ -201,6 +206,62 @@ export class ApprovalObserver {
   }
 }
 
+export class NativeThreadStatusObserver {
+  #sink; #queue = []; #busy = false; #accepted = 0; #delivered = 0; #overflow = 0; #sinkFailures = 0; #partial = Buffer.alloc(0);
+  constructor({ authoritySink = () => {} } = {}) { this.#sink = authoritySink; }
+  observeServerChunk(chunk) {
+    const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const combined = this.#partial.length === 0 ? input : Buffer.concat([this.#partial, input]);
+    let start = 0;
+    for (let index = 0; index < combined.length; index += 1) {
+      if (combined[index] !== 0x0a) continue;
+      const line = combined.subarray(start, index).toString('utf8');
+      if (Buffer.byteLength(line, 'utf8') > 0 && Buffer.byteLength(line, 'utf8') <= MAX_PARTIAL_BYTES) {
+        try { this.#observeMessage(JSON.parse(line)); } catch { /* transparent */ }
+      }
+      start = index + 1;
+    }
+    const remainder = combined.subarray(start);
+    this.#partial = remainder.length > MAX_PARTIAL_BYTES ? Buffer.alloc(0) : Buffer.from(remainder);
+  }
+  authorityHealth() {
+    return { healthy: this.#overflow === 0 && this.#sinkFailures === 0, queued: this.#queue.length,
+      accepted: this.#accepted, delivered: this.#delivered, overflow: this.#overflow, sinkFailures: this.#sinkFailures };
+  }
+  #observeMessage(message) {
+    if (!message || typeof message !== 'object' || Array.isArray(message) || message.method !== 'thread/status/changed') return;
+    const params = message.params;
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return;
+    const threadId = optionalString(params.threadId);
+    const statusObject = params.status;
+    const status = typeof statusObject === 'string' ? statusObject : optionalString(statusObject?.type);
+    const flagsValue = Array.isArray(params.activeFlags) ? params.activeFlags : statusObject?.activeFlags;
+    const timestamp = optionalString(params.timestamp ?? statusObject?.timestamp);
+    const classification = optionalString(params.classification);
+    if (!threadId || !THREAD_STATUSES.has(status) || !Array.isArray(flagsValue) || flagsValue.length > 8 ||
+        !timestamp || Number.isNaN(Date.parse(timestamp)) || (classification !== undefined && !THREAD_CLASSIFICATIONS.has(classification))) return;
+    const activeFlags = [];
+    for (const flag of flagsValue) {
+      if (typeof flag !== 'string' || !THREAD_FLAGS.has(flag) || activeFlags.includes(flag)) return;
+      activeFlags.push(flag);
+    }
+    activeFlags.sort((left, right) => left === 'waitingOnApproval' ? -1 : right === 'waitingOnApproval' ? 1 : 0);
+    const event = { schemaVersion: THREAD_STATUS_SCHEMA_VERSION, source: 'codex_stdio_bridge', event: 'thread_status_changed',
+      timestampUtc: new Date(timestamp).toISOString(), threadId, status, activeFlags };
+    if (classification !== undefined) event.classification = classification;
+    if (this.#queue.length >= MAX_AUTHORITY_QUEUE) { this.#overflow += 1; return; }
+    this.#queue.push(event); this.#accepted += 1; this.#drain();
+  }
+  #drain() {
+    if (this.#busy || this.#queue.length === 0) return;
+    this.#busy = true; const event = this.#queue.shift();
+    try {
+      Promise.resolve(this.#sink(event)).then(() => { this.#delivered += 1; }, () => { this.#sinkFailures += 1; })
+        .finally(() => { this.#busy = false; this.#drain(); });
+    } catch { this.#sinkFailures += 1; this.#busy = false; this.#drain(); }
+  }
+}
+
 export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory } = {}) {
   if (typeof filePath !== 'string' || filePath.length === 0) return () => {};
 
@@ -241,12 +302,14 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
  * transport path, so its native backpressure and close behavior remain intact.
  * Observers receive the same Buffer chunks but never write to either transport.
  */
-export function connectTransparentBridge({ clientInput, clientOutput, childInput, childOutput, childStderr, stderrOutput, telemetrySink }) {
+export function connectTransparentBridge({ clientInput, clientOutput, childInput, childOutput, childStderr, stderrOutput, telemetrySink, authoritySink }) {
   const observer = new ApprovalObserver({ telemetrySink });
+  const nativeObserver = new NativeThreadStatusObserver({ authoritySink });
   clientInput.on('data', (chunk) => observer.observeClientChunk(chunk));
-  childOutput.on('data', (chunk) => observer.observeServerChunk(chunk));
+  childOutput.on('data', (chunk) => { observer.observeServerChunk(chunk); nativeObserver.observeServerChunk(chunk); });
   clientInput.pipe(childInput);
   childOutput.pipe(clientOutput);
   if (childStderr && stderrOutput) childStderr.pipe(stderrOutput);
+  observer.nativeStatusObserver = nativeObserver;
   return observer;
 }

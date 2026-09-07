@@ -26,8 +26,10 @@ The vNext runtime is the future sole owner of normalized state. UI processes wil
 - Unknown or invalid enum wire values deserialize to `Unknown` and serialize as `UNKNOWN`. They never silently become `Normal` or another healthy state.
 - Startup creates a healthy `NORMAL` snapshot with no threads.
 - `Vorotex.K15.Runtime.Tests` is a deterministic executable test harness with no external NuGet dependencies.
+- `NativeStatusTransport` is the bounded JSONL seam from the existing bridge into the runtime, and
+  `NativeStatusDeliveryQueue` serializes authority records while exposing overflow/degraded health.
 
-The host does not yet connect to Codex, read HID, control RGB, mutate the host, install itself, configure autostart, or expose a UI/IPC transport. Those are separate future increments.
+The host does not launch or own Codex, read HID, control RGB, mutate the host, install itself, configure autostart, or expose a UI/IPC transport. The bridge is an existing external stdio surface; this increment only accepts its bounded native status records.
 
 ## Legacy separation
 

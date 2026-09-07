@@ -74,6 +74,13 @@ public enum ThreadFocusHint
     NotFocused = 2,
 }
 
+public enum ThreadClassification
+{
+    User = 0,
+    Service = 1,
+    Canary = 2,
+}
+
 public sealed class RuntimeStateJsonConverter : JsonConverter<RuntimeState>
 {
     public override bool HandleNull => true;

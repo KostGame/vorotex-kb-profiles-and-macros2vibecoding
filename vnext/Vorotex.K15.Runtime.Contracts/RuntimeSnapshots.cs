@@ -13,7 +13,8 @@ public sealed record ThreadSnapshot
         DateTimeOffset? lastObservedUtc = null,
         RuntimeState state = RuntimeState.Unknown,
         ThreadAttentionState attention = ThreadAttentionState.Unknown,
-        DateTimeOffset? lastAttentionObservedUtc = null)
+        DateTimeOffset? lastAttentionObservedUtc = null,
+        ThreadClassification classification = ThreadClassification.User)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
         ThreadId = threadId;
@@ -23,6 +24,7 @@ public sealed record ThreadSnapshot
         State = state;
         Attention = attention;
         LastAttentionObservedUtc = lastAttentionObservedUtc;
+        Classification = classification;
     }
 
     [JsonPropertyOrder(0)]
@@ -49,6 +51,9 @@ public sealed record ThreadSnapshot
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DateTimeOffset? LastAttentionObservedUtc { get; }
 
+    [JsonPropertyOrder(7)]
+    public ThreadClassification Classification { get; }
+
     public static ThreadSnapshot Create(
         string threadId,
         ThreadRuntimeStatus runtimeStatus,
@@ -56,7 +61,8 @@ public sealed record ThreadSnapshot
         DateTimeOffset? lastObservedUtc = null,
         RuntimeState state = RuntimeState.Unknown,
         ThreadAttentionState attention = ThreadAttentionState.Unknown,
-        DateTimeOffset? lastAttentionObservedUtc = null)
+        DateTimeOffset? lastAttentionObservedUtc = null,
+        ThreadClassification classification = ThreadClassification.User)
     {
         return new ThreadSnapshot(
             threadId,
@@ -65,7 +71,8 @@ public sealed record ThreadSnapshot
             lastObservedUtc,
             state,
             attention,
-            lastAttentionObservedUtc);
+            lastAttentionObservedUtc,
+            classification);
     }
 
     private static ImmutableArray<ThreadActiveFlag> CanonicalizeActiveFlags(

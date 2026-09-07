@@ -112,3 +112,14 @@ priority, and `Stop -> DONE_PENDING_ATTENTION` are unchanged.
 Phase C offline tests use deterministic fake children and reducer fixtures.
 No live Codex Desktop is armed by this repository test command; the owner
 controls any later canary and must revalidate current protocol pins first.
+
+## vNext native status observer
+
+`NativeThreadStatusObserver` listens to the same server chunks as the approval
+observer and recognizes only `thread/status/changed`. It emits the bounded
+`k15-codex-thread-status/v1` record (`threadId`, status, plural known
+`activeFlags`, bounded timestamp, and optional `user`/`service`/`canary`
+classification). A serialized queue of 64 records preserves arrival order;
+overflow and sink failures are exposed by `authorityHealth()` and never block
+the transparent `pipe()` transport. The vNext runtime accepts these records
+through `NativeThreadStatusAdapter` and owns all state mapping.

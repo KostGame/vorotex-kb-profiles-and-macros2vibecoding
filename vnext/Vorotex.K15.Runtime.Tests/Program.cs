@@ -22,6 +22,7 @@ internal static class Program
             ("native adapter preserves plural flags and classifications", NativeThreadStatusAdapterTests.PreservesFlagsAndClassifications),
             ("native adapter fails closed for invalid payloads", NativeThreadStatusAdapterTests.FailsClosed),
             ("native adapter feeds the real state engine lifecycle", NativeThreadStatusAdapterTests.FeedsRuntimeLifecycle),
+            ("native transport preserves ordered authority and health", NativeThreadStatusAdapterTests.TransportPreservesOrderedAuthorityAndHealth),
         };
 
         var failures = 0;

@@ -4,19 +4,14 @@ using Vorotex.K15.Runtime.Contracts;
 
 namespace Vorotex.K15.Runtime;
 
-/// <summary>Explicit, bounded classification for filtering non-user threads.</summary>
-public enum ThreadClassification
-{
-    User = 0,
-    Service = 1,
-    Canary = 2,
-}
-
 /// <summary>
 /// The only native data accepted by the vNext adapter. This is semantic
 /// metadata, not an arbitrary App Server or JSON-RPC envelope.
 /// </summary>
 public sealed record NativeThreadStatusEvent(
+    string SchemaVersion,
+    string Source,
+    string Event,
     string ThreadId,
     ThreadRuntimeStatus Status,
     ImmutableArray<ThreadActiveFlag> ActiveFlags,
@@ -41,7 +36,7 @@ public static class NativeThreadStatusAdapter
 {
     private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
     {
-        "threadId", "status", "activeFlags", "timestamp", "classification",
+        "schemaVersion", "source", "event", "threadId", "status", "activeFlags", "timestampUtc", "classification",
     };
 
     public static NativeThreadStatusParseResult Parse(string json)
@@ -69,6 +64,13 @@ public static class NativeThreadStatusAdapter
                 }
             }
 
+            if (!TryGetString(root, "schemaVersion", out var schemaVersion)
+                || schemaVersion != "k15-codex-thread-status/v1") diagnostics.Add("INVALID_NATIVE_STATUS_SCHEMA");
+            if (!TryGetString(root, "source", out var source) || source != "codex_stdio_bridge")
+                diagnostics.Add("INVALID_NATIVE_STATUS_SOURCE");
+            if (!TryGetString(root, "event", out var eventName) || eventName != "thread_status_changed")
+                diagnostics.Add("INVALID_NATIVE_STATUS_EVENT");
+
             if (!TryGetString(root, "threadId", out var threadId) || string.IsNullOrWhiteSpace(threadId))
             {
                 diagnostics.Add("MISSING_NATIVE_THREAD_ID");
@@ -81,7 +83,7 @@ public static class NativeThreadStatusAdapter
 
             var parsedTimestamp = default(DateTimeOffset);
             var timestampCandidate = default(DateTimeOffset);
-            var hasTimestamp = TryGetString(root, "timestamp", out var timestampText)
+            var hasTimestamp = TryGetString(root, "timestampUtc", out var timestampText)
                 && DateTimeOffset.TryParse(timestampText, System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.RoundtripKind, out timestampCandidate);
             if (hasTimestamp)
@@ -141,7 +143,8 @@ public static class NativeThreadStatusAdapter
             }
 
             return new NativeThreadStatusParseResult(
-                new NativeThreadStatusEvent(threadId!, status, CanonicalizeFlags(flags), parsedTimestamp, classification),
+                new NativeThreadStatusEvent(schemaVersion!, source!, eventName!, threadId!, status,
+                    CanonicalizeFlags(flags), parsedTimestamp, classification),
                 ImmutableArray<string>.Empty);
         }
         catch (JsonException)
@@ -157,7 +160,8 @@ public static class NativeThreadStatusAdapter
             nativeEvent.ThreadId,
             nativeEvent.Status,
             nativeEvent.ActiveFlags,
-            nativeEvent.ObservedUtc);
+            nativeEvent.ObservedUtc,
+            classification: nativeEvent.Classification);
     }
 
     private static NativeThreadStatusParseResult Invalid(

@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { ApprovalObserver, connectTransparentBridge } from '../src/bridge-core.mjs';
+import { ApprovalObserver, NativeThreadStatusObserver, connectTransparentBridge } from '../src/bridge-core.mjs';
 
 const request = (method, id, params = {}) => JSON.stringify({ jsonrpc: '2.0', id, method, params });
 const commandRequest = (id, extras = {}) => request('item/commandExecution/requestApproval', id, extras);
@@ -41,6 +41,56 @@ test('transport is byte-transparent in both directions and stderr remains separa
   assert.deepEqual(await gotChild, clientBytes);
   assert.deepEqual(await gotClient, serverBytes);
   assert.deepEqual(await gotStderr, stderrBytes);
+});
+
+test('native status notification becomes bounded ordered authority events', async () => {
+  const events = [];
+  const observer = new NativeThreadStatusObserver({ authoritySink: async (event) => events.push(event) });
+  const message = (status, activeFlags = []) => JSON.stringify({
+    jsonrpc: '2.0', method: 'thread/status/changed', params: {
+      threadId: 'thread-native', status, activeFlags, timestamp: '2026-09-08T08:00:00Z'
+    }
+  }) + '\n';
+  const first = message('active');
+  observer.observeServerChunk(Buffer.from(first.slice(0, 20)));
+  observer.observeServerChunk(Buffer.from(first.slice(20)));
+  observer.observeServerChunk(Buffer.from(message('active', ['waitingOnApproval']) + message('active') + message('idle')));
+  await tick();
+  assert.deepEqual(events.map(({ status, activeFlags }) => ({ status, activeFlags })), [
+    { status: 'active', activeFlags: [] },
+    { status: 'active', activeFlags: ['waitingOnApproval'] },
+    { status: 'active', activeFlags: [] },
+    { status: 'idle', activeFlags: [] }
+  ]);
+  assert.deepEqual(Object.keys(events[0]).sort(), [
+    'activeFlags', 'event', 'schemaVersion', 'source', 'status', 'threadId', 'timestampUtc'
+  ].sort());
+  assert.equal(observer.authorityHealth().healthy, true);
+});
+
+test('native authority rejects malformed or unknown state without leaking input', () => {
+  const events = []; const observer = new NativeThreadStatusObserver({ authoritySink: event => events.push(event) });
+  const send = params => observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/status/changed', params }) + '\n'));
+  send({ threadId: 'x', status: 'future', activeFlags: [], timestamp: '2026-09-08T08:00:00Z', prompt: 'SECRET' });
+  send({ threadId: 'x', status: 'active', activeFlags: ['futureFlag'], timestamp: '2026-09-08T08:00:00Z' });
+  assert.deepEqual(events, []);
+  assert.doesNotMatch(JSON.stringify(observer.authorityHealth()), /SECRET|futureFlag/);
+});
+
+test('slow authority sink preserves order and reports bounded overflow', async () => {
+  const events = []; let release;
+  const observer = new NativeThreadStatusObserver({ authoritySink: event => {
+    events.push(event);
+    return events.length === 1 ? new Promise(resolve => { release = resolve; }) : undefined;
+  }});
+  const line = i => JSON.stringify({ method: 'thread/status/changed', params: {
+    threadId: `thread-${i}`, status: 'active', activeFlags: [], timestamp: '2026-09-08T08:00:00Z'
+  }}) + '\n';
+  observer.observeServerChunk(Buffer.from(line(0) + Array.from({ length: 70 }, (_, i) => line(i + 1)).join('')));
+  assert.equal(observer.authorityHealth().overflow, 6);
+  release(); await tick(); await tick();
+  assert.deepEqual(events.slice(0, 3).map(event => event.threadId), ['thread-0', 'thread-1', 'thread-2']);
+  assert.equal(observer.authorityHealth().healthy, false);
 });
 
 test('live numeric approval request and exact result.decision response emit one sanitized event', async () => {
