@@ -22,7 +22,17 @@ public sealed class NativeStatusTransport
 
     public RuntimeSnapshot Snapshot => _engine.Snapshot with { Health = _health };
 
-    public void MarkDegraded(string reason) => _health = RuntimeHealthSnapshot.Degraded(_engine.Snapshot.Health.RuntimeVersion, reason);
+    public void MarkDegraded(string reason)
+    {
+        var boundedReason = reason switch
+        {
+            "NATIVE_AUTHORITY_DEGRADED_OVERFLOW" => reason,
+            "NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE" => reason,
+            _ => "NATIVE_AUTHORITY_DEGRADED_UNKNOWN"
+        };
+
+        _health = RuntimeHealthSnapshot.Degraded(_engine.Snapshot.Health.RuntimeVersion, boundedReason);
+    }
 
     public NativeStatusTransportResult Accept(string json)
     {

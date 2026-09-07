@@ -30,7 +30,7 @@ jobs:
 
       - name: Node bridge regression suite
         working-directory: status-lab/research/codex-stdio-bridge
-        run: npm.cmd test
+        run: npm.cmd run test:bridge
 
       - name: Smoke tests
         shell: powershell
