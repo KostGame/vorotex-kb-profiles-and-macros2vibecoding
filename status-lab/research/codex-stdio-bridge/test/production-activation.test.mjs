@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -96,12 +96,17 @@ async function removeIsolatedRegistryEnvironment(subKey) {
 }
 
 async function createBundle(temp, approvalSinkPath = '') {
-  const child = path.join(temp, 'child.mjs');
+  const runtimeRoot = path.join(temp, 'runtime-bin');
+  const generation = path.join(runtimeRoot, 'generation-a');
+  await mkdir(generation, { recursive: true });
+  const child = path.join(generation, 'codex.exe');
+  const codeModeHost = path.join(generation, 'codex-code-mode-host.exe');
   const adapter = path.join(temp, 'adapter.exe');
   const wrapper = path.join(temp, 'approval-wrapper.mjs');
   const transparent = path.join(temp, 'transparent-wrapper.mjs');
   const core = path.join(temp, 'bridge-core.mjs');
-  await writeFile(child, 'export default 0;\n', 'utf8');
+  await copyFile(process.execPath, child);
+  await copyFile(process.execPath, codeModeHost);
   await copyFile(process.execPath, adapter);
   await copyFile(approvalWrapper, wrapper);
   await copyFile(transparentWrapper, transparent);
@@ -109,7 +114,7 @@ async function createBundle(temp, approvalSinkPath = '') {
   const sha256 = async filePath => createHash('sha256').update(await readFile(filePath)).digest('hex');
   const manifest = path.join(temp, `manifest-${approvalSinkPath ? 'sink' : 'empty'}.json`);
   await writeFile(manifest, JSON.stringify({
-    schema: 'k15-codex-bridge/production-manifest-v1',
+    schema: 'k15-codex-bridge/production-manifest-v2',
     adapterPath: adapter,
     adapterSha256: await sha256(adapter),
     nodePath: process.execPath,
@@ -122,9 +127,47 @@ async function createBundle(temp, approvalSinkPath = '') {
     bridgeCoreSha256: await sha256(core),
     childPath: child,
     childSha256: await sha256(child),
+    codeModeHostPath: codeModeHost,
+    codeModeHostSha256: await sha256(codeModeHost),
     approvalSinkPath
   }), 'utf8');
-  return { manifest, paths: { adapter, wrapper, transparent, core, child } };
+  return { manifest, runtimeRoot, generation, paths: { adapter, wrapper, transparent, core, child, codeModeHost } };
+}
+
+async function updateManifest(manifest, changes) {
+  const current = await readJson(manifest);
+  await writeFile(manifest, JSON.stringify({ ...current, ...changes }), 'utf8');
+  return current;
+}
+
+async function sha256(filePath) {
+  return createHash('sha256').update(await readFile(filePath)).digest('hex');
+}
+
+async function addRuntimeGeneration(runtimeRoot, generationName, { child = false, codeModeHost = false } = {}) {
+  const generation = path.join(runtimeRoot, generationName);
+  await mkdir(generation, { recursive: true });
+  if (child) await copyFile(process.execPath, path.join(generation, 'codex.exe'));
+  if (codeModeHost) await copyFile(process.execPath, path.join(generation, 'codex-code-mode-host.exe'));
+  return generation;
+}
+
+function absentEnvironment() {
+  return Object.fromEntries(managedVariables.map(name => [name, { presence: 'ABSENT', value: '', registryKind: 'None' }]));
+}
+
+function environmentValues(entries) {
+  return Object.fromEntries(Object.entries(entries)
+    .filter(([, entry]) => entry.presence === 'PRESENT')
+    .map(([name, entry]) => [name, entry.value]));
+}
+
+async function writeLegacyState(statePath, manifestPath, original) {
+  await writeFile(statePath, JSON.stringify({
+    schema: 'k15-codex-bridge/activation-state-v2',
+    manifestPath: path.resolve(manifestPath),
+    original
+  }), 'utf8');
 }
 
 test('production activation validates exact files and pin without touching User or Machine environment', async () => {
@@ -134,7 +177,103 @@ test('production activation validates exact files and pin without touching User 
     const result = await powershell(['-File', script, '-Mode', 'Validate', '-ManifestPath', manifest]);
     assert.match(result.stdout, /VALID=YES/);
     assert.match(result.stdout, /PIN=EXACT/);
+    assert.match(result.stdout, /CODE_MODE_HOST=PINNED/);
+    assert.match(result.stdout, /SAME_GENERATION=YES/);
     assert.match(result.stdout, /MACHINE_ENV=UNCHANGED/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Status reports INACTIVE without validating or mutating when activation state is absent', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const state = path.join(temp, 'missing-state.json');
+    const environment = path.join(temp, 'environment.json');
+    const status = await powershell([
+      '-File', script,
+      '-Mode', 'Status',
+      '-ManifestPath', path.join(temp, 'missing-manifest.json'),
+      '-StatePath', state,
+      '-EnvironmentStorePath', environment
+    ]);
+    assert.match(status.stdout, /ACTIVE=NO/);
+    assert.match(status.stdout, /RUNTIME_HEALTH=INACTIVE/);
+    await assert.rejects(readFile(state, 'utf8'));
+    await assert.rejects(readFile(environment, 'utf8'));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('production activation fails closed before mutation when the Code Mode host is missing', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest, paths } = await createBundle(temp);
+    await unlink(paths.codeModeHost);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    await writeFile(environment, JSON.stringify({ CODEX_CLI_PATH: 'stock-codex' }), 'utf8');
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess']),
+      error => error.code === 2
+    );
+    assert.deepEqual(await readJson(environment), { CODEX_CLI_PATH: 'stock-codex' });
+    await assert.rejects(readFile(state, 'utf8'));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('legacy production manifest v1 cannot silently validate or enable', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    await updateManifest(manifest, { schema: 'k15-codex-bridge/production-manifest-v1' });
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Validate', '-ManifestPath', manifest]),
+      error => error.code === 2
+    );
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess']),
+      error => error.code === 2
+    );
+    await assert.rejects(readFile(state, 'utf8'));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('production activation fails closed on Code Mode host hash mismatch', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest, paths } = await createBundle(temp);
+    await writeFile(paths.codeModeHost, Buffer.concat([await readFile(paths.codeModeHost), Buffer.from('drift')]));
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Validate', '-ManifestPath', manifest]),
+      error => error.code === 2
+    );
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('production activation rejects a child and Code Mode host from different generations', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest, paths, runtimeRoot } = await createBundle(temp);
+    const otherGeneration = await addRuntimeGeneration(runtimeRoot, 'generation-b', { codeModeHost: true });
+    const sha256 = filePath => readFile(filePath).then(bytes => createHash('sha256').update(bytes).digest('hex'));
+    await updateManifest(manifest, {
+      codeModeHostPath: path.join(otherGeneration, 'codex-code-mode-host.exe'),
+      codeModeHostSha256: await sha256(path.join(otherGeneration, 'codex-code-mode-host.exe'))
+    });
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Validate', '-ManifestPath', manifest]),
+      error => error.code === 2
+    );
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
@@ -252,7 +391,7 @@ test('production activation rejects noncanonical and reparse child paths before 
     await mkdir(bundle);
     const { manifest } = await createBundle(bundle);
     const noncanonical = await readJson(manifest);
-    noncanonical.childPath = bundle + '\\..\\bundle\\child.mjs';
+    noncanonical.childPath = bundle + '\\runtime-bin\\generation-a\\..\\generation-a\\codex.exe';
     await writeFile(manifest, JSON.stringify(noncanonical), 'utf8');
     await assert.rejects(
       powershell(['-File', script, '-Mode', 'Validate', '-ManifestPath', manifest]),
@@ -261,7 +400,7 @@ test('production activation rejects noncanonical and reparse child paths before 
 
     await symlink(bundle, junction, 'junction');
     const reparse = await readJson(manifest);
-    reparse.childPath = path.join(junction, 'child.mjs');
+    reparse.childPath = path.join(junction, 'runtime-bin', 'generation-a', 'codex.exe');
     await writeFile(manifest, JSON.stringify(reparse), 'utf8');
     await assert.rejects(
       powershell(['-File', script, '-Mode', 'Validate', '-ManifestPath', manifest]),
@@ -302,7 +441,14 @@ test('isolated Windows registry primitive preserves mixed absent, present-empty,
     assert.match(enabled.stdout, /ACTIVE=YES/);
     assert.match(enabled.stdout, /USER_ENV_MUTATED=YES/);
     const activationState = await readJson(state);
-    assert.equal(activationState.schema, 'k15-codex-bridge/activation-state-v2');
+    assert.equal(activationState.schema, 'k15-codex-bridge/activation-state-v3');
+    assert.equal(activationState.manifestSha256, await sha256(manifest));
+    assert.equal(activationState.runtimeBaseline.approvedGeneration, 'generation-a');
+    assert.deepEqual(activationState.runtimeBaseline.runtimeInventory, [{
+      generation: 'generation-a',
+      codexExePresent: true,
+      codeModeHostPresent: true
+    }]);
     assert.deepEqual(activationState.original, baseline);
     await powershell(['-File', script, '-Mode', 'Disable', ...common]);
     assert.deepEqual(await readIsolatedRegistryEnvironment(registrySubKey), baseline);
@@ -328,8 +474,217 @@ test('isolated Enable, Status, Disable round-trip clears stale empty sink and re
     assert.equal(Object.hasOwn(enabledEnvironment, 'CODEX_BRIDGE_APPROVAL_SINK_PATH'), false);
     const status = await powershell(['-File', script, '-Mode', 'Status', ...common]);
     assert.match(status.stdout, /ACTIVE=YES/);
+    assert.match(status.stdout, /RUNTIME_HEALTH=HEALTHY/);
     await powershell(['-File', script, '-Mode', 'Disable', ...common]);
     assert.deepEqual(await readJson(environment), original);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Status requires the enabled manifest identity when the approved host pin is replaced', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest, paths } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+    await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+    const beforeState = await readFile(state, 'utf8');
+    const beforeEnvironment = await readJson(environment);
+    await writeFile(paths.codeModeHost, Buffer.concat([await readFile(paths.codeModeHost), Buffer.from('replacement-host')]), 'utf8');
+    await updateManifest(manifest, { codeModeHostSha256: await sha256(paths.codeModeHost) });
+    const status = await powershell(['-File', script, '-Mode', 'Status', ...common]);
+    assert.match(status.stdout, /ACTIVE=YES/);
+    assert.match(status.stdout, /RUNTIME_HEALTH=UPDATE_REVALIDATION_REQUIRED/);
+    assert.match(status.stdout, /REASON=MANIFEST_CHANGED_SINCE_ENABLE/);
+    assert.doesNotMatch(status.stdout, /RUNTIME_HEALTH=HEALTHY/);
+    assert.equal(await readFile(state, 'utf8'), beforeState);
+    assert.deepEqual(await readJson(environment), beforeEnvironment);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Status requires exact manifest bytes even when only benign JSON formatting changes', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+    await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+    const beforeState = await readFile(state, 'utf8');
+    const beforeEnvironment = await readJson(environment);
+    await writeFile(manifest, JSON.stringify(await readJson(manifest), null, 2) + '\n', 'utf8');
+    const status = await powershell(['-File', script, '-Mode', 'Status', ...common]);
+    assert.match(status.stdout, /RUNTIME_HEALTH=UPDATE_REVALIDATION_REQUIRED/);
+    assert.match(status.stdout, /REASON=MANIFEST_CHANGED_SINCE_ENABLE/);
+    assert.doesNotMatch(status.stdout, /RUNTIME_HEALTH=HEALTHY/);
+    assert.equal(await readFile(state, 'utf8'), beforeState);
+    assert.deepEqual(await readJson(environment), beforeEnvironment);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Status requires the canonical manifest path used at Enable', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const alternateManifest = path.join(temp, 'alternate-manifest.json');
+    await copyFile(manifest, alternateManifest);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const common = ['-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+    await powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, ...common]);
+    const status = await powershell(['-File', script, '-Mode', 'Status', '-ManifestPath', alternateManifest, ...common]);
+    assert.match(status.stdout, /ACTIVE=YES/);
+    assert.match(status.stdout, /RUNTIME_HEALTH=UPDATE_REVALIDATION_REQUIRED/);
+    assert.match(status.stdout, /REASON=MANIFEST_PATH_CHANGED_SINCE_ENABLE/);
+    assert.doesNotMatch(status.stdout, /RUNTIME_HEALTH=HEALTHY/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Disable restores the v3 rollback baseline even when the current manifest is gone', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    await writeFile(environment, JSON.stringify({ CODEX_CLI_PATH: 'stock-codex' }), 'utf8');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+    await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+    await unlink(manifest);
+    const disabled = await powershell(['-File', script, '-Mode', 'Disable', ...common]);
+    assert.match(disabled.stdout, /ACTIVE=NO/);
+    assert.deepEqual(await readJson(environment), { CODEX_CLI_PATH: 'stock-codex' });
+    await assert.rejects(readFile(state, 'utf8'));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Status reports UPDATE_REVALIDATION_REQUIRED for a new coherent generation without adoption or mutation', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest, runtimeRoot, paths } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+    await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+    const beforeState = await readFile(state, 'utf8');
+    const beforeManifest = await readFile(manifest, 'utf8');
+    const beforeEnvironment = await readJson(environment);
+    await addRuntimeGeneration(runtimeRoot, 'generation-b', { child: true, codeModeHost: true });
+    const status = await powershell(['-File', script, '-Mode', 'Status', ...common]);
+    assert.match(status.stdout, /ACTIVE=YES/);
+    assert.match(status.stdout, /RUNTIME_HEALTH=UPDATE_REVALIDATION_REQUIRED/);
+    assert.match(status.stdout, /REASON=RUNTIME_INVENTORY_CHANGED/);
+    assert.equal(await readFile(state, 'utf8'), beforeState);
+    assert.equal(await readFile(manifest, 'utf8'), beforeManifest);
+    assert.deepEqual(await readJson(environment), beforeEnvironment);
+    assert.equal(beforeEnvironment.CODEX_BRIDGE_CHILD_PATH, paths.child);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('Status reports UPDATE_REVALIDATION_REQUIRED for a partial generation without adoption', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest, runtimeRoot } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+    await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+    const beforeState = await readFile(state, 'utf8');
+    await addRuntimeGeneration(runtimeRoot, 'generation-partial', { child: true });
+    const status = await powershell(['-File', script, '-Mode', 'Status', ...common]);
+    assert.match(status.stdout, /RUNTIME_HEALTH=UPDATE_REVALIDATION_REQUIRED/);
+    assert.equal(await readFile(state, 'utf8'), beforeState);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+for (const [label, mutate] of [
+  ['approved child missing', async paths => unlink(paths.child)],
+  ['approved child bytes changed', async paths => writeFile(paths.child, Buffer.concat([await readFile(paths.child), Buffer.from('drift')]))],
+  ['approved host missing', async paths => unlink(paths.codeModeHost)],
+  ['approved host bytes changed', async paths => writeFile(paths.codeModeHost, Buffer.concat([await readFile(paths.codeModeHost), Buffer.from('drift')]))]
+]) {
+  test(`Status reports CHILD_RUNTIME_STALE when ${label}`, async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+    try {
+      const { manifest, paths } = await createBundle(temp);
+      const state = path.join(temp, 'state.json');
+      const environment = path.join(temp, 'environment.json');
+      const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+      await powershell(['-File', script, '-Mode', 'Enable', ...common]);
+      await mutate(paths);
+      const status = await powershell(['-File', script, '-Mode', 'Status', ...common]);
+      assert.match(status.stdout, /ACTIVE=YES/);
+      assert.match(status.stdout, /RUNTIME_HEALTH=CHILD_RUNTIME_STALE/);
+      assert.match(status.stdout, /REASON=APPROVED_RUNTIME_OR_ACTIVATION_INVALID/);
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+}
+
+test('legacy activation-state-v2 Status requires owner revalidation', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    await writeLegacyState(state, manifest, absentEnvironment());
+    const status = await powershell(['-File', script, '-Mode', 'Status', '-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment]);
+    assert.match(status.stdout, /ACTIVE=YES/);
+    assert.match(status.stdout, /RUNTIME_HEALTH=UPDATE_REVALIDATION_REQUIRED/);
+    assert.match(status.stdout, /REASON=LEGACY_STATE_NO_RUNTIME_BASELINE/);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test('legacy activation-state-v2 Disable restores exact presence including PRESENT empty and retains retryable state until broadcast succeeds', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest } = await createBundle(temp);
+    const state = path.join(temp, 'state.json');
+    const environment = path.join(temp, 'environment.json');
+    const original = {
+      CODEX_CLI_PATH: { presence: 'PRESENT', value: 'stock-codex', registryKind: 'String' },
+      CODEX_BRIDGE_NODE_PATH: { presence: 'PRESENT', value: '', registryKind: 'String' },
+      CODEX_BRIDGE_WRAPPER_PATH: { presence: 'ABSENT', value: '', registryKind: 'None' },
+      CODEX_BRIDGE_CHILD_PATH: { presence: 'PRESENT', value: 'stock-child', registryKind: 'ExpandString' },
+      CODEX_BRIDGE_CHILD_SHA256: { presence: 'ABSENT', value: '', registryKind: 'None' },
+      CODEX_BRIDGE_APPROVAL_SINK_PATH: { presence: 'ABSENT', value: '', registryKind: 'None' }
+    };
+    await writeLegacyState(state, manifest, original);
+    await writeFile(environment, JSON.stringify({
+      CODEX_CLI_PATH: 'active-codex',
+      CODEX_BRIDGE_NODE_PATH: 'active-node',
+      CODEX_BRIDGE_WRAPPER_PATH: 'active-wrapper',
+      CODEX_BRIDGE_CHILD_PATH: 'active-child',
+      CODEX_BRIDGE_CHILD_SHA256: 'active-sha',
+      CODEX_BRIDGE_APPROVAL_SINK_PATH: 'active-sink'
+    }), 'utf8');
+    const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment];
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Disable', ...common, '-BroadcastMode', 'FakeFailure']),
+      error => error.code === 2
+    );
+    assert.deepEqual(await readJson(environment), environmentValues(original));
+    await readFile(state, 'utf8');
+    const retried = await powershell(['-File', script, '-Mode', 'Disable', ...common, '-BroadcastMode', 'FakeSuccess']);
+    assert.match(retried.stdout, /ACTIVE=NO/);
+    assert.deepEqual(await readJson(environment), environmentValues(original));
+    await assert.rejects(readFile(state, 'utf8'));
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
