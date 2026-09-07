@@ -26,7 +26,11 @@ $ManagedVariables = @(
     'CODEX_BRIDGE_CHILD_SHA256',
     'CODEX_BRIDGE_APPROVAL_SINK_PATH'
 )
-$ActivationStateSchema = 'k15-codex-bridge/activation-state-v2'
+$ManifestSchema = 'k15-codex-bridge/production-manifest-v2'
+$ActivationStateSchema = 'k15-codex-bridge/activation-state-v3'
+$LegacyActivationStateSchema = 'k15-codex-bridge/activation-state-v2'
+$MaxRuntimeInventoryEntries = 256
+$MaxRuntimeGenerationNameLength = 255
 $script:FailureInjected = $false
 $script:PostcheckMismatchInjected = $false
 $script:UserEnvironmentMutated = $false
@@ -112,20 +116,89 @@ function Require-PinnedFile([string] $Value, [string] $PathName, [string] $Pin, 
     return $path
 }
 
+function Require-Directory([string] $Value, [string] $Name) {
+    $fullPath = Require-CanonicalAbsolutePath $Value $Name
+    Assert-NoReparsePath $fullPath $Name
+    $item = Get-Item -LiteralPath $fullPath -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item -or -not $item.PSIsContainer) { Fail "$Name must name an existing directory" }
+    return $item.FullName
+}
+
+function Get-RuntimeInventory([string] $RuntimeRoot) {
+    $root = Require-Directory $RuntimeRoot 'runtime root'
+    $inventory = [Collections.Generic.List[object]]::new()
+    $directories = @(Get-ChildItem -LiteralPath $root -Force -Directory -ErrorAction Stop | Sort-Object -Property Name)
+    if ($directories.Count -gt $MaxRuntimeInventoryEntries) { Fail 'runtime inventory exceeds the bounded entry limit' }
+    foreach ($directory in $directories) {
+        if ($directory.Name.Length -gt $MaxRuntimeGenerationNameLength) { Fail 'runtime generation name exceeds the bounded length' }
+        $isReparse = (($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+        $childPresent = $false
+        $hostPresent = $false
+        if (-not $isReparse) {
+            $childItem = Get-Item -LiteralPath (Join-Path $directory.FullName 'codex.exe') -Force -ErrorAction SilentlyContinue
+            $hostItem = Get-Item -LiteralPath (Join-Path $directory.FullName 'codex-code-mode-host.exe') -Force -ErrorAction SilentlyContinue
+            $childPresent = $null -ne $childItem -and -not $childItem.PSIsContainer
+            $hostPresent = $null -ne $hostItem -and -not $hostItem.PSIsContainer
+        }
+        $inventory.Add([ordered]@{
+            generation = [string] $directory.Name
+            codexExePresent = [bool] $childPresent
+            codeModeHostPresent = [bool] $hostPresent
+        })
+    }
+    return ,$inventory.ToArray()
+}
+
+function Assert-RuntimeInventory($Inventory, [string] $Context) {
+    if ($null -eq $Inventory) { Fail "$Context is required" }
+    $entries = @($Inventory)
+    if ($entries.Count -gt $MaxRuntimeInventoryEntries) { Fail "$Context exceeds the bounded entry limit" }
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $previous = $null
+    $normalized = [Collections.Generic.List[object]]::new()
+    foreach ($entry in $entries) {
+        Assert-ExactPropertyNames $entry @('generation', 'codexExePresent', 'codeModeHostPresent') $Context
+        if ($entry.generation -isnot [string] -or [string]::IsNullOrWhiteSpace($entry.generation)) { Fail "$Context has an invalid generation name" }
+        if ($entry.generation.Length -gt $MaxRuntimeGenerationNameLength) { Fail "$Context has an overlong generation name" }
+        if ($entry.codexExePresent -isnot [bool] -or $entry.codeModeHostPresent -isnot [bool]) { Fail "$Context has invalid presence metadata" }
+        if (-not $seen.Add($entry.generation)) { Fail "$Context contains duplicate generation names" }
+        if ($null -ne $previous -and [StringComparer]::Ordinal.Compare($previous, $entry.generation) -gt 0) { Fail "$Context is not deterministically sorted" }
+        $previous = $entry.generation
+        $normalized.Add([ordered]@{
+            generation = $entry.generation
+            codexExePresent = [bool] $entry.codexExePresent
+            codeModeHostPresent = [bool] $entry.codeModeHostPresent
+        })
+    }
+    return ,$normalized.ToArray()
+}
+
+function Test-RuntimeInventoryEqual($Expected, $Actual) {
+    $left = @($Expected)
+    $right = @($Actual)
+    if ($left.Count -ne $right.Count) { return $false }
+    for ($index = 0; $index -lt $left.Count; $index++) {
+        if (-not [StringComparer]::Ordinal.Equals($left[$index].generation, $right[$index].generation)) { return $false }
+        if ([bool] $left[$index].codexExePresent -ne [bool] $right[$index].codexExePresent) { return $false }
+        if ([bool] $left[$index].codeModeHostPresent -ne [bool] $right[$index].codeModeHostPresent) { return $false }
+    }
+    return $true
+}
+
 function Read-Manifest {
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     $required = @(
         'schema',
-        'adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'childPath',
-        'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'childSha256',
+        'adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'childPath', 'codeModeHostPath',
+        'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'childSha256', 'codeModeHostSha256',
         'approvalSinkPath'
     )
     Assert-ExactPropertyNames $manifest $required 'production manifest'
-    if ($manifest.schema -ne 'k15-codex-bridge/production-manifest-v1') { Fail 'unsupported production manifest schema' }
+    if ($manifest.schema -ne $ManifestSchema) { Fail 'unsupported production manifest schema' }
     foreach ($name in $required) {
         if ($manifest.$name -isnot [string]) { Fail "manifest field $name must be a string" }
     }
-    foreach ($name in @('adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'childPath', 'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'childSha256')) {
+    foreach ($name in @('adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'childPath', 'codeModeHostPath', 'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'childSha256', 'codeModeHostSha256')) {
         if ([string]::IsNullOrWhiteSpace([string] $manifest.$name)) { Fail "manifest field $name is required" }
     }
     $paths = [ordered]@{
@@ -135,13 +208,26 @@ function Read-Manifest {
         transparentWrapperPath = Require-PinnedFile ([string] $manifest.transparentWrapperPath) 'transparentWrapperPath' ([string] $manifest.transparentWrapperSha256) 'transparentWrapperSha256'
         bridgeCorePath = Require-PinnedFile ([string] $manifest.bridgeCorePath) 'bridgeCorePath' ([string] $manifest.bridgeCoreSha256) 'bridgeCoreSha256'
         childPath = Require-PinnedFile ([string] $manifest.childPath) 'childPath' ([string] $manifest.childSha256) 'childSha256'
+        codeModeHostPath = Require-PinnedFile ([string] $manifest.codeModeHostPath) 'codeModeHostPath' ([string] $manifest.codeModeHostSha256) 'codeModeHostSha256'
     }
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFileName($paths.childPath), 'codex.exe')) { Fail 'childPath must name codex.exe' }
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFileName($paths.codeModeHostPath), 'codex-code-mode-host.exe')) { Fail 'codeModeHostPath must name codex-code-mode-host.exe' }
+    $childGenerationDirectory = [IO.Path]::GetDirectoryName($paths.childPath)
+    $hostGenerationDirectory = [IO.Path]::GetDirectoryName($paths.codeModeHostPath)
+    if (-not [StringComparer]::OrdinalIgnoreCase.Equals($childGenerationDirectory, $hostGenerationDirectory)) { Fail 'childPath and codeModeHostPath must share one runtime generation directory' }
+    $runtimeRoot = Require-Directory ([IO.Path]::GetDirectoryName($childGenerationDirectory)) 'runtime root'
     $uniquePaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($name in $paths.Keys) {
         if (-not $uniquePaths.Add([IO.Path]::GetFullPath($paths[$name]))) { Fail "manifest path $name duplicates another executable path" }
     }
     $approvalSinkPath = Require-OptionalOutputPath ([string] $manifest.approvalSinkPath) 'approvalSinkPath'
-    return [pscustomobject]@{ Manifest = $manifest; Paths = $paths; ApprovalSinkPath = $approvalSinkPath }
+    return [pscustomobject]@{
+        Manifest = $manifest
+        Paths = $paths
+        ApprovalSinkPath = $approvalSinkPath
+        GenerationName = [IO.Path]::GetFileName($childGenerationDirectory)
+        RuntimeRoot = $runtimeRoot
+    }
 }
 
 function Get-StatePath {
@@ -339,13 +425,39 @@ function Assert-UserEnvironmentMatches($Expected, [string] $Phase) {
 function Read-ActivationState([string] $Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail 'activation state is missing' }
     $state = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    Assert-ExactPropertyNames $state @('schema', 'manifestPath', 'original') 'activation state'
-    if ($state.schema -ne $ActivationStateSchema) { Fail 'unsupported activation state schema' }
+    if ($state.schema -notin @($ActivationStateSchema, $LegacyActivationStateSchema)) { Fail 'unsupported activation state schema' }
+    if ($state.schema -eq $LegacyActivationStateSchema) {
+        Assert-ExactPropertyNames $state @('schema', 'manifestPath', 'original') 'legacy activation state'
+    } else {
+        Assert-ExactPropertyNames $state @('schema', 'manifestPath', 'manifestSha256', 'original', 'runtimeBaseline') 'activation state'
+        if ($state.manifestSha256 -isnot [string] -or $state.manifestSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+            Fail 'activation state manifestSha256 is invalid'
+        }
+        Assert-ExactPropertyNames $state.runtimeBaseline @('approvedGeneration', 'runtimeInventory') 'activation state runtimeBaseline'
+        if ($state.runtimeBaseline.approvedGeneration -isnot [string] -or [string]::IsNullOrWhiteSpace($state.runtimeBaseline.approvedGeneration)) {
+            Fail 'activation state approvedGeneration is invalid'
+        }
+        $runtimeInventory = Assert-RuntimeInventory $state.runtimeBaseline.runtimeInventory 'activation state runtimeInventory'
+    }
     if ($state.manifestPath -isnot [string] -or [string]::IsNullOrWhiteSpace($state.manifestPath)) { Fail 'activation state manifestPath is invalid' }
     Assert-ExactPropertyNames $state.original $ManagedVariables 'activation state original'
     $original = [ordered]@{}
     foreach ($name in $ManagedVariables) { $original[$name] = Assert-EnvironmentEntry $state.original.$name $name 'activation state original' }
-    return [pscustomobject]@{ ManifestPath = $state.manifestPath; Original = $original }
+    return [pscustomobject]@{
+        ManifestPath = $state.manifestPath
+        ManifestSha256 = if ($state.schema -eq $ActivationStateSchema) { ([string] $state.manifestSha256).ToLowerInvariant() } else { $null }
+        Original = $original
+        IsLegacy = $state.schema -eq $LegacyActivationStateSchema
+        RuntimeBaseline = if ($state.schema -eq $ActivationStateSchema) {
+            [pscustomobject]@{ ApprovedGeneration = $state.runtimeBaseline.approvedGeneration; RuntimeInventory = $runtimeInventory }
+        } else { $null }
+    }
+}
+
+function Write-RuntimeStatus([string] $Active, [string] $Health, [string] $Reason = '') {
+    "ACTIVE=$Active"
+    "RUNTIME_HEALTH=$Health"
+    if (-not [string]::IsNullOrEmpty($Reason)) { "REASON=$Reason" }
 }
 
 function Assert-CodexDesktopClosed {
@@ -379,17 +491,51 @@ try {
         Fail 'fake broadcast mode requires an isolated environment target'
     }
     if ($Mode -eq 'Validate') {
-        Read-Manifest | Out-Null
+        $resolved = Read-Manifest
         'VALID=YES'
         'PIN=EXACT'
+        'CODE_MODE_HOST=PINNED'
+        'SAME_GENERATION=YES'
         'MACHINE_ENV=UNCHANGED'
         'PACKAGE_FILES=UNCHANGED'
         exit 0
     }
     if ($Mode -eq 'Status') {
-        if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf)) { 'ACTIVE=NO'; exit 0 }
-        Read-ActivationState $stateFile | Out-Null
-        'ACTIVE=YES'
+        if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf)) {
+            Write-RuntimeStatus 'NO' 'INACTIVE'
+            exit 0
+        }
+        $state = Read-ActivationState $stateFile
+        if ($state.IsLegacy) {
+            Write-RuntimeStatus 'YES' 'UPDATE_REVALIDATION_REQUIRED' 'LEGACY_STATE_NO_RUNTIME_BASELINE'
+            exit 0
+        }
+        try {
+            $currentManifestPath = [IO.Path]::GetFullPath($ManifestPath)
+            if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFullPath($state.ManifestPath), $currentManifestPath)) {
+                Write-RuntimeStatus 'YES' 'UPDATE_REVALIDATION_REQUIRED' 'MANIFEST_PATH_CHANGED_SINCE_ENABLE'
+                exit 0
+            }
+            if (-not [StringComparer]::OrdinalIgnoreCase.Equals((Get-Sha256 $currentManifestPath), $state.ManifestSha256)) {
+                Write-RuntimeStatus 'YES' 'UPDATE_REVALIDATION_REQUIRED' 'MANIFEST_CHANGED_SINCE_ENABLE'
+                exit 0
+            }
+            $resolved = Read-Manifest
+            if (-not [StringComparer]::OrdinalIgnoreCase.Equals($resolved.GenerationName, $state.RuntimeBaseline.ApprovedGeneration)) {
+                Write-RuntimeStatus 'YES' 'UPDATE_REVALIDATION_REQUIRED' 'MANIFEST_GENERATION_DIFFERS_FROM_BASELINE'
+                exit 0
+            }
+            $active = Get-ActiveEnvironment $resolved
+            Assert-UserEnvironmentMatches $active 'StatusActive'
+            $currentInventory = Get-RuntimeInventory $resolved.RuntimeRoot
+            if (-not (Test-RuntimeInventoryEqual $state.RuntimeBaseline.RuntimeInventory $currentInventory)) {
+                Write-RuntimeStatus 'YES' 'UPDATE_REVALIDATION_REQUIRED' 'RUNTIME_INVENTORY_CHANGED'
+                exit 0
+            }
+            Write-RuntimeStatus 'YES' 'HEALTHY'
+        } catch {
+            Write-RuntimeStatus 'YES' 'CHILD_RUNTIME_STALE' 'APPROVED_RUNTIME_OR_ACTIVATION_INVALID'
+        }
         exit 0
     }
     if ($Mode -eq 'Enable') {
@@ -399,7 +545,17 @@ try {
         Assert-CodexDesktopClosed
         $original = [ordered]@{}
         foreach ($name in $ManagedVariables) { $original[$name] = Get-UserEnvironmentEntry $name }
-        $state = [ordered]@{ schema = $ActivationStateSchema; manifestPath = [IO.Path]::GetFullPath($ManifestPath); original = $original }
+        $runtimeInventory = Get-RuntimeInventory $resolved.RuntimeRoot
+        $state = [ordered]@{
+            schema = $ActivationStateSchema
+            manifestPath = [IO.Path]::GetFullPath($ManifestPath)
+            manifestSha256 = (Get-Sha256 ([IO.Path]::GetFullPath($ManifestPath))).ToLowerInvariant()
+            original = $original
+            runtimeBaseline = [ordered]@{
+                approvedGeneration = $resolved.GenerationName
+                runtimeInventory = $runtimeInventory
+            }
+        }
         Write-AtomicJson $stateFile $state
         try {
             $active = Get-ActiveEnvironment $resolved

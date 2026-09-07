@@ -1,5 +1,5 @@
 {
-  "schema": "k15-codex-bridge/production-manifest-v1",
+  "schema": "k15-codex-bridge/production-manifest-v2",
   "adapterPath": "C:\\Users\\<owner>\\AppData\\Local\\K15\\CodexBridge\\K15.CodexBridge.WindowsAdapter.exe",
   "adapterSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
   "nodePath": "C:\\Program Files\\nodejs\\node.exe",
@@ -10,7 +10,9 @@
   "transparentWrapperSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
   "bridgeCorePath": "C:\\Users\\<owner>\\AppData\\Local\\K15\\CodexBridge\\bridge-core.mjs",
   "bridgeCoreSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
-  "childPath": "C:\\Users\\<owner>\\AppData\\Local\\Programs\\Codex\\codex.exe",
+  "childPath": "C:\\Users\\<owner>\\AppData\\Local\\OpenAI\\Codex\\bin\\<owner-reviewed-generation>\\codex.exe",
   "childSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
+  "codeModeHostPath": "C:\\Users\\<owner>\\AppData\\Local\\OpenAI\\Codex\\bin\\<owner-reviewed-generation>\\codex-code-mode-host.exe",
+  "codeModeHostSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
   "approvalSinkPath": ""
 }
