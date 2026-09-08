@@ -57,6 +57,9 @@ internal static class Program
             ("connect racing stop is serialized by lifecycle gate", RuntimeDeviceTests.ConnectRacingStopIsSerializedByLifecycleGate),
             ("shared client projects one Runtime snapshot", ClientTests.SharedClientProjectsOneSnapshotAndFiltersDiagnostics),
             ("client failures are bounded and reconnectable", ClientTests.ClientFailuresAreBoundedAndReconnectable),
+            ("native authority health remains separate", () => { ClientTests.NativeAuthorityHealthRemainsSeparate(); return Task.CompletedTask; }),
+            ("control commands remain bounded Runtime commands", ClientTests.ControlCommandsRemainBoundedRuntimeCommands),
+            ("real named pipe reconnect preserves runtime ownership", ClientTests.RealNamedPipeRuntimeRestartReconnectsWithoutMutation),
         };
 
         var failures = 0;

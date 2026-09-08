@@ -15,7 +15,8 @@ public sealed record ThreadRuntimeObservation
         DateTimeOffset? observedUtc = null,
         RuntimeObservationSource source = RuntimeObservationSource.Native,
         ThreadFocusHint focusHint = ThreadFocusHint.Unknown,
-        ThreadClassification classification = ThreadClassification.User)
+        ThreadClassification classification = ThreadClassification.User,
+        string? workingDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
         ThreadId = threadId;
@@ -25,6 +26,7 @@ public sealed record ThreadRuntimeObservation
         Source = source;
         FocusHint = focusHint;
         Classification = classification;
+        WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? null : workingDirectory.Length <= 1024 ? workingDirectory : throw new ArgumentException("Working directory is too long.", nameof(workingDirectory));
     }
 
     public string ThreadId { get; }
@@ -34,6 +36,7 @@ public sealed record ThreadRuntimeObservation
     public RuntimeObservationSource Source { get; }
     public ThreadFocusHint FocusHint { get; }
     public ThreadClassification Classification { get; }
+    public string? WorkingDirectory { get; }
 
     private static ImmutableArray<ThreadActiveFlag> CanonicalizeFlags(
         IEnumerable<ThreadActiveFlag>? activeFlags) =>
@@ -169,6 +172,7 @@ public sealed class RuntimeStateEngine
                 LastObservedUtc = observation.ObservedUtc,
                 Classification = observation.Classification,
                 FocusHint = observation.FocusHint,
+                WorkingDirectory = observation.WorkingDirectory,
             };
 
             var decision = CompareEvidence(
@@ -381,7 +385,7 @@ public sealed class RuntimeStateEngine
     }
 
     private static string RuntimeFingerprint(ThreadRuntimeObservation observation) =>
-        $"{(int)observation.RuntimeStatus}:{string.Join(',', observation.ActiveFlags.Select(flag => (int)flag))}";
+        $"{(int)observation.RuntimeStatus}:{string.Join(',', observation.ActiveFlags.Select(flag => (int)flag))}:{observation.WorkingDirectory}";
 
     private static string AttentionFingerprint(ThreadAttentionState attention) =>
         ((int)attention).ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -396,6 +400,7 @@ public sealed class RuntimeStateEngine
         DateTimeOffset? LastAttentionObservedUtc,
         ThreadClassification Classification,
         ThreadFocusHint FocusHint,
+        string? WorkingDirectory,
         string AttentionFingerprint)
     {
         public static ThreadState Create(string threadId) => new(
@@ -408,6 +413,7 @@ public sealed class RuntimeStateEngine
             null,
             ThreadClassification.User,
             ThreadFocusHint.Unknown,
+            null,
             string.Empty);
 
         public static ThreadState FromSnapshot(ThreadSnapshot snapshot)
@@ -417,7 +423,8 @@ public sealed class RuntimeStateEngine
                 snapshot.RuntimeStatus,
                 snapshot.ActiveFlags,
                 snapshot.LastObservedUtc,
-                classification: snapshot.Classification);
+                classification: snapshot.Classification,
+                workingDirectory: snapshot.WorkingDirectory);
             return new ThreadState(
                 snapshot.ThreadId,
                 snapshot.RuntimeStatus,
@@ -428,6 +435,7 @@ public sealed class RuntimeStateEngine
                 snapshot.LastAttentionObservedUtc,
                 snapshot.Classification,
                 snapshot.FocusHint,
+                snapshot.WorkingDirectory,
                 RuntimeStateEngine.AttentionFingerprint(snapshot.Attention));
         }
 
@@ -443,7 +451,8 @@ public sealed class RuntimeStateEngine
                 Attention,
                 LastAttentionObservedUtc,
                 Classification,
-                FocusHint);
+                FocusHint,
+                WorkingDirectory);
         }
 
         private static RuntimeState Evaluate(

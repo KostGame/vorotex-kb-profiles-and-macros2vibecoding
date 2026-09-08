@@ -16,7 +16,8 @@ public sealed record NativeThreadStatusEvent(
     ThreadRuntimeStatus Status,
     ImmutableArray<ThreadActiveFlag> ActiveFlags,
     DateTimeOffset ObservedUtc,
-    ThreadClassification Classification = ThreadClassification.User)
+    ThreadClassification Classification = ThreadClassification.User,
+    string? WorkingDirectory = null)
 {
     public bool IsServiceOrCanary => Classification != ThreadClassification.User;
 }
@@ -36,7 +37,7 @@ public static class NativeThreadStatusAdapter
 {
     private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
     {
-        "schemaVersion", "source", "event", "threadId", "status", "activeFlags", "timestampUtc", "classification",
+        "schemaVersion", "source", "event", "threadId", "status", "activeFlags", "timestampUtc", "classification", "workingDirectory",
     };
 
     public static NativeThreadStatusParseResult Parse(string json)
@@ -141,6 +142,19 @@ public static class NativeThreadStatusAdapter
                 }
             }
 
+            string? workingDirectory = null;
+            if (root.TryGetProperty("workingDirectory", out var workingDirectoryElement))
+            {
+                if (workingDirectoryElement.ValueKind != JsonValueKind.String)
+                    diagnostics.Add("INVALID_NATIVE_WORKING_DIRECTORY");
+                else
+                {
+                    workingDirectory = workingDirectoryElement.GetString();
+                    if (!string.IsNullOrWhiteSpace(workingDirectory) && workingDirectory.Length > 1024)
+                        diagnostics.Add("NATIVE_WORKING_DIRECTORY_TOO_LONG");
+                }
+            }
+
             if (diagnostics.Count != 0)
             {
                 return Invalid(diagnostics);
@@ -148,7 +162,7 @@ public static class NativeThreadStatusAdapter
 
             return new NativeThreadStatusParseResult(
                 new NativeThreadStatusEvent(schemaVersion!, source!, eventName!, threadId!, status,
-                    CanonicalizeFlags(flags), parsedTimestamp, classification),
+                    CanonicalizeFlags(flags), parsedTimestamp, classification, workingDirectory),
                 ImmutableArray<string>.Empty);
         }
         catch (JsonException)
@@ -165,7 +179,8 @@ public static class NativeThreadStatusAdapter
             nativeEvent.Status,
             nativeEvent.ActiveFlags,
             nativeEvent.ObservedUtc,
-            classification: nativeEvent.Classification);
+            classification: nativeEvent.Classification,
+            workingDirectory: nativeEvent.WorkingDirectory);
     }
 
     private static NativeThreadStatusParseResult Invalid(

@@ -33,7 +33,9 @@ internal sealed class TrayContext : ApplicationContext
     private async Task RefreshAsync()
     {
         _projection = await _runtime.ReadAsync();
-        _icon.Text = $"K15 {_projection.State} · W {_projection.WaitingCount} · {_projection.Health}"[..Math.Min(63, $"K15 {_projection.State} · W {_projection.WaitingCount} · {_projection.Health}".Length)];
+        var health = _projection.Degraded ? $"DEGRADED {_projection.NativeAuthorityHealth.Detail}" : "READY";
+        var text = $"K15 {_projection.State} · W {_projection.WaitingCount} · {health}";
+        _icon.Text = text[..Math.Min(63, text.Length)];
     }
     private async Task ToggleRgbAsync() => await _runtime.Client.SendCommandAsync("set_rgb_enabled", enabled: !_projection.Rgb.Enabled);
     private static void Launch(string name) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(name) { UseShellExecute = true }); } catch { } }
