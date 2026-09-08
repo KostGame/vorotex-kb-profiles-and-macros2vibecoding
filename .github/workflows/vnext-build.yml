@@ -32,12 +32,33 @@ jobs:
 
       - name: Restore vNext
         run: dotnet restore vnext/Vorotex.K15.Runtime.Tests/Vorotex.K15.Runtime.Tests.csproj
+      - name: Restore vNext UI clients
+        run: |
+          dotnet restore vnext/Vorotex.K15.StatusTray/Vorotex.K15.StatusTray.csproj
+          dotnet restore vnext/Vorotex.K15.ControlCenter/Vorotex.K15.ControlCenter.csproj
+          dotnet restore vnext/Vorotex.K15.LiveDashboard/Vorotex.K15.LiveDashboard.csproj
 
       - name: Build vNext
         run: dotnet build vnext/Vorotex.K15.Runtime.Tests/Vorotex.K15.Runtime.Tests.csproj -c Release --no-restore
 
       - name: Run vNext tests
         run: dotnet run --project vnext/Vorotex.K15.Runtime.Tests/Vorotex.K15.Runtime.Tests.csproj -c Release --no-build
+
+      - name: Dashboard #138 formatter regression
+        run: node vnext/Vorotex.K15.LiveDashboard/tests/dashboard-formatter.test.cjs
+
+      - name: Build vNext Status Tray
+        run: dotnet build vnext/Vorotex.K15.StatusTray/Vorotex.K15.StatusTray.csproj -c Release --no-restore
+      - name: Build vNext Control Center
+        run: dotnet build vnext/Vorotex.K15.ControlCenter/Vorotex.K15.ControlCenter.csproj -c Release --no-restore
+      - name: Build vNext Live Dashboard
+        run: dotnet build vnext/Vorotex.K15.LiveDashboard/Vorotex.K15.LiveDashboard.csproj -c Release --no-restore
+      - name: Publish vNext Status Tray win-x64
+        run: dotnet publish vnext/Vorotex.K15.StatusTray/Vorotex.K15.StatusTray.csproj -c Release --no-restore
+      - name: Publish vNext Control Center win-x64
+        run: dotnet publish vnext/Vorotex.K15.ControlCenter/Vorotex.K15.ControlCenter.csproj -c Release --no-restore
+      - name: Publish vNext Live Dashboard win-x64
+        run: dotnet publish vnext/Vorotex.K15.LiveDashboard/Vorotex.K15.LiveDashboard.csproj -c Release --no-restore
 
       - name: Legacy device ownership and protocol smoke (non-HID)
         shell: powershell

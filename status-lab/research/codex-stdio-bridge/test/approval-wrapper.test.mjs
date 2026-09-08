@@ -139,3 +139,22 @@ test('opt-in wrapper process boundary delivers sanitized native state to Runtime
   assert.doesNotMatch(await readFile(capturePath, 'utf8'), /opaque-client-bytes|fake-child|prompt|command/);
   await rm(root, { recursive: true, force: true });
 });
+
+test('runtime process boundary forwards metadata cwd and drops unrelated fields', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'k15-codex-metadata-boundary-'));
+  const capturePath = path.join(root, 'runtime-records.jsonl');
+  const stdin = new PassThrough(); const stdout = new PassThrough(); const stderr = new PassThrough();
+  const output = collect(stdout);
+  const runtimeScript = "let value=''; process.stdin.on('data', chunk => value += chunk); process.stdin.on('end', () => require('node:fs').writeFileSync(process.argv[1], value));";
+  const run = runApprovalWrapper({ argv: ['app-server'], env: {
+    CODEX_BRIDGE_CHILD_PATH: fakeChild, FAKE_CHILD_MODE: 'metadata', [RUNTIME_COMMAND_ENV]: process.execPath
+  }, runtimeCommandArgs: ['-e', runtimeScript, capturePath], stdin, stdout, stderr,
+  spawnProcess: (childPath, childArgs, options) => spawn(process.execPath, [childPath, ...childArgs], { ...options }) });
+  stdout.once('data', () => stdin.end(Buffer.from('opaque-client-bytes')));
+  assert.equal(await run, 0); await output;
+  const records = (await readFile(capturePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(records[0], { schemaVersion: 'k15-codex-thread-metadata/v1', source: 'codex_stdio_bridge',
+    event: 'thread_metadata_changed', threadId: 'thread-metadata-fixture', workingDirectory: 'G:\\Мой диск\\AgentLoop Exchange\\inbox' });
+  assert.doesNotMatch(await readFile(capturePath, 'utf8'), /SECRET|PRIVATE|prompt|model/);
+  await rm(root, { recursive: true, force: true });
+});

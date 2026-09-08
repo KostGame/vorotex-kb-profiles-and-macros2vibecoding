@@ -12,5 +12,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Vorotex.K15.Runtime.Contracts\Vorotex.K15.Runtime.Contracts.csproj" />
     <ProjectReference Include="..\Vorotex.K15.Runtime\Vorotex.K15.Runtime.csproj" />
+    <ProjectReference Include="..\Vorotex.K15.Clients\Vorotex.K15.Clients.csproj" />
   </ItemGroup>
 </Project>

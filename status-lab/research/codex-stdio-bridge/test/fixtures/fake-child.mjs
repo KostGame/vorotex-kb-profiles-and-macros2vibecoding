@@ -35,6 +35,13 @@ if (mode === 'argv') {
     emittedAtMs: 1788854400000
   }) + '\n');
   process.stdin.pipe(process.stdout);
+} else if (mode === 'metadata') {
+  process.stdout.write(JSON.stringify({
+    jsonrpc: '2.0', method: 'thread/started', params: {
+      thread: { id: 'thread-metadata-fixture', cwd: 'G:\\Мой диск\\AgentLoop Exchange\\inbox', prompt: 'SECRET', model: 'PRIVATE' }
+    }
+  }) + '\n');
+  process.stdin.pipe(process.stdout);
 } else {
   process.stderr.write('fake-child: unsupported test mode\n');
   process.exit(64);

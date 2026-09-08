@@ -31,7 +31,7 @@ internal static class Program
             {
                 string? line;
                 while ((line = await Console.In.ReadLineAsync(shutdown.Token).ConfigureAwait(false)) is not null)
-                    host.ApplyNativeStatusJson(line);
+                    host.ApplyNativeRuntimeRecordJson(line);
                 host.Stop();
             }
             else

@@ -79,6 +79,20 @@ public sealed record ThreadAttentionObservation
     public RuntimeObservationSource Source { get; }
 }
 
+public sealed record ThreadMetadataObservation
+{
+    public ThreadMetadataObservation(string threadId, string workingDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        if (System.Text.Encoding.UTF8.GetByteCount(workingDirectory) > 1024) throw new ArgumentException("Working directory is too long.", nameof(workingDirectory));
+        ThreadId = threadId;
+        WorkingDirectory = workingDirectory;
+    }
+    public string ThreadId { get; }
+    public string WorkingDirectory { get; }
+}
+
 public sealed record StateEngineResult(
     RuntimeSnapshot Snapshot,
     ImmutableArray<string> Diagnostics)
@@ -96,6 +110,7 @@ public sealed class RuntimeStateEngine
     private readonly object _gate = new();
     private readonly string _runtimeVersion;
     private Dictionary<string, ThreadState> _threads;
+    private readonly Dictionary<string, string> _pendingWorkingDirectories = new(StringComparer.Ordinal);
     private RuntimeSnapshot _snapshot;
 
     public RuntimeStateEngine(
@@ -169,6 +184,7 @@ public sealed class RuntimeStateEngine
                 LastObservedUtc = observation.ObservedUtc,
                 Classification = observation.Classification,
                 FocusHint = observation.FocusHint,
+                WorkingDirectory = current.WorkingDirectory,
             };
 
             var decision = CompareEvidence(
@@ -218,6 +234,20 @@ public sealed class RuntimeStateEngine
             _threads[observation.ThreadId] = candidate;
             _snapshot = BuildSnapshot();
             return Result(diagnostics);
+        }
+    }
+
+    public StateEngineResult Apply(ThreadMetadataObservation observation)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        lock (_gate)
+        {
+            if (_threads.TryGetValue(observation.ThreadId, out var current))
+                _threads[observation.ThreadId] = current with { WorkingDirectory = observation.WorkingDirectory };
+            else
+                _pendingWorkingDirectories[observation.ThreadId] = observation.WorkingDirectory;
+            _snapshot = BuildSnapshot();
+            return new(_snapshot, ImmutableArray<string>.Empty);
         }
     }
 
@@ -279,7 +309,8 @@ public sealed class RuntimeStateEngine
             return state;
         }
 
-        state = ThreadState.Create(threadId);
+        var workingDirectory = _pendingWorkingDirectories.Remove(threadId, out var pending) ? pending : null;
+        state = ThreadState.Create(threadId, workingDirectory);
         _threads.Add(threadId, state);
         return state;
     }
@@ -396,9 +427,10 @@ public sealed class RuntimeStateEngine
         DateTimeOffset? LastAttentionObservedUtc,
         ThreadClassification Classification,
         ThreadFocusHint FocusHint,
+        string? WorkingDirectory,
         string AttentionFingerprint)
     {
-        public static ThreadState Create(string threadId) => new(
+        public static ThreadState Create(string threadId, string? workingDirectory = null) => new(
             threadId,
             ThreadRuntimeStatus.Unknown,
             ImmutableArray<ThreadActiveFlag>.Empty,
@@ -408,6 +440,7 @@ public sealed class RuntimeStateEngine
             null,
             ThreadClassification.User,
             ThreadFocusHint.Unknown,
+            workingDirectory,
             string.Empty);
 
         public static ThreadState FromSnapshot(ThreadSnapshot snapshot)
@@ -428,6 +461,7 @@ public sealed class RuntimeStateEngine
                 snapshot.LastAttentionObservedUtc,
                 snapshot.Classification,
                 snapshot.FocusHint,
+                snapshot.WorkingDirectory,
                 RuntimeStateEngine.AttentionFingerprint(snapshot.Attention));
         }
 
@@ -443,7 +477,8 @@ public sealed class RuntimeStateEngine
                 Attention,
                 LastAttentionObservedUtc,
                 Classification,
-                FocusHint);
+                FocusHint,
+                WorkingDirectory);
         }
 
         private static RuntimeState Evaluate(

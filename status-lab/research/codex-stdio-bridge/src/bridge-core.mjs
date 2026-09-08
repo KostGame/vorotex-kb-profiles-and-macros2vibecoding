@@ -13,6 +13,7 @@ const MAX_FIELD_BYTES = 1024;
 export const APPROVAL_SCHEMA_VERSION = 'k15-codex-approval/v1';
 export const COMPLETION_SCHEMA_VERSION = 'k15-codex-completion/v1';
 export const THREAD_STATUS_SCHEMA_VERSION = 'k15-codex-thread-status/v1';
+export const THREAD_METADATA_SCHEMA_VERSION = 'k15-codex-thread-metadata/v1';
 const COMPLETION_STATUSES = new Set(['completed', 'interrupted', 'failed']);
 const THREAD_STATUSES = new Set(['notLoaded', 'idle', 'active', 'systemError']);
 const THREAD_FLAGS = new Set(['waitingOnApproval', 'waitingOnUserInput']);
@@ -292,6 +293,46 @@ export class NativeThreadStatusObserver {
   }
 }
 
+/**
+ * Reads only the proven App Server thread/started metadata envelope. This is
+ * deliberately a separate stream from thread/status/changed: cwd is
+ * presentation metadata and never participates in status ordering/health.
+ */
+export class NativeThreadMetadataObserver {
+  #sink; #partial = Buffer.alloc(0);
+  constructor({ metadataSink = () => {} } = {}) { this.#sink = metadataSink; }
+  observeServerChunk(chunk) {
+    const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const combined = this.#partial.length === 0 ? input : Buffer.concat([this.#partial, input]);
+    let start = 0;
+    for (let index = 0; index < combined.length; index += 1) {
+      if (combined[index] !== 0x0a) continue;
+      const line = combined.subarray(start, index).toString('utf8');
+      if (Buffer.byteLength(line, 'utf8') > 0 && Buffer.byteLength(line, 'utf8') <= MAX_PARTIAL_BYTES) {
+        try { this.#observeMessage(JSON.parse(line)); } catch { /* transparent */ }
+      }
+      start = index + 1;
+    }
+    const remainder = combined.subarray(start);
+    this.#partial = remainder.length > MAX_PARTIAL_BYTES ? Buffer.alloc(0) : Buffer.from(remainder);
+  }
+  #observeMessage(message) {
+    if (message?.method !== 'thread/started' || !message.params?.thread ||
+        typeof message.params.thread !== 'object' || Array.isArray(message.params.thread)) return;
+    const thread = message.params.thread;
+    const threadId = optionalString(thread.id);
+    const workingDirectory = optionalString(thread.cwd);
+    if (!threadId || !workingDirectory) return;
+    const event = { schemaVersion: THREAD_METADATA_SCHEMA_VERSION, source: 'codex_stdio_bridge',
+      event: 'thread_metadata_changed', threadId, workingDirectory };
+    try {
+      // Metadata is optional presentation data: consume both synchronous and
+      // asynchronous delivery failures without creating a retry backlog.
+      Promise.resolve(this.#sink(event)).catch(() => {});
+    } catch { /* fail-open; never affect transparent transport or status */ }
+  }
+}
+
 export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory } = {}) {
   if (typeof filePath !== 'string' || filePath.length === 0) return () => {};
 
@@ -335,11 +376,13 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
 export function connectTransparentBridge({ clientInput, clientOutput, childInput, childOutput, childStderr, stderrOutput, telemetrySink, authoritySink }) {
   const observer = new ApprovalObserver({ telemetrySink });
   const nativeObserver = new NativeThreadStatusObserver({ authoritySink });
+  const metadataObserver = new NativeThreadMetadataObserver({ metadataSink: authoritySink });
   clientInput.on('data', (chunk) => observer.observeClientChunk(chunk));
-  childOutput.on('data', (chunk) => { observer.observeServerChunk(chunk); nativeObserver.observeServerChunk(chunk); });
+  childOutput.on('data', (chunk) => { observer.observeServerChunk(chunk); nativeObserver.observeServerChunk(chunk); metadataObserver.observeServerChunk(chunk); });
   clientInput.pipe(childInput);
   childOutput.pipe(clientOutput);
   if (childStderr && stderrOutput) childStderr.pipe(stderrOutput);
   observer.nativeStatusObserver = nativeObserver;
+  observer.nativeThreadMetadataObserver = metadataObserver;
   return observer;
 }

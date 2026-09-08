@@ -31,6 +31,8 @@ The vNext runtime is the future sole owner of normalized state. UI processes wil
 
 `RuntimeIpcServer` exposes a newline-framed `k15-runtime-ipc/v1` request/response surface over a Windows current-user-only named pipe. It supports `ping`, `snapshot`, and the bounded explicit device/RGB commands `scan_devices`, `connect_device`, `disconnect_device`, `reconnect_device`, `set_rgb_enabled`, and `restore_lighting`. Candidate paths remain private to the runtime; projections are bounded and allowlisted.
 
+`Vorotex.K15.Clients` is the shared bounded client/projection layer for the side-by-side `Vorotex.K15.StatusTray`, `Vorotex.K15.ControlCenter`, and `Vorotex.K15.LiveDashboard` artifacts. They read Runtime snapshots, project counts directly from Runtime-provided per-thread states, filter service/canary threads by default, and route device/RGB actions only through Runtime IPC. The dashboard uses UTF-8 JSON and validates nullable timestamps before display; it never reads journals or hooks.
+
 The host does not auto-connect, launch or own Codex, activate physical device ownership, mutate the host, install itself, or configure autostart. Physical HID is behind an explicit backend interface; the default host backend is disabled and all tests use deterministic fakes. The bridge is an existing external stdio surface; IPC is a thin projection of Runtime-owned state and never parses bridge/journal data.
 
 ## Legacy separation
