@@ -15,8 +15,7 @@ public sealed record ThreadRuntimeObservation
         DateTimeOffset? observedUtc = null,
         RuntimeObservationSource source = RuntimeObservationSource.Native,
         ThreadFocusHint focusHint = ThreadFocusHint.Unknown,
-        ThreadClassification classification = ThreadClassification.User,
-        string? workingDirectory = null)
+        ThreadClassification classification = ThreadClassification.User)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
         ThreadId = threadId;
@@ -26,7 +25,6 @@ public sealed record ThreadRuntimeObservation
         Source = source;
         FocusHint = focusHint;
         Classification = classification;
-        WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? null : workingDirectory.Length <= 1024 ? workingDirectory : throw new ArgumentException("Working directory is too long.", nameof(workingDirectory));
     }
 
     public string ThreadId { get; }
@@ -36,7 +34,6 @@ public sealed record ThreadRuntimeObservation
     public RuntimeObservationSource Source { get; }
     public ThreadFocusHint FocusHint { get; }
     public ThreadClassification Classification { get; }
-    public string? WorkingDirectory { get; }
 
     private static ImmutableArray<ThreadActiveFlag> CanonicalizeFlags(
         IEnumerable<ThreadActiveFlag>? activeFlags) =>
@@ -82,6 +79,20 @@ public sealed record ThreadAttentionObservation
     public RuntimeObservationSource Source { get; }
 }
 
+public sealed record ThreadMetadataObservation
+{
+    public ThreadMetadataObservation(string threadId, string workingDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        if (System.Text.Encoding.UTF8.GetByteCount(workingDirectory) > 1024) throw new ArgumentException("Working directory is too long.", nameof(workingDirectory));
+        ThreadId = threadId;
+        WorkingDirectory = workingDirectory;
+    }
+    public string ThreadId { get; }
+    public string WorkingDirectory { get; }
+}
+
 public sealed record StateEngineResult(
     RuntimeSnapshot Snapshot,
     ImmutableArray<string> Diagnostics)
@@ -99,6 +110,7 @@ public sealed class RuntimeStateEngine
     private readonly object _gate = new();
     private readonly string _runtimeVersion;
     private Dictionary<string, ThreadState> _threads;
+    private readonly Dictionary<string, string> _pendingWorkingDirectories = new(StringComparer.Ordinal);
     private RuntimeSnapshot _snapshot;
 
     public RuntimeStateEngine(
@@ -172,7 +184,7 @@ public sealed class RuntimeStateEngine
                 LastObservedUtc = observation.ObservedUtc,
                 Classification = observation.Classification,
                 FocusHint = observation.FocusHint,
-                WorkingDirectory = observation.WorkingDirectory,
+                WorkingDirectory = current.WorkingDirectory,
             };
 
             var decision = CompareEvidence(
@@ -222,6 +234,20 @@ public sealed class RuntimeStateEngine
             _threads[observation.ThreadId] = candidate;
             _snapshot = BuildSnapshot();
             return Result(diagnostics);
+        }
+    }
+
+    public StateEngineResult Apply(ThreadMetadataObservation observation)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        lock (_gate)
+        {
+            if (_threads.TryGetValue(observation.ThreadId, out var current))
+                _threads[observation.ThreadId] = current with { WorkingDirectory = observation.WorkingDirectory };
+            else
+                _pendingWorkingDirectories[observation.ThreadId] = observation.WorkingDirectory;
+            _snapshot = BuildSnapshot();
+            return new(_snapshot, ImmutableArray<string>.Empty);
         }
     }
 
@@ -283,7 +309,8 @@ public sealed class RuntimeStateEngine
             return state;
         }
 
-        state = ThreadState.Create(threadId);
+        var workingDirectory = _pendingWorkingDirectories.Remove(threadId, out var pending) ? pending : null;
+        state = ThreadState.Create(threadId, workingDirectory);
         _threads.Add(threadId, state);
         return state;
     }
@@ -385,7 +412,7 @@ public sealed class RuntimeStateEngine
     }
 
     private static string RuntimeFingerprint(ThreadRuntimeObservation observation) =>
-        $"{(int)observation.RuntimeStatus}:{string.Join(',', observation.ActiveFlags.Select(flag => (int)flag))}:{observation.WorkingDirectory}";
+        $"{(int)observation.RuntimeStatus}:{string.Join(',', observation.ActiveFlags.Select(flag => (int)flag))}";
 
     private static string AttentionFingerprint(ThreadAttentionState attention) =>
         ((int)attention).ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -403,7 +430,7 @@ public sealed class RuntimeStateEngine
         string? WorkingDirectory,
         string AttentionFingerprint)
     {
-        public static ThreadState Create(string threadId) => new(
+        public static ThreadState Create(string threadId, string? workingDirectory = null) => new(
             threadId,
             ThreadRuntimeStatus.Unknown,
             ImmutableArray<ThreadActiveFlag>.Empty,
@@ -413,7 +440,7 @@ public sealed class RuntimeStateEngine
             null,
             ThreadClassification.User,
             ThreadFocusHint.Unknown,
-            null,
+            workingDirectory,
             string.Empty);
 
         public static ThreadState FromSnapshot(ThreadSnapshot snapshot)
@@ -423,8 +450,7 @@ public sealed class RuntimeStateEngine
                 snapshot.RuntimeStatus,
                 snapshot.ActiveFlags,
                 snapshot.LastObservedUtc,
-                classification: snapshot.Classification,
-                workingDirectory: snapshot.WorkingDirectory);
+                classification: snapshot.Classification);
             return new ThreadState(
                 snapshot.ThreadId,
                 snapshot.RuntimeStatus,

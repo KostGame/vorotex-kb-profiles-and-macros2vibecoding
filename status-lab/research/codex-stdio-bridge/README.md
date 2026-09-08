@@ -128,3 +128,18 @@ boundary (`VOROTEX_K15_RUNTIME_NATIVE_STATUS_STDIN=1`) and owns all state
 mapping. The approval wrapper creates that process boundary only when an
 absolute `CODEX_BRIDGE_RUNTIME_COMMAND` is explicitly supplied; it is disabled
 by default and is not activated by this repository.
+# Codex stdio bridge
+
+## Proven Runtime metadata path
+
+The bridge reads `params.thread.id` and `params.thread.cwd` only from the
+Codex App Server `thread/started` notification. The App Server protocol defines
+`Thread.cwd` as the captured working directory and `thread/started` carries the
+thread object. The bridge emits these two bounded UTF-8 values as the separate
+versioned `k15-codex-thread-metadata/v1` event. It never derives cwd from
+status, prompts, tool items, model data, or arbitrary RPC content.
+
+`thread/status/changed` remains the native status authority path; metadata is
+merged by exact thread id in Runtime and cannot affect status ordering or
+authority health. Stdio remains byte-transparent, and the Runtime process
+boundary is opt-in and hidden by default.

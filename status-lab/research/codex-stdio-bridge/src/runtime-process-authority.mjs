@@ -4,6 +4,7 @@ import path from 'node:path';
 export const RUNTIME_COMMAND_ENV = 'CODEX_BRIDGE_RUNTIME_COMMAND';
 export const RUNTIME_STATUS_STDIN_ENV = 'VOROTEX_K15_RUNTIME_NATIVE_STATUS_STDIN';
 export const AUTHORITY_HEALTH_SCHEMA_VERSION = 'k15-codex-authority-health/v1';
+const THREAD_METADATA_SCHEMA_VERSION = 'k15-codex-thread-metadata/v1';
 const REASONS = new Set([
   'NATIVE_AUTHORITY_DEGRADED_OVERFLOW',
   'NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE',
@@ -17,6 +18,14 @@ function requireAbsoluteCommand(value) {
 }
 
 function sanitizeEvent(event) {
+  if (event?.schemaVersion === THREAD_METADATA_SCHEMA_VERSION && event?.event === 'thread_metadata_changed') {
+    if (event.source !== 'codex_stdio_bridge' || typeof event.threadId !== 'string' ||
+        typeof event.workingDirectory !== 'string' || event.threadId.length === 0 ||
+        event.workingDirectory.length === 0 || Buffer.byteLength(event.threadId, 'utf8') > 1024 ||
+        Buffer.byteLength(event.workingDirectory, 'utf8') > 1024) throw new Error('invalid thread metadata event');
+    return { schemaVersion: THREAD_METADATA_SCHEMA_VERSION, source: event.source,
+      event: event.event, threadId: event.threadId, workingDirectory: event.workingDirectory };
+  }
   const sanitized = {
     schemaVersion: event?.schemaVersion,
     source: event?.source,

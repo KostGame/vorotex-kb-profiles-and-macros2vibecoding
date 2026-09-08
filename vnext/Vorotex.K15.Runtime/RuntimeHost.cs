@@ -62,6 +62,18 @@ public sealed class RuntimeHost : IDisposable
         }
     }
 
+    public NativeStatusTransportResult ApplyNativeThreadMetadataJson(string json)
+    {
+        lock (_gate) return _nativeStatusTransport.AcceptMetadata(json);
+    }
+
+    public NativeStatusTransportResult ApplyNativeRuntimeRecordJson(string json)
+    {
+        if (json.Contains("\"k15-codex-thread-metadata/v1\"", StringComparison.Ordinal))
+            return ApplyNativeThreadMetadataJson(json);
+        return ApplyNativeStatusJson(json);
+    }
+
     private RuntimeIpcProtocol.RuntimeIpcCommandResult HandleDeviceCommand(string command, string? candidateId, bool? enabled)
     {
         lock (_gate)

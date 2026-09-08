@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { ApprovalObserver, NativeThreadStatusObserver, connectTransparentBridge } from '../src/bridge-core.mjs';
+import { ApprovalObserver, NativeThreadStatusObserver, NativeThreadMetadataObserver, connectTransparentBridge } from '../src/bridge-core.mjs';
 
 const request = (method, id, params = {}) => JSON.stringify({ jsonrpc: '2.0', id, method, params });
 const commandRequest = (id, extras = {}) => request('item/commandExecution/requestApproval', id, extras);
@@ -70,6 +70,24 @@ test('native status notification becomes bounded ordered authority events', asyn
   ].sort());
   assert.equal(observer.authorityHealth().healthy, true);
   assert.equal(events[0].classification, 'canary');
+});
+
+test('proven thread/started metadata emits only bounded exact Unicode cwd', () => {
+  const events = [];
+  const observer = new NativeThreadMetadataObserver({ metadataSink: event => events.push(event) });
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'thread/started', params: {
+    thread: { id: 'thread-metadata', cwd: 'G:\\Мой диск\\AgentLoop Exchange\\inbox', model: 'PRIVATE', prompt: 'SECRET' }
+  } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/started', params: {
+    thread: { id: 'thread-private', cwd: 'G:\\ok', turns: ['PRIVATE'] }
+  } }) + '\n'));
+  assert.deepEqual(events, [{ schemaVersion: 'k15-codex-thread-metadata/v1', source: 'codex_stdio_bridge',
+    event: 'thread_metadata_changed', threadId: 'thread-metadata', workingDirectory: 'G:\\Мой диск\\AgentLoop Exchange\\inbox' },
+  { schemaVersion: 'k15-codex-thread-metadata/v1', source: 'codex_stdio_bridge',
+    event: 'thread_metadata_changed', threadId: 'thread-private', workingDirectory: 'G:\\ok' }]);
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE|SECRET|prompt|model|turns/);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/started', params: { thread: { id: 'bad', cwd: 'x'.repeat(1025) } } }) + '\n'));
+  assert.equal(events.length, 2);
 });
 
 test('exact non-active ThreadStatus union shapes are accepted and sanitized', async () => {

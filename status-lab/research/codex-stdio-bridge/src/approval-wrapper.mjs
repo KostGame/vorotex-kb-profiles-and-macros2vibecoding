@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   ApprovalObserver,
   NativeThreadStatusObserver,
+  NativeThreadMetadataObserver,
   createSanitizedJsonlSink
 } from './bridge-core.mjs';
 import { RUNTIME_COMMAND_ENV, createRuntimeProcessAuthoritySink } from './runtime-process-authority.mjs';
@@ -83,6 +84,9 @@ export async function runApprovalWrapper(options = {}) {
     classificationResolver, receiptClock,
     authorityDegraded: reason => runtimeBoundary?.markDegraded(reason)
   });
+  const nativeThreadMetadataObserver = new NativeThreadMetadataObserver({
+    metadataSink: authoritySink ?? runtimeBoundary?.sink
+  });
 
   try {
     return await runTransparentWrapper({
@@ -93,6 +97,7 @@ export async function runApprovalWrapper(options = {}) {
       onServerChunk: (chunk) => {
         observer.observeServerChunk(chunk);
         nativeStatusObserver.observeServerChunk(chunk);
+        nativeThreadMetadataObserver.observeServerChunk(chunk);
       }
     });
   } finally {

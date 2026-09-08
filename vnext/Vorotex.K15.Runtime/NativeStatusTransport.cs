@@ -50,6 +50,14 @@ public sealed class NativeStatusTransport
         var result = _engine.Apply(NativeThreadStatusAdapter.ToObservation(parsed.Event!));
         return new(true, result.Snapshot with { Health = _health }, result.Diagnostics);
     }
+
+    public NativeStatusTransportResult AcceptMetadata(string json)
+    {
+        var parsed = NativeThreadMetadataAdapter.Parse(json);
+        if (!parsed.IsValid) return new(false, Snapshot, parsed.Diagnostics);
+        var result = _engine.Apply(new ThreadMetadataObservation(parsed.Event!.ThreadId, parsed.Event.WorkingDirectory));
+        return new(true, result.Snapshot with { Health = _health }, result.Diagnostics);
+    }
 }
 
 public sealed record NativeStatusDeliveryHealth(

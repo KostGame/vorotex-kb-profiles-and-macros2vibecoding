@@ -48,8 +48,10 @@ internal static class ClientTests
         using var first = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = mutex }); TestAssert.True(first.TryStart(), "first runtime did not start");
         var firstServer = new RuntimeIpcServer(first, pipe); firstServer.Start();
         var client = new RuntimeIpcClient(new NamedPipeRuntimeIpcTransport(pipe));
-        var status = JsonSerializer.Serialize(new { schemaVersion = "k15-codex-thread-status/v1", source = "codex_stdio_bridge", @event = "thread_status_changed", threadId = "unicode-thread", status = "idle", timestampUtc = "2026-09-08T00:00:00Z", workingDirectory = @"G:\Мой диск\AgentLoop Exchange\inbox" });
-        TestAssert.True(first.ApplyNativeStatusJson(status).Accepted, "authoritative metadata was rejected");
+        var status = JsonSerializer.Serialize(new { schemaVersion = "k15-codex-thread-status/v1", source = "codex_stdio_bridge", @event = "thread_status_changed", threadId = "unicode-thread", status = "idle", timestampUtc = "2026-09-08T00:00:00Z" });
+        var metadata = JsonSerializer.Serialize(new { schemaVersion = "k15-codex-thread-metadata/v1", source = "codex_stdio_bridge", @event = "thread_metadata_changed", threadId = "unicode-thread", workingDirectory = @"G:\Мой диск\AgentLoop Exchange\inbox" });
+        TestAssert.True(first.ApplyNativeStatusJson(status).Accepted, "authoritative status was rejected");
+        TestAssert.True(first.ApplyNativeThreadMetadataJson(metadata).Accepted, "thread metadata was rejected");
         TestAssert.Equal(@"G:\Мой диск\AgentLoop Exchange\inbox", RuntimeStateEngine.Import(first.Snapshot).Snapshot.Threads[0].WorkingDirectory, "state engine dropped authoritative metadata");
         var success = await client.SnapshotAsync(); TestAssert.True(success.Success, "named pipe snapshot did not succeed");
         var projection = RuntimeProjection.From(success.Snapshot); TestAssert.Equal(@"G:\Мой диск\AgentLoop Exchange\inbox", projection.Threads[0].WorkingDirectory, "IPC lost Unicode metadata");
