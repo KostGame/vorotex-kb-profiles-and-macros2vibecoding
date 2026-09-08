@@ -55,6 +55,8 @@ internal static class Program
             ("concurrent different candidates remain atomic", RuntimeDeviceTests.ConcurrentDifferentCandidatesRemainAtomic),
             ("scan and mutation after stop fail closed", RuntimeDeviceTests.ScanAndMutationAfterStopFailClosed),
             ("connect racing stop is serialized by lifecycle gate", RuntimeDeviceTests.ConnectRacingStopIsSerializedByLifecycleGate),
+            ("shared client projects one Runtime snapshot", ClientTests.SharedClientProjectsOneSnapshotAndFiltersDiagnostics),
+            ("client failures are bounded and reconnectable", ClientTests.ClientFailuresAreBoundedAndReconnectable),
         };
 
         var failures = 0;

@@ -15,7 +15,8 @@ public sealed record ThreadSnapshot
         ThreadAttentionState attention = ThreadAttentionState.Unknown,
         DateTimeOffset? lastAttentionObservedUtc = null,
         ThreadClassification classification = ThreadClassification.User,
-        ThreadFocusHint focusHint = ThreadFocusHint.Unknown)
+        ThreadFocusHint focusHint = ThreadFocusHint.Unknown,
+        string? workingDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
         ThreadId = threadId;
@@ -27,6 +28,7 @@ public sealed record ThreadSnapshot
         LastAttentionObservedUtc = lastAttentionObservedUtc;
         Classification = classification;
         FocusHint = focusHint;
+        WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? null : workingDirectory.Length <= 1024 ? workingDirectory : throw new ArgumentException("Working directory is too long.", nameof(workingDirectory));
     }
 
     [JsonPropertyOrder(0)]
@@ -59,6 +61,10 @@ public sealed record ThreadSnapshot
     [JsonPropertyOrder(8)]
     public ThreadFocusHint FocusHint { get; }
 
+    [JsonPropertyOrder(9)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkingDirectory { get; }
+
     public static ThreadSnapshot Create(
         string threadId,
         ThreadRuntimeStatus runtimeStatus,
@@ -68,7 +74,8 @@ public sealed record ThreadSnapshot
         ThreadAttentionState attention = ThreadAttentionState.Unknown,
         DateTimeOffset? lastAttentionObservedUtc = null,
         ThreadClassification classification = ThreadClassification.User,
-        ThreadFocusHint focusHint = ThreadFocusHint.Unknown)
+        ThreadFocusHint focusHint = ThreadFocusHint.Unknown,
+        string? workingDirectory = null)
     {
         return new ThreadSnapshot(
             threadId,
@@ -79,7 +86,7 @@ public sealed record ThreadSnapshot
             attention,
             lastAttentionObservedUtc,
             classification,
-            focusHint);
+            focusHint, workingDirectory);
     }
 
     private static ImmutableArray<ThreadActiveFlag> CanonicalizeActiveFlags(
