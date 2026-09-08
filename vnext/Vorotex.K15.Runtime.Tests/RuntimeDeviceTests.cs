@@ -279,6 +279,32 @@ internal static class RuntimeDeviceTests
         return Task.CompletedTask;
     }
 
+    public static async Task ConnectRacingStopIsSerializedByLifecycleGate()
+    {
+        var backend = new FakeBackend { BlockOpen = true };
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "stop-race-" + Guid.NewGuid().ToString("N") }, backend);
+        TestAssert.True(host.TryStart(), "runtime did not start for stop race");
+        host.HandleIpcRequest(Request("scan_devices"));
+
+        var connectTask = Task.Run(() => host.HandleIpcRequest(Request("connect_device", ("candidateId", "candidate-a"))));
+        TestAssert.True(backend.ConnectEntered.Wait(TimeSpan.FromSeconds(5)), "connect did not reach deterministic barrier");
+
+        var stopTask = Task.Run(host.Stop);
+        await Task.Delay(50);
+        TestAssert.False(stopTask.IsCompleted, "Stop completed while the gated mutation still held the lifecycle gate");
+
+        backend.AllowConnect.Set();
+        await Task.WhenAll(connectTask, stopTask).WaitAsync(TimeSpan.FromSeconds(5));
+
+        TestAssert.False(host.IsRunning, "Stop left the runtime running");
+        TestAssert.False(host.DeviceManager.IsConnected, "Stop left device ownership connected");
+        TestAssert.False(host.RgbController.Enabled, "Stop left RGB enabled");
+        TestAssert.Equal(0, backend.LiveHandles, "Stop left a live fake HID handle");
+
+        var afterStop = host.HandleIpcRequest(Request("connect_device", ("candidateId", "candidate-a")));
+        TestAssert.True(afterStop.Contains("RUNTIME_STOPPED") && afterStop.Contains("\"ok\":false"), "post-stop mutation was not rejected");
+    }
+
     private static string Request(string command, params (string Name, object Value)[] args)
     {
         var values = new Dictionary<string, object> { ["protocolVersion"] = RuntimeIpcMetadata.ProtocolVersion, ["command"] = command };
@@ -301,6 +327,10 @@ internal static class RuntimeDeviceTests
         public FakeHandle? LastHandle { get; private set; }
         public int TotalEffectWrites => LastHandle?.Effects.Count ?? 0;
         public int MaxLiveHandles { get; private set; }
+        public int LiveHandles => Volatile.Read(ref _liveHandles);
+        public bool BlockOpen { get; init; }
+        public ManualResetEventSlim ConnectEntered { get; } = new(false);
+        public ManualResetEventSlim AllowConnect { get; } = new(false);
         public List<string> OpenedCandidateIds { get; } = new();
         private int _liveHandles;
         public IReadOnlyList<RuntimeDeviceCandidate> Scan()
@@ -314,6 +344,11 @@ internal static class RuntimeDeviceTests
         public IK15DeviceHandle Open(RuntimeDeviceCandidate candidate)
         {
             if (OpenDelayMilliseconds > 0) Thread.Sleep(OpenDelayMilliseconds);
+            if (BlockOpen)
+            {
+                ConnectEntered.Set();
+                AllowConnect.Wait();
+            }
             OpenCount++;
             OpenedCandidateIds.Add(candidate.CandidateId);
             var live = Interlocked.Increment(ref _liveHandles);

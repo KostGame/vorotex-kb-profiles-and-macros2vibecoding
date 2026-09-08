@@ -54,6 +54,7 @@ internal static class Program
             ("malformed lighting replies fail before evidence", RuntimeDeviceTests.MalformedLightingRepliesFailBeforeEvidence),
             ("concurrent different candidates remain atomic", RuntimeDeviceTests.ConcurrentDifferentCandidatesRemainAtomic),
             ("scan and mutation after stop fail closed", RuntimeDeviceTests.ScanAndMutationAfterStopFailClosed),
+            ("connect racing stop is serialized by lifecycle gate", RuntimeDeviceTests.ConnectRacingStopIsSerializedByLifecycleGate),
         };
 
         var failures = 0;

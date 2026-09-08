@@ -64,19 +64,22 @@ public sealed class RuntimeHost : IDisposable
 
     private RuntimeIpcProtocol.RuntimeIpcCommandResult HandleDeviceCommand(string command, string? candidateId, bool? enabled)
     {
-        if (_stoppedForMutations)
-            return new RuntimeIpcProtocol.RuntimeIpcCommandResult(false, "RUNTIME_STOPPED");
-        var ok = command switch
+        lock (_gate)
         {
-            "scan_devices" => ScanDevices(),
-            "connect_device" => candidateId is not null && _deviceManager.Connect(candidateId),
-            "disconnect_device" => DisconnectAndDisable(),
-            "reconnect_device" => _deviceManager.Reconnect(),
-            "set_rgb_enabled" => enabled.HasValue && _rgbController.SetEnabled(enabled.Value),
-            "restore_lighting" => _rgbController.RestoreLighting(),
-            _ => false,
-        };
-        return new RuntimeIpcProtocol.RuntimeIpcCommandResult(ok, ok ? null : _deviceManager.LastFailure ?? _rgbController.LastFailure ?? "COMMAND_FAILED");
+            if (_stoppedForMutations)
+                return new RuntimeIpcProtocol.RuntimeIpcCommandResult(false, "RUNTIME_STOPPED");
+            var ok = command switch
+            {
+                "scan_devices" => ScanDevices(),
+                "connect_device" => candidateId is not null && _deviceManager.Connect(candidateId),
+                "disconnect_device" => DisconnectAndDisable(),
+                "reconnect_device" => _deviceManager.Reconnect(),
+                "set_rgb_enabled" => enabled.HasValue && _rgbController.SetEnabled(enabled.Value),
+                "restore_lighting" => _rgbController.RestoreLighting(),
+                _ => false,
+            };
+            return new RuntimeIpcProtocol.RuntimeIpcCommandResult(ok, ok ? null : _deviceManager.LastFailure ?? _rgbController.LastFailure ?? "COMMAND_FAILED");
+        }
     }
 
     private RuntimeIpcDeviceSnapshot GetDeviceSnapshot()
@@ -162,24 +165,20 @@ public sealed class RuntimeHost : IDisposable
 
     public void Stop()
     {
-        SingleInstanceLease? lease;
-        TaskCompletionSource<bool> stopped;
-        var wasRunning = false;
-
         lock (_gate)
         {
-            wasRunning = IsRunning;
+            var wasRunning = IsRunning;
             IsRunning = false;
             _stoppedForMutations = true;
-            lease = _singleInstanceLease;
+            var lease = _singleInstanceLease;
             _singleInstanceLease = null;
-            stopped = _stopped;
-        }
+            var stopped = _stopped;
 
-        _rgbController.Disarm();
-        _deviceManager.Dispose();
-        lease?.Dispose();
-        if (wasRunning) stopped.TrySetResult(true);
+            _rgbController.Disarm();
+            _deviceManager.Dispose();
+            lease?.Dispose();
+            if (wasRunning) stopped.TrySetResult(true);
+        }
     }
 
     public void Dispose() => Stop();
