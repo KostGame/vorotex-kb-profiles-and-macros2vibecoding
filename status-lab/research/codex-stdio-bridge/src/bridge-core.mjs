@@ -207,11 +207,12 @@ export class ApprovalObserver {
 }
 
 export class NativeThreadStatusObserver {
-  #sink; #classify; #receiptClock; #queue = []; #busy = false; #accepted = 0; #delivered = 0; #overflow = 0; #sinkFailures = 0; #partial = Buffer.alloc(0);
-  constructor({ authoritySink = () => {}, classificationResolver = () => undefined, receiptClock = () => new Date() } = {}) {
+  #sink; #classify; #receiptClock; #authorityDegraded; #queue = []; #busy = false; #accepted = 0; #delivered = 0; #overflow = 0; #sinkFailures = 0; #partial = Buffer.alloc(0);
+  constructor({ authoritySink = () => {}, classificationResolver = () => undefined, receiptClock = () => new Date(), authorityDegraded = () => {} } = {}) {
     this.#sink = authoritySink;
     this.#classify = classificationResolver;
     this.#receiptClock = receiptClock;
+    this.#authorityDegraded = authorityDegraded;
   }
   observeServerChunk(chunk) {
     const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -238,17 +239,21 @@ export class NativeThreadStatusObserver {
     if (!params || typeof params !== 'object' || Array.isArray(params)) return;
     const threadId = optionalString(params.threadId);
     const statusObject = params.status;
-    const status = typeof statusObject === 'string' ? statusObject : optionalString(statusObject?.type);
-    const flagsValue = Array.isArray(params.activeFlags) ? params.activeFlags : statusObject?.activeFlags;
+    const status = optionalString(statusObject?.type);
+    const hasFlags = statusObject && Object.hasOwn(statusObject, 'activeFlags');
+    const flagsValue = statusObject?.activeFlags;
     const hasEmittedAt = Object.hasOwn(message, 'emittedAtMs');
     const emittedAtMs = message.emittedAtMs;
     const timestamp = hasEmittedAt && Number.isSafeInteger(emittedAtMs) && emittedAtMs >= 0 && emittedAtMs <= 8640000000000000
       ? new Date(emittedAtMs).toISOString() : hasEmittedAt ? undefined : this.#receiptTimestamp();
     const classification = optionalString(this.#classify(threadId));
-    if (!threadId || !THREAD_STATUSES.has(status) || !Array.isArray(flagsValue) || flagsValue.length > 8 ||
+    if (!threadId || !THREAD_STATUSES.has(status) ||
+        (status === 'active' && (!hasFlags || !Array.isArray(flagsValue))) ||
+        (status !== 'active' && hasFlags) ||
+        (status === 'active' && flagsValue.length > 8) ||
         !timestamp || Number.isNaN(Date.parse(timestamp)) || (classification !== undefined && !THREAD_CLASSIFICATIONS.has(classification))) return;
     const activeFlags = [];
-    for (const flag of flagsValue) {
+    for (const flag of status === 'active' ? flagsValue : []) {
       if (typeof flag !== 'string' || !THREAD_FLAGS.has(flag) || activeFlags.includes(flag)) return;
       activeFlags.push(flag);
     }
@@ -256,7 +261,11 @@ export class NativeThreadStatusObserver {
     const event = { schemaVersion: THREAD_STATUS_SCHEMA_VERSION, source: 'codex_stdio_bridge', event: 'thread_status_changed',
       timestampUtc: timestamp, threadId, status, activeFlags };
     if (classification !== undefined) event.classification = classification;
-    if (this.#queue.length >= MAX_AUTHORITY_QUEUE) { this.#overflow += 1; return; }
+    if (this.#queue.length >= MAX_AUTHORITY_QUEUE) {
+      this.#overflow += 1;
+      try { this.#authorityDegraded('NATIVE_AUTHORITY_DEGRADED_OVERFLOW'); } catch { /* optional health path */ }
+      return;
+    }
     this.#queue.push(event); this.#accepted += 1; this.#drain();
   }
 
@@ -270,9 +279,16 @@ export class NativeThreadStatusObserver {
     if (this.#busy || this.#queue.length === 0) return;
     this.#busy = true; const event = this.#queue.shift();
     try {
-      Promise.resolve(this.#sink(event)).then(() => { this.#delivered += 1; }, () => { this.#sinkFailures += 1; })
+      Promise.resolve(this.#sink(event)).then(() => { this.#delivered += 1; }, () => {
+        this.#sinkFailures += 1;
+        try { this.#authorityDegraded('NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE'); } catch { /* optional health path */ }
+      })
         .finally(() => { this.#busy = false; this.#drain(); });
-    } catch { this.#sinkFailures += 1; this.#busy = false; this.#drain(); }
+    } catch {
+      this.#sinkFailures += 1;
+      try { this.#authorityDegraded('NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE'); } catch { /* optional health path */ }
+      this.#busy = false; this.#drain();
+    }
   }
 }
 

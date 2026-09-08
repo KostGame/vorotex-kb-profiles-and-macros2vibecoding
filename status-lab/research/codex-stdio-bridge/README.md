@@ -116,10 +116,15 @@ controls any later canary and must revalidate current protocol pins first.
 ## vNext native status observer
 
 `NativeThreadStatusObserver` listens to the same server chunks as the approval
-observer and recognizes only `thread/status/changed`. It emits the bounded
-`k15-codex-thread-status/v1` record (`threadId`, status, plural known
-`activeFlags`, bounded timestamp, and optional `user`/`service`/`canary`
-classification). A serialized queue of 64 records preserves arrival order;
-overflow and sink failures are exposed by `authorityHealth()` and never block
-the transparent `pipe()` transport. The vNext runtime accepts these records
-through `NativeThreadStatusAdapter` and owns all state mapping.
+observer and recognizes only the generated `ThreadStatus` union: `active`
+requires `activeFlags`, while `idle`, `notLoaded`, and `systemError` omit it
+and sanitize to `activeFlags: []`. It emits the bounded
+`k15-codex-thread-status/v1` record (`threadId`, status, known flags, bounded
+timestamp, and optional `user`/`service`/`canary` classification). A serialized
+queue of 64 records preserves arrival order; overflow and sink failures are
+reported as fixed health envelopes and never block the transparent `pipe()`
+transport. The vNext runtime accepts both records through its opt-in stdin
+boundary (`VOROTEX_K15_RUNTIME_NATIVE_STATUS_STDIN=1`) and owns all state
+mapping. The approval wrapper creates that process boundary only when an
+absolute `CODEX_BRIDGE_RUNTIME_COMMAND` is explicitly supplied; it is disabled
+by default and is not activated by this repository.

@@ -25,7 +25,17 @@ internal static class Program
         Console.CancelKeyPress += cancelHandler;
         try
         {
-            await host.WaitForShutdownAsync(shutdown.Token).ConfigureAwait(false);
+            if (Environment.GetEnvironmentVariable("VOROTEX_K15_RUNTIME_NATIVE_STATUS_STDIN") == "1")
+            {
+                string? line;
+                while ((line = await Console.In.ReadLineAsync(shutdown.Token).ConfigureAwait(false)) is not null)
+                    host.ApplyNativeStatusJson(line);
+                host.Stop();
+            }
+            else
+            {
+                await host.WaitForShutdownAsync(shutdown.Token).ConfigureAwait(false);
+            }
             return 0;
         }
         finally

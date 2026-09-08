@@ -49,16 +49,16 @@ test('native status notification becomes bounded ordered authority events', asyn
     authoritySink: async (event) => events.push(event),
     classificationResolver: threadId => threadId === 'thread-native' ? 'canary' : undefined
   });
-  const message = (status, activeFlags = []) => JSON.stringify({
+  const message = (status, activeFlags = status === 'active' ? [] : undefined) => JSON.stringify({
     jsonrpc: '2.0', method: 'thread/status/changed', params: {
-      threadId: 'thread-native', status: { type: status, activeFlags }
+      threadId: 'thread-native', status: { type: status, ...(activeFlags === undefined ? {} : { activeFlags }) }
     }, emittedAtMs: 1788854400000
   }) + '\n';
   const first = message('active');
   observer.observeServerChunk(Buffer.from(first.slice(0, 20)));
   observer.observeServerChunk(Buffer.from(first.slice(20)));
-  observer.observeServerChunk(Buffer.from(message('active', ['waitingOnApproval']) + message('active') + message('idle')));
-  await tick();
+  observer.observeServerChunk(Buffer.from(message('active', ['waitingOnApproval']) + message('active', []) + message('idle')));
+  for (let attempt = 0; attempt < 10 && events.length < 4; attempt++) await tick();
   assert.deepEqual(events.map(({ status, activeFlags }) => ({ status, activeFlags })), [
     { status: 'active', activeFlags: [] },
     { status: 'active', activeFlags: ['waitingOnApproval'] },
@@ -70,6 +70,26 @@ test('native status notification becomes bounded ordered authority events', asyn
   ].sort());
   assert.equal(observer.authorityHealth().healthy, true);
   assert.equal(events[0].classification, 'canary');
+});
+
+test('exact non-active ThreadStatus union shapes are accepted and sanitized', async () => {
+  const events = [];
+  const observer = new NativeThreadStatusObserver({ authoritySink: event => events.push(event) });
+  const send = status => observer.observeServerChunk(Buffer.from(JSON.stringify({
+    method: 'thread/status/changed', params: { threadId: `thread-${status}`, status: { type: status } }, emittedAtMs: 1788854400000
+  }) + '\n'));
+  send('idle'); send('notLoaded'); send('systemError');
+  for (let attempt = 0; attempt < 10 && events.length < 3; attempt++) await tick();
+  assert.deepEqual(events.map(({ status, activeFlags }) => ({ status, activeFlags })), [
+    { status: 'idle', activeFlags: [] },
+    { status: 'notLoaded', activeFlags: [] },
+    { status: 'systemError', activeFlags: [] }
+  ]);
+  const enrichedIdle = JSON.stringify({ method: 'thread/status/changed', params: {
+    threadId: 'enriched', status: { type: 'idle', activeFlags: [] }
+  }}) + '\n';
+  observer.observeServerChunk(Buffer.from(enrichedIdle));
+  assert.equal(events.length, 3);
 });
 
 test('native authority rejects malformed or unknown state without leaking input', () => {
@@ -88,7 +108,7 @@ test('native status uses bounded receipt time only when emittedAtMs is absent', 
     receiptClock: () => new Date('2026-09-08T08:01:02.003Z')
   });
   observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/status/changed', params: {
-    threadId: 'fallback', status: { type: 'idle', activeFlags: [] }
+    threadId: 'fallback', status: { type: 'idle' }
   }}) + '\n'));
   assert.equal(events[0].timestampUtc, '2026-09-08T08:01:02.003Z');
 });

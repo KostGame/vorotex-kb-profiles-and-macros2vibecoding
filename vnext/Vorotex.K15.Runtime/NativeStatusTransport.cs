@@ -28,6 +28,7 @@ public sealed class NativeStatusTransport
         {
             "NATIVE_AUTHORITY_DEGRADED_OVERFLOW" => reason,
             "NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE" => reason,
+            "NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE" => reason,
             _ => "NATIVE_AUTHORITY_DEGRADED_UNKNOWN"
         };
 
@@ -36,6 +37,12 @@ public sealed class NativeStatusTransport
 
     public NativeStatusTransportResult Accept(string json)
     {
+        if (NativeAuthorityHealthAdapter.TryParse(json, out var degradedReason))
+        {
+            MarkDegraded(degradedReason);
+            return new(true, Snapshot, ImmutableArray<string>.Empty);
+        }
+
         var parsed = NativeThreadStatusAdapter.Parse(json);
         if (!parsed.IsValid)
             return new(false, Snapshot, parsed.Diagnostics);

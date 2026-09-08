@@ -102,12 +102,16 @@ public static class NativeThreadStatusAdapter
             }
 
             var flags = ImmutableArray.CreateBuilder<ThreadActiveFlag>();
-            if (!root.TryGetProperty("activeFlags", out var flagsElement)
-                || flagsElement.ValueKind != JsonValueKind.Array)
+            var hasFlags = root.TryGetProperty("activeFlags", out var flagsElement);
+            if (status == ThreadRuntimeStatus.Active && (!hasFlags || flagsElement.ValueKind != JsonValueKind.Array))
             {
                 diagnostics.Add("MISSING_OR_INVALID_NATIVE_ACTIVE_FLAGS");
             }
-            else
+            else if (status != ThreadRuntimeStatus.Active && hasFlags)
+            {
+                diagnostics.Add("UNEXPECTED_NATIVE_ACTIVE_FLAGS");
+            }
+            else if (status == ThreadRuntimeStatus.Active)
             {
                 foreach (var flagElement in flagsElement.EnumerateArray())
                 {
@@ -220,5 +224,54 @@ public static class NativeThreadStatusAdapter
             _ => (ThreadClassification)(-1),
         };
         return classification != (ThreadClassification)(-1);
+    }
+}
+
+public static class NativeAuthorityHealthAdapter
+{
+    private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
+    {
+        "schemaVersion", "source", "event", "reason"
+    };
+    private static readonly HashSet<string> AllowedReasons = new(StringComparer.Ordinal)
+    {
+        "NATIVE_AUTHORITY_DEGRADED_OVERFLOW",
+        "NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE",
+        "NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE",
+    };
+
+    public static bool TryParse(string json, out string reason)
+    {
+        reason = string.Empty;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || root.EnumerateObject().Any(property => !AllowedProperties.Contains(property.Name))
+                || !TryGetString(root, "schemaVersion", out var schema)
+                || schema != "k15-codex-authority-health/v1"
+                || !TryGetString(root, "source", out var source)
+                || source != "codex_stdio_bridge"
+                || !TryGetString(root, "event", out var eventName)
+                || eventName != "authority_degraded"
+                || !TryGetString(root, "reason", out var candidate)
+                || !AllowedReasons.Contains(candidate!)) return false;
+
+            reason = candidate!;
+            return true;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    private static bool TryGetString(JsonElement root, string name, out string? value)
+    {
+        if (root.TryGetProperty(name, out var element) && element.ValueKind == JsonValueKind.String)
+        {
+            value = element.GetString();
+            return true;
+        }
+        value = null;
+        return false;
     }
 }

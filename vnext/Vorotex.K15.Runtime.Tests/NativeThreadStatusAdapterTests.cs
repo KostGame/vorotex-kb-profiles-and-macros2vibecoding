@@ -70,7 +70,7 @@ internal static class NativeThreadStatusAdapterTests
             Payload($"\"threadId\":\"{thread}\",\"status\":\"active\",\"activeFlags\":[],\"timestampUtc\":\"{timestamp}\""),
             Payload($"\"threadId\":\"{thread}\",\"status\":\"active\",\"activeFlags\":[\"waitingOnApproval\"],\"timestampUtc\":\"{timestamp}\""),
             Payload($"\"threadId\":\"{thread}\",\"status\":\"active\",\"activeFlags\":[],\"timestampUtc\":\"{timestamp}\""),
-            Payload($"\"threadId\":\"{thread}\",\"status\":\"idle\",\"activeFlags\":[],\"timestampUtc\":\"{timestamp}\"")
+            Payload($"\"threadId\":\"{thread}\",\"status\":\"idle\",\"timestampUtc\":\"{timestamp}\"")
         };
         var expectedStates = new[] { RuntimeState.Running, RuntimeState.Waiting, RuntimeState.Running };
         for (var index = 0; index < 3; index++)
@@ -89,6 +89,30 @@ internal static class NativeThreadStatusAdapterTests
         return Task.CompletedTask;
     }
 
+    public static Task AcceptsExactNonActiveUnionShapes()
+    {
+        foreach (var status in new[] { "idle", "notLoaded", "systemError" })
+        {
+            var result = NativeThreadStatusAdapter.Parse(Payload($"\"threadId\":\"{status}-thread\",\"status\":\"{status}\",\"timestampUtc\":\"2026-09-08T08:00:00Z\""));
+            TestAssert.True(result.IsValid, $"exact {status} shape was rejected");
+            TestAssert.Equal(0, result.Event!.ActiveFlags.Length, $"{status} did not sanitize flags to empty");
+        }
+
+        var enrichedIdle = NativeThreadStatusAdapter.Parse(Payload("\"threadId\":\"idle-thread\",\"status\":\"idle\",\"activeFlags\":[],\"timestampUtc\":\"2026-09-08T08:00:00Z\""));
+        TestAssert.False(enrichedIdle.IsValid, "enriched idle shape was accepted");
+        return Task.CompletedTask;
+    }
+
+    public static Task BridgeHealthDegradesCanonicalRuntimeSnapshot()
+    {
+        var transport = new NativeStatusTransport();
+        var result = transport.Accept("{\"schemaVersion\":\"k15-codex-authority-health/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"authority_degraded\",\"reason\":\"NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE\"}");
+        TestAssert.True(result.Accepted, "bridge health envelope was rejected");
+        TestAssert.False(transport.Snapshot.Health.IsHealthy, "bridge sink failure did not degrade canonical health");
+        TestAssert.Equal("NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE", transport.Snapshot.Health.Detail, "bridge degradation reason changed");
+        return Task.CompletedTask;
+    }
+
     public static async Task TransportPreservesOrderedAuthorityAndHealth()
     {
         var engine = new RuntimeStateEngine();
@@ -99,7 +123,8 @@ internal static class NativeThreadStatusAdapterTests
         {
             var status = index == 3 ? "idle" : "active";
             var flags = index == 1 ? "[\"waitingOnApproval\"]" : "[]";
-            TestAssert.True(queue.TryEnqueue(Payload($"\"threadId\":\"ordered\",\"status\":\"{status}\",\"activeFlags\":{flags},\"timestampUtc\":\"{timestamp}\"")), "valid event was not queued");
+            var flagsField = status == "active" ? $",\"activeFlags\":{flags}" : string.Empty;
+            TestAssert.True(queue.TryEnqueue(Payload($"\"threadId\":\"ordered\",\"status\":\"{status}\"{flagsField},\"timestampUtc\":\"{timestamp}\"")), "valid event was not queued");
         }
 
         for (var attempt = 0; attempt < 100 && queue.Health.Delivered < 4; attempt++)
