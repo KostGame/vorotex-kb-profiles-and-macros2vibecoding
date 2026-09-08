@@ -11,6 +11,8 @@ namespace Vorotex.K15.Runtime;
 /// </summary>
 internal sealed class WindowsK15HidBackend : IK15DeviceBackend
 {
+    private readonly RuntimeWireColorOrder _wireOrder;
+    public WindowsK15HidBackend(RuntimeWireColorOrder wireOrder = RuntimeWireColorOrder.Rgb) => _wireOrder = wireOrder;
     public IReadOnlyList<RuntimeDeviceCandidate> Scan()
     {
         if (!OperatingSystem.IsWindows()) return Array.Empty<RuntimeDeviceCandidate>();
@@ -59,7 +61,9 @@ internal sealed class WindowsK15HidBackend : IK15DeviceBackend
         if (!TryDescribe(handle, out var description) || description.VendorId != candidate.VendorId || description.ProductId != candidate.ProductId ||
             description.UsagePage != candidate.UsagePage || description.Usage != candidate.Usage || description.FeatureReportLength != candidate.FeatureReportLength)
         { handle.Dispose(); throw new InvalidDataException("Selected endpoint identity or K15 collection no longer matches."); }
-        return new WindowsK15DeviceHandle(candidate.CandidateId, handle);
+        if (!string.Equals(description.Product, candidate.Product, StringComparison.Ordinal) || !string.Equals(description.Serial, candidate.Serial, StringComparison.Ordinal))
+        { handle.Dispose(); throw new InvalidDataException("Selected endpoint product or serial changed."); }
+        return new WindowsK15DeviceHandle(candidate.CandidateId, handle, _wireOrder);
     }
 
     private static SafeFileHandle OpenHandle(string path) => CreateFile(path, GenericRead | GenericWrite, FileShareRead | FileShareWrite,
@@ -124,38 +128,37 @@ internal sealed class WindowsK15HidBackend : IK15DeviceBackend
 internal sealed class WindowsK15DeviceHandle : IK15DeviceHandle
 {
     private readonly SafeFileHandle _handle;
+    private readonly RuntimeWireColorOrder _wireOrder;
     private byte _sequence;
-    public WindowsK15DeviceHandle(string candidateId, SafeFileHandle handle) { CandidateId = candidateId; _handle = handle; }
+    private byte _activeSlot;
+    public WindowsK15DeviceHandle(string candidateId, SafeFileHandle handle, RuntimeWireColorOrder wireOrder) { CandidateId = candidateId; _handle = handle; _wireOrder = wireOrder; }
     public string CandidateId { get; }
-    public void VerifyProtocol() { _ = ReadActiveSlot(); }
+    public byte ActiveSlot => _activeSlot;
+    public void VerifyProtocol() { _activeSlot = ReadActiveSlot(); }
 
-    public byte[] CaptureLightingSnapshot()
+    public RuntimeLightingSnapshot CaptureLightingSnapshot()
     {
-        var snapshot = new byte[1 + K15HidProtocol.LightingRecordSize * 10];
-        snapshot[0] = ReadActiveSlot();
-        Query(K15HidProtocol.LightingReadCommand, 0, 0, K15HidProtocol.LightingRecordSize).CopyTo(snapshot, 1);
-        var modes = new byte[] { K15HidProtocol.ConstantMode, K15HidProtocol.FlowingWaterMode, K15HidProtocol.HorseRaceMode, K15HidProtocol.SingleColorBreathingMode, K15HidProtocol.CycleBreathingMode, K15HidProtocol.TetrisMode, K15HidProtocol.NeonMode, K15HidProtocol.AmbilightMode, K15HidProtocol.OffMode };
-        for (var i = 0; i < modes.Length; i++) Query(K15HidProtocol.LightingReadCommand, 0, K15HidProtocol.ModeRecordAddress(modes[i]), K15HidProtocol.LightingRecordSize).CopyTo(snapshot, 1 + K15HidProtocol.LightingRecordSize * (i + 1));
-        return snapshot;
+        var slot = ReadActiveSlot(); _activeSlot = slot;
+        var header = Query(K15HidProtocol.LightingReadCommand, 0, 0, K15HidProtocol.LightingRecordSize);
+        var records = new Dictionary<byte, byte[]>();
+        foreach (var mode in ProvenModes(header[0])) records[mode] = Query(K15HidProtocol.LightingReadCommand, 0, K15HidProtocol.ModeRecordAddress(mode), K15HidProtocol.LightingRecordSize);
+        return new RuntimeLightingSnapshot(slot, header, records);
     }
 
-    public void ApplyEffect(string effect)
+    public void ApplyEffect(RuntimeLightingEffect effect)
     {
         var currentHeader = Query(K15HidProtocol.LightingReadCommand, 0, 0, K15HidProtocol.LightingRecordSize);
-        var selected = Effect(effect);
-        var header = K15HidProtocol.CreateModeHeader(currentHeader, selected.Mode);
-        if (selected.Mode != K15HidProtocol.OffMode)
-            WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, K15HidProtocol.ModeRecordAddress(selected.Mode), K15HidProtocol.CreateEffectRecord(selected));
+        var header = K15HidProtocol.CreateModeHeader(currentHeader, effect.Mode);
+        if (effect.Mode != K15HidProtocol.OffMode)
+            WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, K15HidProtocol.ModeRecordAddress(effect.Mode), K15HidProtocol.CreateEffectRecord(effect, _wireOrder));
         WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, 0, header);
     }
 
-    public void RestoreLighting(byte[] snapshot)
+    public void RestoreLighting(RuntimeLightingSnapshot snapshot)
     {
-        if (snapshot.Length != 1 + K15HidProtocol.LightingRecordSize * 10) throw new InvalidDataException("Invalid K15 lighting snapshot.");
-        if (ReadActiveSlot() != snapshot[0]) throw new InvalidDataException("K15 active profile changed.");
-        var modes = new byte[] { K15HidProtocol.ConstantMode, K15HidProtocol.FlowingWaterMode, K15HidProtocol.HorseRaceMode, K15HidProtocol.SingleColorBreathingMode, K15HidProtocol.CycleBreathingMode, K15HidProtocol.TetrisMode, K15HidProtocol.NeonMode, K15HidProtocol.AmbilightMode, K15HidProtocol.OffMode };
-        WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, 0, snapshot.AsSpan(1, K15HidProtocol.LightingRecordSize));
-        for (var i = 0; i < modes.Length; i++) WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, K15HidProtocol.ModeRecordAddress(modes[i]), snapshot.AsSpan(1 + K15HidProtocol.LightingRecordSize * (i + 1), K15HidProtocol.LightingRecordSize));
+        if (ReadActiveSlot() != snapshot.ActiveSlot) throw new InvalidDataException("K15 active profile changed.");
+        foreach (var write in K15HidProtocol.RestorePlan(snapshot))
+            WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, write.Address, write.Data);
     }
 
     private byte ReadActiveSlot()
@@ -175,15 +178,7 @@ internal sealed class WindowsK15DeviceHandle : IK15DeviceHandle
         }
         throw new TimeoutException("No matching K15 HID response.");
     }
-    private static RuntimeLightingEffect Effect(string value) => value switch
-    {
-        "WAITING" => new(K15HidProtocol.SingleColorBreathingMode, 6, 4, 0, System.Collections.Immutable.ImmutableArray.Create(new RuntimeRgbColor(0xFF, 0xA5, 0x00))),
-        "RUNNING" => new(K15HidProtocol.FlowingWaterMode, 5, 4, 0, System.Collections.Immutable.ImmutableArray.Create(new RuntimeRgbColor(0x00, 0x80, 0xFF))),
-        "ATTENTION" => new(K15HidProtocol.CycleBreathingMode, 6, 4, 0, System.Collections.Immutable.ImmutableArray.Create(new RuntimeRgbColor(0xFF, 0x00, 0xFF))),
-        "BLOCKED" => new(K15HidProtocol.SingleColorBreathingMode, 6, 3, 0, System.Collections.Immutable.ImmutableArray.Create(new RuntimeRgbColor(0xFF, 0x00, 0x00))),
-        "OFF" => new(K15HidProtocol.OffMode, 1, 1, 0, System.Collections.Immutable.ImmutableArray<RuntimeRgbColor>.Empty),
-        _ => new(K15HidProtocol.ConstantMode, 6, 1, 0, System.Collections.Immutable.ImmutableArray.Create(new RuntimeRgbColor(0xFF, 0xFF, 0xFF)))
-    };
+    private static IEnumerable<byte> ProvenModes(byte baseline) => new[] { K15HidProtocol.ConstantMode, K15HidProtocol.FlowingWaterMode, K15HidProtocol.SingleColorBreathingMode, K15HidProtocol.CycleBreathingMode }.Concat(baseline is K15HidProtocol.OffMode ? Array.Empty<byte>() : new[] { baseline }).Distinct();
     public void Dispose() => _handle.Dispose();
     [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_SetFeature(SafeFileHandle handle, byte[] report, int length);
     [DllImport("hid.dll", SetLastError = true)] private static extern bool HidD_GetFeature(SafeFileHandle handle, byte[] report, int length);

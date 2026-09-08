@@ -65,7 +65,7 @@ public sealed class RuntimeHost : IDisposable
     {
         var ok = command switch
         {
-            "scan_devices" => _deviceManager.Scan() is not null,
+            "scan_devices" => ScanDevices(),
             "connect_device" => candidateId is not null && _deviceManager.Connect(candidateId),
             "disconnect_device" => DisconnectAndDisable(),
             "reconnect_device" => _deviceManager.Reconnect(),
@@ -95,6 +95,12 @@ public sealed class RuntimeHost : IDisposable
         _rgbController.SetEnabled(false);
         _deviceManager.Disconnect();
         return true;
+    }
+
+    private bool ScanDevices()
+    {
+        _deviceManager.Scan();
+        return _deviceManager.ConnectionState != "ERROR";
     }
 
     public bool TryStart()
@@ -154,22 +160,21 @@ public sealed class RuntimeHost : IDisposable
     {
         SingleInstanceLease? lease;
         TaskCompletionSource<bool> stopped;
+        var wasRunning = false;
 
         lock (_gate)
         {
-            if (!IsRunning)
-            {
-                return;
-            }
-
+            wasRunning = IsRunning;
             IsRunning = false;
             lease = _singleInstanceLease;
             _singleInstanceLease = null;
             stopped = _stopped;
         }
 
+        _rgbController.Disarm();
+        _deviceManager.Dispose();
         lease?.Dispose();
-        stopped.TrySetResult(true);
+        if (wasRunning) stopped.TrySetResult(true);
     }
 
     public void Dispose() => Stop();

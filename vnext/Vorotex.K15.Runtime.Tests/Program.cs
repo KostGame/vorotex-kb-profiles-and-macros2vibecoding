@@ -43,6 +43,11 @@ internal static class Program
             ("device lifecycle never mutates Codex aggregate state", RuntimeDeviceTests.DeviceLifecyclePreservesCodexState),
             ("RGB never writes while disabled or disconnected", RuntimeDeviceTests.RgbDoesNotWriteWithoutOwnership),
             ("capabilities advertise exactly the accepted commands", RuntimeDeviceTests.CapabilitiesMatchCommandAllowlist),
+            ("stop disposes ownership and restart starts unarmed", RuntimeDeviceTests.StopDisposesOwnershipAndRestartStartsUnarmed),
+            ("ownership loss disarms RGB until explicit re-enable", RuntimeDeviceTests.OwnershipLossDisarmsUntilExplicitReenable),
+            ("concurrent ownership and RGB activity is deadlock-free", RuntimeDeviceTests.ConcurrentOwnershipAndRgbActivityCompletes),
+            ("scan failure uses fail-closed IPC response", RuntimeDeviceTests.ScanFailureUsesFailClosedIpcResponse),
+            ("legacy RGB policy and restore plan are exact", RuntimeDeviceTests.LegacyRgbPolicyAndRestorePlanAreExact),
         };
 
         var failures = 0;

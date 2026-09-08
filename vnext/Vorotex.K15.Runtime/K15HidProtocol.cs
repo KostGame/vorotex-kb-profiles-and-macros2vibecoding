@@ -46,7 +46,7 @@ internal static class K15HidProtocol
         var header = originalHeader.ToArray(); header[0] = mode; return header;
     }
 
-    public static byte[] CreateEffectRecord(RuntimeLightingEffect effect)
+    public static byte[] CreateEffectRecord(RuntimeLightingEffect effect, RuntimeWireColorOrder order = RuntimeWireColorOrder.Rgb)
     {
         if (effect.Brightness is < 1 or > 6 || effect.Speed is < 1 or > 7 || effect.Direction is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(effect));
@@ -56,12 +56,24 @@ internal static class K15HidProtocol
         record[3] = effect.PaletteMask ?? (byte)(effect.Colors.Length == 0 ? 0 : (1 << effect.Colors.Length) - 1);
         for (var i = 0; i < effect.Colors.Length; i++)
         {
-            var offset = 4 + i * 3; record[offset] = effect.Colors[i].R; record[offset + 1] = effect.Colors[i].G; record[offset + 2] = effect.Colors[i].B;
+            var offset = 4 + i * 3; var color = RuntimeRgbPolicy.ToWire(effect.Colors[i], order);
+            record[offset] = color.R; record[offset + 1] = color.G; record[offset + 2] = color.B;
         }
         return record;
     }
 
     public static ushort ModeRecordAddress(byte mode) => checked((ushort)((mode & 0x3f) * LightingRecordSize));
+    public static ImmutableArray<(ushort Address, byte[] Data)> RestorePlan(RuntimeLightingSnapshot snapshot)
+    {
+        var plan = ImmutableArray.CreateBuilder<(ushort, byte[])>();
+        var baseline = snapshot.Header[0];
+        if (baseline != OffMode && snapshot.ModeRecords.TryGetValue(baseline, out var baselineRecord))
+            plan.Add((ModeRecordAddress(baseline), baselineRecord.ToArray()));
+        plan.Add((0, snapshot.Header.ToArray()));
+        foreach (var pair in snapshot.ModeRecords.Where(pair => pair.Key != baseline && pair.Key != OffMode).OrderBy(pair => pair.Key))
+            plan.Add((ModeRecordAddress(pair.Key), pair.Value.ToArray()));
+        return plan.ToImmutable();
+    }
     public static bool IsSupportedDevice(ushort vendorId, ushort productId) =>
         vendorId is 0x36A4 or 0xB6A4 && productId is 0x4100 or 0x4101;
 }
