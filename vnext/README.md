@@ -39,6 +39,10 @@ The host does not auto-connect, launch or own Codex, activate physical device ow
 
 This increment does not reference or modify `status-lab`. The existing Status Lab remains the owner of its current diagnostic behavior until a separately authorized migration makes the ownership boundary explicit. No installed product files, service registrations, startup entries, or live VOROTEX state are touched.
 
+## Phase A side-by-side package
+
+The deterministic package contract is defined in `packaging/README.md`. Build it with `packaging/New-VNextPackage.ps1` and validate it with `packaging/Test-VNextPackage.ps1`. Immutable payloads live under `versions/<version>/payload`, selection uses `current-version.txt`, and `integration` plus `data` remain stable across update and rollback. The default manifest disables the production bridge, physical HID backend, and autostart.
+
 ## Build and test
 
 From the repository root:

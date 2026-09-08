@@ -60,6 +60,9 @@ internal static class Program
             ("native authority health remains separate", () => { ClientTests.NativeAuthorityHealthRemainsSeparate(); return Task.CompletedTask; }),
             ("control commands remain bounded Runtime commands", ClientTests.ControlCommandsRemainBoundedRuntimeCommands),
             ("real named pipe reconnect preserves runtime ownership", ClientTests.RealNamedPipeRuntimeRestartReconnectsWithoutMutation),
+            ("package resolver accepts active and rejects stale payloads", PackageTests.ResolverAcceptsActivePayloadAndRejectsStalePayload),
+            ("package resolver is bounded to split siblings", PackageTests.ResolverSupportsOnlyBoundedSplitSiblingLayout),
+            ("package resolver fails closed for malformed and unknown inputs", PackageTests.ResolverFailsClosedForMalformedSelectorAndUnknownExecutable),
         };
 
         var failures = 0;

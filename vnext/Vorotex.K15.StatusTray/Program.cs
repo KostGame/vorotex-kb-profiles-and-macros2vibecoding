@@ -38,6 +38,11 @@ internal sealed class TrayContext : ApplicationContext
         _icon.Text = text[..Math.Min(63, text.Length)];
     }
     private async Task ToggleRgbAsync() => await _runtime.Client.SendCommandAsync("set_rgb_enabled", enabled: !_projection.Rgb.Enabled);
-    private static void Launch(string name) { try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(name) { UseShellExecute = true }); } catch { } }
+    private static void Launch(string name)
+    {
+        var path = VNextPackageLayout.ResolveExecutable(AppContext.BaseDirectory, name);
+        if (path is null) return;
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(path) }); } catch { }
+    }
     protected override void ExitThreadCore() { _timer.Stop(); _timer.Dispose(); _icon.Visible = false; _icon.Dispose(); base.ExitThreadCore(); }
 }
