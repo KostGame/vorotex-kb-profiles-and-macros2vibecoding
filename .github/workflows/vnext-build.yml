@@ -71,10 +71,6 @@ jobs:
       - name: Validate package manifest and update rollback contract
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File vnext/packaging/Test-VNextPackage.ps1 -PackageDirectory "$env:RUNNER_TEMP\k15-vnext-package"
-      - name: Full codex-stdio-bridge regression suite
-        working-directory: status-lab/research/codex-stdio-bridge
-        run: npm.cmd test
-
       - name: Explicit diff check
         shell: powershell
         env:
@@ -87,3 +83,22 @@ jobs:
 
       - name: Legacy K15 protocol/config regression (non-HID)
         run: dotnet run --project status-lab/tests/CanonicalNormalSmoke.csproj -c Release
+  bridge-full-regression:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Full codex-stdio-bridge regression suite
+        working-directory: status-lab/research/codex-stdio-bridge
+        run: npm.cmd test
+
+      - name: Explicit diff check
+        shell: powershell
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+        run: git diff --check "$env:BASE_SHA..$env:GITHUB_SHA"
