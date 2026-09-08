@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Vorotex.K15.Runtime.Contracts;
 
 namespace Vorotex.K15.Runtime;
@@ -16,8 +17,12 @@ public sealed class RuntimeHost : IDisposable
     private SingleInstanceLease? _singleInstanceLease;
     private TaskCompletionSource<bool> _stopped = NewStopSignal();
     private NativeStatusTransport _nativeStatusTransport;
+    private readonly RuntimeDeviceManager _deviceManager;
+    private readonly RuntimeRgbController _rgbController;
 
-    public RuntimeHost(RuntimeHostOptions? options = null)
+    public RuntimeHost(RuntimeHostOptions? options = null) : this(options, null) { }
+
+    internal RuntimeHost(RuntimeHostOptions? options, IK15DeviceBackend? deviceBackend)
     {
         options ??= new RuntimeHostOptions();
         ArgumentException.ThrowIfNullOrWhiteSpace(options.RuntimeVersion);
@@ -26,6 +31,8 @@ public sealed class RuntimeHost : IDisposable
         _runtimeVersion = options.RuntimeVersion;
         _singleInstanceName = options.SingleInstanceName;
         _nativeStatusTransport = new NativeStatusTransport(new RuntimeStateEngine(_runtimeVersion));
+        _deviceManager = new RuntimeDeviceManager(deviceBackend);
+        _rgbController = new RuntimeRgbController(_deviceManager);
     }
 
     public bool IsRunning { get; private set; }
@@ -34,8 +41,11 @@ public sealed class RuntimeHost : IDisposable
 
     public NativeStatusTransport NativeStatusTransport => _nativeStatusTransport;
 
+    internal RuntimeDeviceManager DeviceManager => _deviceManager;
+    internal RuntimeRgbController RgbController => _rgbController;
+
     public string HandleIpcRequest(string json) =>
-        RuntimeIpcProtocol.Handle(json, () => Snapshot, GetRuntimeHealth);
+        RuntimeIpcProtocol.Handle(json, () => Snapshot, GetRuntimeHealth, HandleDeviceCommand, GetDeviceSnapshot, GetRgbSnapshot);
 
     internal RuntimeIpcRuntimeHealth GetRuntimeHealth() =>
         new(_runtimeVersion, IsRunning, IsRunning ? "READY" : "STOPPED");
@@ -44,8 +54,46 @@ public sealed class RuntimeHost : IDisposable
     {
         lock (_gate)
         {
-            return _nativeStatusTransport.Accept(json);
+            var result = _nativeStatusTransport.Accept(json);
+            if (result.Accepted) _rgbController.ApplyRuntimeState(Snapshot.State);
+            return result;
         }
+    }
+
+    private RuntimeIpcProtocol.RuntimeIpcCommandResult HandleDeviceCommand(string command, string? candidateId, bool? enabled)
+    {
+        var ok = command switch
+        {
+            "scan_devices" => _deviceManager.Scan() is not null,
+            "connect_device" => candidateId is not null && _deviceManager.Connect(candidateId),
+            "disconnect_device" => DisconnectAndDisable(),
+            "reconnect_device" => _deviceManager.Reconnect(),
+            "set_rgb_enabled" => enabled.HasValue && _rgbController.SetEnabled(enabled.Value),
+            "restore_lighting" => _rgbController.RestoreLighting(),
+            _ => false,
+        };
+        return new RuntimeIpcProtocol.RuntimeIpcCommandResult(ok, ok ? null : _deviceManager.LastFailure ?? _rgbController.LastFailure ?? "COMMAND_FAILED");
+    }
+
+    private RuntimeIpcDeviceSnapshot GetDeviceSnapshot()
+    {
+        var candidates = _deviceManager.Candidates.Select(candidate => new RuntimeIpcDeviceCandidate(
+            candidate.CandidateId, candidate.Product, candidate.VendorId, candidate.ProductId,
+            candidate.ProtocolVerified, candidate.CandidateId == _deviceManager.Selected?.CandidateId,
+            candidate.CandidateId == _deviceManager.Selected?.CandidateId && _deviceManager.IsConnected)).ToImmutableArray();
+        return new RuntimeIpcDeviceSnapshot(_deviceManager.ConnectionState, _deviceManager.Selected?.CandidateId,
+            candidates, candidates.Length, _deviceManager.Selected?.ProtocolVerified == true, _deviceManager.LastFailure);
+    }
+
+    private RuntimeIpcRgbSnapshot GetRgbSnapshot() => new(
+        _rgbController.Enabled, _rgbController.Effect, _rgbController.TransportAvailable,
+        _rgbController.RestoreAvailable, _rgbController.LastFailure);
+
+    private bool DisconnectAndDisable()
+    {
+        _rgbController.SetEnabled(false);
+        _deviceManager.Disconnect();
+        return true;
     }
 
     public bool TryStart()

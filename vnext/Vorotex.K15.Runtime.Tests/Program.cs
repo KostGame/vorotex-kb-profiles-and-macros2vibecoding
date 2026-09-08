@@ -34,6 +34,10 @@ internal static class Program
             ("IPC invalid requests fail closed", RuntimeIpcTests.InvalidRequestsFailClosedWithoutProviderAccess),
             ("IPC oversized and reserved commands are bounded", RuntimeIpcTests.OversizedAndReservedCommandsAreBounded),
             ("IPC named pipe supports concurrent clients and restart", RuntimeIpcTests.NamedPipeSupportsConcurrentClientsAndRestart),
+            ("device manager requires explicit selection and owns one handle", RuntimeDeviceTests.DeviceManagerRequiresExplicitSelectionAndOwnsOneHandle),
+            ("protocol verification failure disposes pending ownership", RuntimeDeviceTests.ProtocolVerificationFailureFailsClosed),
+            ("RGB follows normalized state only through fake transport", RuntimeDeviceTests.RgbUsesFakeTransportAndPreservesStateAuthority),
+            ("IPC device commands are bounded and private", RuntimeDeviceTests.IpcCommandsAreBoundedAndDoNotExposePaths),
         };
 
         var failures = 0;
