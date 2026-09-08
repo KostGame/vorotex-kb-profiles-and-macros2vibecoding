@@ -323,8 +323,13 @@ export class NativeThreadMetadataObserver {
     const threadId = optionalString(thread.id);
     const workingDirectory = optionalString(thread.cwd);
     if (!threadId || !workingDirectory) return;
-    this.#sink({ schemaVersion: THREAD_METADATA_SCHEMA_VERSION, source: 'codex_stdio_bridge',
-      event: 'thread_metadata_changed', threadId, workingDirectory });
+    const event = { schemaVersion: THREAD_METADATA_SCHEMA_VERSION, source: 'codex_stdio_bridge',
+      event: 'thread_metadata_changed', threadId, workingDirectory };
+    try {
+      // Metadata is optional presentation data: consume both synchronous and
+      // asynchronous delivery failures without creating a retry backlog.
+      Promise.resolve(this.#sink(event)).catch(() => {});
+    } catch { /* fail-open; never affect transparent transport or status */ }
   }
 }
 

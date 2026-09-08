@@ -90,6 +90,46 @@ test('proven thread/started metadata emits only bounded exact Unicode cwd', () =
   assert.equal(events.length, 2);
 });
 
+test('metadata delivery failures are fail-open and never change native status authority', async () => {
+  const nativeEvents = [];
+  const status = new NativeThreadStatusObserver({ authoritySink: event => nativeEvents.push(event) });
+  const metadata = new NativeThreadMetadataObserver({ metadataSink: () => { throw new Error('metadata sink'); } });
+  const rejected = new NativeThreadMetadataObserver({ metadataSink: () => Promise.reject(new Error('async metadata sink')) });
+  const started = JSON.stringify({ method: 'thread/started', params: { thread: {
+    id: 'metadata-failure', cwd: 'G:\\Мой диск\\AgentLoop Exchange\\inbox'
+  } } }) + '\n';
+  const statusLine = JSON.stringify({ method: 'thread/status/changed', params: {
+    threadId: 'status-survives', status: { type: 'idle' }
+  } }) + '\n';
+  assert.doesNotThrow(() => metadata.observeServerChunk(Buffer.from(started)));
+  assert.doesNotThrow(() => rejected.observeServerChunk(Buffer.from(started)));
+  status.observeServerChunk(Buffer.from(statusLine));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(nativeEvents.length, 1);
+  assert.equal(status.authorityHealth().healthy, true);
+});
+
+test('metadata failure does not interrupt transparent transport lifecycle', async () => {
+  for (const authoritySink of [
+    () => { throw new Error('metadata delivery unavailable'); },
+    () => Promise.reject(new Error('metadata delivery unavailable'))
+  ]) {
+    const clientInput = new PassThrough(); const clientOutput = new PassThrough();
+    const childInput = new PassThrough(); const childOutput = new PassThrough();
+    const received = collect(childInput); const returned = collect(clientOutput);
+    const observer = connectTransparentBridge({ clientInput, clientOutput, childInput, childOutput,
+      authoritySink, telemetrySink: () => {} });
+    const server = Buffer.from(JSON.stringify({ method: 'thread/started', params: { thread: {
+      id: 'metadata-failure', cwd: 'G:\\Мой диск\\AgentLoop Exchange\\inbox'
+    } } }) + '\n');
+    const client = Buffer.from('opaque-client-bytes\0\xff');
+    childOutput.end(server); clientInput.end(client);
+    assert.deepEqual(await received, client);
+    assert.deepEqual(await returned, server);
+    assert.ok(observer.nativeStatusObserver);
+  }
+});
+
 test('exact non-active ThreadStatus union shapes are accepted and sanitized', async () => {
   const events = [];
   const observer = new NativeThreadStatusObserver({ authoritySink: event => events.push(event) });
