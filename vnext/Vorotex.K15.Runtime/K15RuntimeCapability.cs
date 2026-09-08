@@ -5,9 +5,10 @@ using Vorotex.K15.Runtime.Contracts;
 namespace Vorotex.K15.Runtime;
 
 internal sealed record RuntimeDeviceCandidate(string CandidateId, string Path, string Product, string Serial,
-    ushort VendorId, ushort ProductId, bool? ProtocolVerified = null, string? Verification = null)
+    ushort VendorId, ushort ProductId, ushort UsagePage = 0, ushort Usage = 0, ushort FeatureReportLength = K15HidProtocol.ReportSize,
+    bool? ProtocolVerified = null, string? Verification = null)
 {
-    public string Identity => $"{VendorId:X4}:{ProductId:X4}|{Product.Trim()}|{Serial.Trim()}";
+    public string Identity => $"{VendorId:X4}:{ProductId:X4}|{Product.Trim()}|{Serial.Trim()}|{UsagePage:X4}:{Usage:X4}|{FeatureReportLength}";
     public static string IdForPath(string path) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(path)).AsSpan(0, 8));
 }
 
@@ -44,6 +45,7 @@ internal sealed class RuntimeDeviceManager : IDisposable
     private string? _preferredIdentity;
     private string? _lastFailure;
     private List<RuntimeDeviceCandidate> _candidates = new();
+    public event Action? OwnershipLost;
 
     public RuntimeDeviceManager(IK15DeviceBackend? backend = null) => _backend = backend ?? new DisabledHidBackend();
     public string ConnectionState { get; private set; } = "DISCONNECTED";
@@ -77,6 +79,7 @@ internal sealed class RuntimeDeviceManager : IDisposable
         {
             var candidate = _candidates.SingleOrDefault(x => x.CandidateId == candidateId);
             if (candidate is null) { _lastFailure = "CANDIDATE_NOT_FOUND"; return false; }
+            if (_selected?.CandidateId != candidate.CandidateId) OwnershipLost?.Invoke();
             _selected = candidate; _lastFailure = null; return true;
         }
     }
@@ -97,7 +100,9 @@ internal sealed class RuntimeDeviceManager : IDisposable
         lock (_gate)
         {
             if (_selected is null) { _lastFailure = "CANDIDATE_NOT_SELECTED"; return false; }
+            var replaced = _handle is not null;
             _handle?.Dispose(); _handle = null;
+            if (replaced) OwnershipLost?.Invoke();
             try
             {
                 var pending = _backend.Open(_selected);
@@ -115,10 +120,10 @@ internal sealed class RuntimeDeviceManager : IDisposable
 
     public bool Connect(string candidateId) => Select(candidateId) && Connect();
     public bool Reconnect() { lock (_gate) { return _selected is not null && Connect(); } }
-    public void Disconnect(string state = "DISCONNECTED") { lock (_gate) { _handle?.Dispose(); _handle = null; ConnectionState = state; } }
+    public void Disconnect(string state = "DISCONNECTED") { lock (_gate) { _handle?.Dispose(); _handle = null; OwnershipLost?.Invoke(); ConnectionState = state; } }
     public void MarkConnectionLost() => Disconnect("CONNECTION_LOST");
     private void MarkVerificationFailure() { ConnectionState = "ERROR"; _lastFailure = "PROTOCOL_VERIFY_FAILED"; _selected = _selected is null ? null : _selected with { ProtocolVerified = false, Verification = "FAIL" }; }
-    private static RuntimeDeviceCandidate Bound(RuntimeDeviceCandidate c) => c with { Product = Limit(c.Product), Serial = Limit(c.Serial) };
+    private static RuntimeDeviceCandidate Bound(RuntimeDeviceCandidate c) => c with { CandidateId = Limit(c.CandidateId), Product = Limit(c.Product), Serial = Limit(c.Serial) };
     private static string Limit(string value) => (value ?? string.Empty).Trim()[..Math.Min((value ?? string.Empty).Trim().Length, MaxText)];
     public void Dispose() => Disconnect();
 }
@@ -130,7 +135,7 @@ internal sealed class RuntimeRgbController
     private byte[]? _restore;
     private string? _restoreCandidate;
     private string? _lastFailure;
-    public RuntimeRgbController(RuntimeDeviceManager devices) => _devices = devices;
+    public RuntimeRgbController(RuntimeDeviceManager devices) { _devices = devices; _devices.OwnershipLost += InvalidateRestoreSnapshot; }
     public bool Enabled { get; private set; }
     public string Effect { get; private set; } = "NORMAL";
     public string? LastFailure { get { lock (_gate) return _lastFailure; } }
@@ -142,11 +147,14 @@ internal sealed class RuntimeRgbController
         lock (_gate)
         {
             if (!enabled) { Enabled = false; Effect = "OFF"; _lastFailure = null; return true; }
+            if (Enabled) return true;
             if (!_devices.IsConnected || _devices.Handle is null) { _lastFailure = "DEVICE_UNAVAILABLE"; return false; }
             try { _restore = _devices.Handle.CaptureLightingSnapshot(); _restoreCandidate = _devices.Selected!.CandidateId; Enabled = true; _lastFailure = null; return true; }
             catch { _lastFailure = "SNAPSHOT_FAILED"; return false; }
         }
     }
+
+    private void InvalidateRestoreSnapshot() { lock (_gate) { _restore = null; _restoreCandidate = null; } }
 
     public void ApplyRuntimeState(RuntimeState state)
     {

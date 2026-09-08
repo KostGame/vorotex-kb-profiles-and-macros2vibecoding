@@ -7,6 +7,7 @@ public sealed record RuntimeHostOptions
 {
     public string RuntimeVersion { get; init; } = RuntimeContractMetadata.CurrentRuntimeVersion;
     public string SingleInstanceName { get; init; } = RuntimeContractMetadata.SingleInstanceName;
+    public bool EnablePhysicalHidBackend { get; init; }
 }
 
 public sealed class RuntimeHost : IDisposable
@@ -31,7 +32,7 @@ public sealed class RuntimeHost : IDisposable
         _runtimeVersion = options.RuntimeVersion;
         _singleInstanceName = options.SingleInstanceName;
         _nativeStatusTransport = new NativeStatusTransport(new RuntimeStateEngine(_runtimeVersion));
-        _deviceManager = new RuntimeDeviceManager(deviceBackend);
+        _deviceManager = new RuntimeDeviceManager(deviceBackend ?? (options.EnablePhysicalHidBackend ? new WindowsK15HidBackend() : null));
         _rgbController = new RuntimeRgbController(_deviceManager);
     }
 

@@ -58,6 +58,63 @@ internal static class RuntimeDeviceTests
         return Task.CompletedTask;
     }
 
+    public static Task PreferredIdentityFailsClosed()
+    {
+        var backend = new FakeBackend { DuplicateIdentity = true };
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "preferred-" + Guid.NewGuid().ToString("N") }, backend);
+        host.HandleIpcRequest(Request("scan_devices"));
+        TestAssert.False(host.DeviceManager.SelectPreferred(backend.Identity), "ambiguous preferred identity was selected");
+        backend.DuplicateIdentity = false;
+        host.DeviceManager.Scan();
+        TestAssert.True(host.DeviceManager.SelectPreferred(backend.Identity), "unique exact preferred identity was not selected");
+        return Task.CompletedTask;
+    }
+
+    public static Task RestoreIsSessionBound()
+    {
+        var backend = new FakeBackend();
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "restore-" + Guid.NewGuid().ToString("N") }, backend);
+        host.HandleIpcRequest(Request("scan_devices")); host.HandleIpcRequest(Request("connect_device", ("candidateId", "candidate-a")));
+        host.HandleIpcRequest(Request("set_rgb_enabled", ("enabled", true)));
+        host.HandleIpcRequest(Request("set_rgb_enabled", ("enabled", true)));
+        TestAssert.Equal(1, backend.LastHandle!.SnapshotsCaptured, "repeated enable recaptured the baseline");
+        host.HandleIpcRequest(Request("disconnect_device"));
+        host.HandleIpcRequest(Request("connect_device", ("candidateId", "candidate-a")));
+        var rejected = host.HandleIpcRequest(Request("restore_lighting"));
+        TestAssert.True(rejected.Contains("RESTORE_SNAPSHOT_UNAVAILABLE"), "old session restore remained valid");
+        return Task.CompletedTask;
+    }
+
+    public static Task DeviceLifecyclePreservesCodexState()
+    {
+        var backend = new FakeBackend();
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "state-" + Guid.NewGuid().ToString("N") }, backend);
+        host.ApplyNativeStatusJson("{\"schemaVersion\":\"k15-codex-thread-status/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"thread_status_changed\",\"threadId\":\"t\",\"status\":\"active\",\"activeFlags\":[],\"timestampUtc\":\"2026-09-08T00:00:00Z\"}");
+        var before = RuntimeContractJson.Serialize(host.Snapshot);
+        host.HandleIpcRequest(Request("scan_devices")); host.HandleIpcRequest(Request("connect_device", ("candidateId", "candidate-a")));
+        host.HandleIpcRequest(Request("disconnect_device")); host.HandleIpcRequest(Request("scan_devices"));
+        TestAssert.Equal(before, RuntimeContractJson.Serialize(host.Snapshot), "device lifecycle mutated Codex state");
+        return Task.CompletedTask;
+    }
+
+    public static Task RgbDoesNotWriteWithoutOwnership()
+    {
+        var backend = new FakeBackend();
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "writes-" + Guid.NewGuid().ToString("N") }, backend);
+        host.RgbController.ApplyRuntimeState(RuntimeState.Waiting);
+        TestAssert.Equal(0, backend.TotalEffectWrites, "disconnected RGB wrote an effect");
+        return Task.CompletedTask;
+    }
+
+    public static Task CapabilitiesMatchCommandAllowlist()
+    {
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "caps-" + Guid.NewGuid().ToString("N") });
+        using var json = JsonDocument.Parse(host.HandleIpcRequest(Request("snapshot")));
+        var advertised = json.RootElement.GetProperty("snapshot").GetProperty("capabilities").EnumerateArray().Select(x => x.GetString()).ToArray();
+        TestAssert.True(advertised.SequenceEqual(RuntimeIpcMetadata.Capabilities), "capability advertisement is stale or reordered");
+        return Task.CompletedTask;
+    }
+
     private static string Request(string command, params (string Name, object Value)[] args)
     {
         var values = new Dictionary<string, object> { ["protocolVersion"] = RuntimeIpcMetadata.ProtocolVersion, ["command"] = command };
@@ -68,12 +125,15 @@ internal static class RuntimeDeviceTests
     private sealed class FakeBackend : IK15DeviceBackend
     {
         public bool VerifyFails { get; init; }
+        public bool DuplicateIdentity { get; set; }
+        public string Identity => "36A4:4100|K15|serial-a|FF01:0001|41";
         public int OpenCount { get; private set; }
         public int RealWrites => 0;
         public FakeHandle? LastHandle { get; private set; }
+        public int TotalEffectWrites => LastHandle?.Effects.Count ?? 0;
         public IReadOnlyList<RuntimeDeviceCandidate> Scan() => new[] {
-            new RuntimeDeviceCandidate("candidate-a", "\\\\fake\\\\hid\\\\a", "K15", "serial-a", 0x36A4, 0x4100),
-            new RuntimeDeviceCandidate("candidate-b", "\\\\fake\\\\hid\\\\b", "K15", "serial-b", 0x36A4, 0x4100)
+            new RuntimeDeviceCandidate("candidate-a", "\\\\fake\\\\hid\\\\a", "K15", "serial-a", 0x36A4, 0x4100, 0xFF01, 1, 41),
+            new RuntimeDeviceCandidate("candidate-b", "\\\\fake\\\\hid\\\\b", "K15", DuplicateIdentity ? "serial-a" : "serial-b", 0x36A4, 0x4100, 0xFF01, 1, 41)
         };
         public IK15DeviceHandle Open(RuntimeDeviceCandidate candidate) { OpenCount++; LastHandle = new FakeHandle(candidate.CandidateId, VerifyFails); return LastHandle; }
     }
@@ -84,9 +144,10 @@ internal static class RuntimeDeviceTests
         public FakeHandle(string candidateId, bool verifyFails) { CandidateId = candidateId; _verifyFails = verifyFails; }
         public string CandidateId { get; }
         public bool Disposed { get; private set; }
+        public int SnapshotsCaptured { get; private set; }
         public List<string> Effects { get; } = new();
         public void VerifyProtocol() { if (_verifyFails) throw new InvalidDataException(); }
-        public byte[] CaptureLightingSnapshot() => new byte[] { 1, 2, 3 };
+        public byte[] CaptureLightingSnapshot() { SnapshotsCaptured++; return new byte[] { 1, 2, 3 }; }
         public void ApplyEffect(string effect) => Effects.Add(effect);
         public void RestoreLighting(byte[] snapshot) { if (snapshot.Length != 3) throw new InvalidDataException(); }
         public void Dispose() => Disposed = true;

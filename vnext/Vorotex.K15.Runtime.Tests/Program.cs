@@ -38,6 +38,11 @@ internal static class Program
             ("protocol verification failure disposes pending ownership", RuntimeDeviceTests.ProtocolVerificationFailureFailsClosed),
             ("RGB follows normalized state only through fake transport", RuntimeDeviceTests.RgbUsesFakeTransportAndPreservesStateAuthority),
             ("IPC device commands are bounded and private", RuntimeDeviceTests.IpcCommandsAreBoundedAndDoNotExposePaths),
+            ("preferred endpoint identity is exact and fails closed", RuntimeDeviceTests.PreferredIdentityFailsClosed),
+            ("restore is session-bound and repeated enable preserves baseline", RuntimeDeviceTests.RestoreIsSessionBound),
+            ("device lifecycle never mutates Codex aggregate state", RuntimeDeviceTests.DeviceLifecyclePreservesCodexState),
+            ("RGB never writes while disabled or disconnected", RuntimeDeviceTests.RgbDoesNotWriteWithoutOwnership),
+            ("capabilities advertise exactly the accepted commands", RuntimeDeviceTests.CapabilitiesMatchCommandAllowlist),
         };
 
         var failures = 0;

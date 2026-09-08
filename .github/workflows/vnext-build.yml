@@ -38,3 +38,10 @@ jobs:
 
       - name: Run vNext tests
         run: dotnet run --project vnext/Vorotex.K15.Runtime.Tests/Vorotex.K15.Runtime.Tests.csproj -c Release --no-build
+
+      - name: Legacy device ownership and protocol smoke (non-HID)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/device-manager-smoke.ps1
+
+      - name: Legacy K15 protocol/config regression (non-HID)
+        run: dotnet run --project status-lab/tests/CanonicalNormalSmoke.csproj -c Release

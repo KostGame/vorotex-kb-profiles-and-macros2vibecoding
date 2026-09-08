@@ -7,6 +7,9 @@ public static class RuntimeIpcMetadata
 {
     public const string ProtocolVersion = "k15-runtime-ipc/v1";
     public const int MaxFrameBytes = 16 * 1024;
+    public static readonly ImmutableArray<string> Capabilities = ImmutableArray.Create(
+        "ping", "snapshot", "scan_devices", "connect_device", "disconnect_device",
+        "reconnect_device", "set_rgb_enabled", "restore_lighting");
 }
 
 public sealed record RuntimeIpcRequest(
@@ -85,6 +88,6 @@ public sealed record RuntimeIpcSnapshot(
             focusedThreadId,
             device ?? new RuntimeIpcDeviceSnapshot("DISCONNECTED", null, ImmutableArray<RuntimeIpcDeviceCandidate>.Empty, 0, false, null),
             rgb ?? new RuntimeIpcRgbSnapshot(false, "NORMAL", false, false, null),
-            (capabilities ?? new[] { "ping", "snapshot" }).ToImmutableArray());
+            (capabilities ?? RuntimeIpcMetadata.Capabilities).ToImmutableArray());
     }
 }
