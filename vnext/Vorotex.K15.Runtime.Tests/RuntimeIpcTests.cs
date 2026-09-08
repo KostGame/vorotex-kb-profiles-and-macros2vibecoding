@@ -35,7 +35,7 @@ internal static class RuntimeIpcTests
         TestAssert.Equal("DONE_PENDING_ATTENTION", value.GetProperty("state").GetString(), "canonical state was recomputed");
         TestAssert.Equal(1, value.GetProperty("attention").GetProperty("unreadCount").GetInt32(), "attention count changed");
         TestAssert.Equal("thread-b", value.GetProperty("focusedThreadId").GetString(), "focus hint was lost");
-        TestAssert.Equal("NOT_IMPLEMENTED", value.GetProperty("rgb").GetProperty("status").GetString(), "RGB placeholder changed");
+        TestAssert.Equal("NORMAL", value.GetProperty("rgb").GetProperty("effect").GetString(), "RGB effect changed");
         TestAssert.True(value.GetProperty("runtime").GetProperty("isHealthy").GetBoolean(), "runtime health was not sourced");
         TestAssert.True(value.GetProperty("nativeAuthority").GetProperty("isHealthy").GetBoolean() == false, "native health was not kept separate");
         return Task.CompletedTask;

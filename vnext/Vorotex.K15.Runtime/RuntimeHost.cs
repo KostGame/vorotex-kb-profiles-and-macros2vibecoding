@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Vorotex.K15.Runtime.Contracts;
 
 namespace Vorotex.K15.Runtime;
@@ -6,6 +7,7 @@ public sealed record RuntimeHostOptions
 {
     public string RuntimeVersion { get; init; } = RuntimeContractMetadata.CurrentRuntimeVersion;
     public string SingleInstanceName { get; init; } = RuntimeContractMetadata.SingleInstanceName;
+    public bool EnablePhysicalHidBackend { get; init; }
 }
 
 public sealed class RuntimeHost : IDisposable
@@ -16,8 +18,13 @@ public sealed class RuntimeHost : IDisposable
     private SingleInstanceLease? _singleInstanceLease;
     private TaskCompletionSource<bool> _stopped = NewStopSignal();
     private NativeStatusTransport _nativeStatusTransport;
+    private readonly RuntimeDeviceManager _deviceManager;
+    private readonly RuntimeRgbController _rgbController;
+    private bool _stoppedForMutations;
 
-    public RuntimeHost(RuntimeHostOptions? options = null)
+    public RuntimeHost(RuntimeHostOptions? options = null) : this(options, null) { }
+
+    internal RuntimeHost(RuntimeHostOptions? options, IK15DeviceBackend? deviceBackend)
     {
         options ??= new RuntimeHostOptions();
         ArgumentException.ThrowIfNullOrWhiteSpace(options.RuntimeVersion);
@@ -26,6 +33,8 @@ public sealed class RuntimeHost : IDisposable
         _runtimeVersion = options.RuntimeVersion;
         _singleInstanceName = options.SingleInstanceName;
         _nativeStatusTransport = new NativeStatusTransport(new RuntimeStateEngine(_runtimeVersion));
+        _deviceManager = new RuntimeDeviceManager(deviceBackend ?? (options.EnablePhysicalHidBackend ? new WindowsK15HidBackend() : null));
+        _rgbController = new RuntimeRgbController(_deviceManager);
     }
 
     public bool IsRunning { get; private set; }
@@ -34,8 +43,11 @@ public sealed class RuntimeHost : IDisposable
 
     public NativeStatusTransport NativeStatusTransport => _nativeStatusTransport;
 
+    internal RuntimeDeviceManager DeviceManager => _deviceManager;
+    internal RuntimeRgbController RgbController => _rgbController;
+
     public string HandleIpcRequest(string json) =>
-        RuntimeIpcProtocol.Handle(json, () => Snapshot, GetRuntimeHealth);
+        RuntimeIpcProtocol.Handle(json, () => Snapshot, GetRuntimeHealth, HandleDeviceCommand, GetDeviceSnapshot, GetRgbSnapshot);
 
     internal RuntimeIpcRuntimeHealth GetRuntimeHealth() =>
         new(_runtimeVersion, IsRunning, IsRunning ? "READY" : "STOPPED");
@@ -44,8 +56,57 @@ public sealed class RuntimeHost : IDisposable
     {
         lock (_gate)
         {
-            return _nativeStatusTransport.Accept(json);
+            var result = _nativeStatusTransport.Accept(json);
+            if (result.Accepted) _rgbController.ApplyRuntimeState(Snapshot.State);
+            return result;
         }
+    }
+
+    private RuntimeIpcProtocol.RuntimeIpcCommandResult HandleDeviceCommand(string command, string? candidateId, bool? enabled)
+    {
+        lock (_gate)
+        {
+            if (_stoppedForMutations)
+                return new RuntimeIpcProtocol.RuntimeIpcCommandResult(false, "RUNTIME_STOPPED");
+            var ok = command switch
+            {
+                "scan_devices" => ScanDevices(),
+                "connect_device" => candidateId is not null && _deviceManager.Connect(candidateId),
+                "disconnect_device" => DisconnectAndDisable(),
+                "reconnect_device" => _deviceManager.Reconnect(),
+                "set_rgb_enabled" => enabled.HasValue && _rgbController.SetEnabled(enabled.Value),
+                "restore_lighting" => _rgbController.RestoreLighting(),
+                _ => false,
+            };
+            return new RuntimeIpcProtocol.RuntimeIpcCommandResult(ok, ok ? null : _deviceManager.LastFailure ?? _rgbController.LastFailure ?? "COMMAND_FAILED");
+        }
+    }
+
+    private RuntimeIpcDeviceSnapshot GetDeviceSnapshot()
+    {
+        var candidates = _deviceManager.Candidates.Select(candidate => new RuntimeIpcDeviceCandidate(
+            candidate.CandidateId, candidate.Product, candidate.VendorId, candidate.ProductId,
+            candidate.ProtocolVerified, candidate.CandidateId == _deviceManager.Selected?.CandidateId,
+            candidate.CandidateId == _deviceManager.Selected?.CandidateId && _deviceManager.IsConnected)).ToImmutableArray();
+        return new RuntimeIpcDeviceSnapshot(_deviceManager.ConnectionState, _deviceManager.Selected?.CandidateId,
+            candidates, candidates.Length, _deviceManager.Selected?.ProtocolVerified == true, _deviceManager.LastFailure);
+    }
+
+    private RuntimeIpcRgbSnapshot GetRgbSnapshot() => new(
+        _rgbController.Enabled, _rgbController.Effect, _rgbController.TransportAvailable,
+        _rgbController.RestoreAvailable, _rgbController.LastFailure);
+
+    private bool DisconnectAndDisable()
+    {
+        var restored = _rgbController.SetEnabled(false);
+        _deviceManager.Disconnect();
+        return restored;
+    }
+
+    private bool ScanDevices()
+    {
+        _deviceManager.Scan();
+        return _deviceManager.LastFailure is null;
     }
 
     public bool TryStart()
@@ -64,6 +125,7 @@ public sealed class RuntimeHost : IDisposable
 
             _singleInstanceLease = lease;
             _stopped = NewStopSignal();
+            _stoppedForMutations = false;
             _nativeStatusTransport = new NativeStatusTransport(new RuntimeStateEngine(_runtimeVersion));
             IsRunning = true;
             return true;
@@ -103,24 +165,20 @@ public sealed class RuntimeHost : IDisposable
 
     public void Stop()
     {
-        SingleInstanceLease? lease;
-        TaskCompletionSource<bool> stopped;
-
         lock (_gate)
         {
-            if (!IsRunning)
-            {
-                return;
-            }
-
+            var wasRunning = IsRunning;
             IsRunning = false;
-            lease = _singleInstanceLease;
+            _stoppedForMutations = true;
+            var lease = _singleInstanceLease;
             _singleInstanceLease = null;
-            stopped = _stopped;
-        }
+            var stopped = _stopped;
 
-        lease?.Dispose();
-        stopped.TrySetResult(true);
+            _rgbController.Disarm();
+            _deviceManager.Dispose();
+            lease?.Dispose();
+            if (wasRunning) stopped.TrySetResult(true);
+        }
     }
 
     public void Dispose() => Stop();
