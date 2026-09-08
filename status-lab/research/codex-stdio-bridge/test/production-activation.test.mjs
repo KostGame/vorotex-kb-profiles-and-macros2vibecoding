@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -15,6 +15,8 @@ const approvalWrapper = path.join(bridgeRoot, 'src', 'approval-wrapper.mjs');
 const transparentWrapper = path.join(bridgeRoot, 'src', 'transparent-wrapper.mjs');
 const bridgeCore = path.join(bridgeRoot, 'src', 'bridge-core.mjs');
 const runtimeAuthority = path.join(bridgeRoot, 'src', 'runtime-process-authority.mjs');
+const tempRoot = await realpath(os.tmpdir());
+os.tmpdir = () => tempRoot;
 const managedVariables = [
   'CODEX_CLI_PATH',
   'CODEX_BRIDGE_NODE_PATH',
@@ -337,7 +339,7 @@ test('production activation rejects runtime authority module replacement-in-plac
 });
 
 test('production activation rejects reviewed decoy when the real imported sibling is modified before environment mutation', async () => {
-  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  const temp = await mkdtemp(path.join(tempRoot, 'k15-codex-production-'));
   try {
     const { manifest, paths } = await createBundle(temp);
     const decoyDirectory = path.join(temp, 'reviewed-decoy');
