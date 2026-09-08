@@ -13,9 +13,14 @@ public static class RuntimeIpcProtocol
         "protocolVersion", "command"
     };
 
-    public static string Handle(string json, Func<RuntimeSnapshot> snapshotProvider)
+    public static string Handle(
+        string json,
+        Func<RuntimeSnapshot> snapshotProvider,
+        Func<RuntimeIpcRuntimeHealth>? runtimeHealthProvider = null)
     {
         ArgumentNullException.ThrowIfNull(snapshotProvider);
+        runtimeHealthProvider ??= () => new RuntimeIpcRuntimeHealth(
+            RuntimeContractMetadata.CurrentRuntimeVersion, false, "UNAVAILABLE");
         if (string.IsNullOrWhiteSpace(json) || Encoding.UTF8.GetByteCount(json) > RuntimeIpcMetadata.MaxFrameBytes)
             return SerializeError("INVALID_REQUEST", "MALFORMED");
 
@@ -35,16 +40,20 @@ public static class RuntimeIpcProtocol
             if (!TryString(root, "command", out var command))
                 return SerializeError("INVALID_REQUEST", "MALFORMED");
 
-            return command switch
+            var response = command switch
             {
                 "ping" => RuntimeContractJson.Serialize(new RuntimeIpcResponse(
                     RuntimeIpcMetadata.ProtocolVersion, true, "ping")),
                 "snapshot" => RuntimeContractJson.Serialize(new RuntimeIpcResponse(
                     RuntimeIpcMetadata.ProtocolVersion, true, "snapshot",
-                    RuntimeIpcSnapshot.From(snapshotProvider()))),
+                    RuntimeIpcSnapshot.From(snapshotProvider(), runtimeHealthProvider()))),
                 "acknowledge_attention" or "shutdown_runtime" => SerializeError(command, "UNSUPPORTED_COMMAND"),
                 _ => SerializeError("INVALID_COMMAND", "UNKNOWN_COMMAND")
             };
+            // The newline delimiter is part of the wire frame.
+            if (Encoding.UTF8.GetByteCount(response) + 1 <= RuntimeIpcMetadata.MaxFrameBytes)
+                return response;
+            return SerializeError("snapshot", "SNAPSHOT_TOO_LARGE");
         }
         catch (JsonException)
         {
@@ -127,19 +136,25 @@ public sealed class RuntimeIpcServer : IAsyncDisposable
         await using var ownedPipe = pipe;
         await using var writer = new StreamWriter(ownedPipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
         var request = await ReadBoundedLineAsync(ownedPipe, _stop.Token).ConfigureAwait(false);
-        await writer.WriteLineAsync(RuntimeIpcProtocol.Handle(request, () => _host.Snapshot)).ConfigureAwait(false);
+        await writer.WriteLineAsync(_host.HandleIpcRequest(request)).ConfigureAwait(false);
     }
 
     private static async Task<string> ReadBoundedLineAsync(Stream pipe, CancellationToken cancellationToken)
     {
         var bytes = new List<byte>(RuntimeIpcMetadata.MaxFrameBytes + 1);
-        var buffer = new byte[1];
-        while (await pipe.ReadAsync(buffer, cancellationToken).ConfigureAwait(false) != 0)
+        var buffer = new byte[1024];
+        while (true)
         {
-            if (buffer[0] == (byte)'\n') break;
-            bytes.Add(buffer[0]);
-            if (bytes.Count > RuntimeIpcMetadata.MaxFrameBytes)
-                return new string('x', RuntimeIpcMetadata.MaxFrameBytes + 1);
+            var read = await pipe.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0) break;
+            for (var index = 0; index < read; index++)
+            {
+                if (buffer[index] == (byte)'\n')
+                    return Encoding.UTF8.GetString(bytes.ToArray()).TrimEnd('\r');
+                bytes.Add(buffer[index]);
+                if (bytes.Count > RuntimeIpcMetadata.MaxFrameBytes)
+                    return new string('x', RuntimeIpcMetadata.MaxFrameBytes + 1);
+            }
         }
         return Encoding.UTF8.GetString(bytes.ToArray()).TrimEnd('\r');
     }

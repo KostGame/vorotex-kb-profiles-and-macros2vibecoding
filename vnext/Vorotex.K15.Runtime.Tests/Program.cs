@@ -29,6 +29,8 @@ internal static class Program
             ("native queue has explicit concurrent overflow health", NativeThreadStatusAdapterTests.ConcurrentQueueNeverReportsAcceptedLoss),
             ("IPC ping wire shape is exact", RuntimeIpcTests.PingWireShapeIsExact),
             ("IPC snapshot is canonical and stable", RuntimeIpcTests.SnapshotIsCanonicalAndStable),
+            ("IPC oversized snapshot returns bounded error", RuntimeIpcTests.OversizedSnapshotReturnsBoundedError),
+            ("IPC runtime process health reflects host state", RuntimeIpcTests.RuntimeProcessHealthReflectsHostState),
             ("IPC invalid requests fail closed", RuntimeIpcTests.InvalidRequestsFailClosedWithoutProviderAccess),
             ("IPC oversized and reserved commands are bounded", RuntimeIpcTests.OversizedAndReservedCommandsAreBounded),
             ("IPC named pipe supports concurrent clients and restart", RuntimeIpcTests.NamedPipeSupportsConcurrentClientsAndRestart),

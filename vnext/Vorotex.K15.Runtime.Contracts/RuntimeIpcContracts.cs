@@ -42,16 +42,16 @@ public sealed record RuntimeIpcSnapshot(
     [property: JsonPropertyOrder(9)] RuntimeIpcDevicePlaceholder Rgb,
     [property: JsonPropertyOrder(10)] ImmutableArray<string> Capabilities)
 {
-    public static RuntimeIpcSnapshot From(RuntimeSnapshot snapshot)
+    public static RuntimeIpcSnapshot From(RuntimeSnapshot snapshot, RuntimeIpcRuntimeHealth runtimeHealth)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(runtimeHealth);
         var threads = snapshot.Threads.IsDefault ? ImmutableArray<ThreadSnapshot>.Empty : snapshot.Threads;
         var focusedThreadId = threads
             .Where(thread => thread.FocusHint == ThreadFocusHint.Focused)
             .Select(thread => thread.ThreadId)
             .OrderBy(id => id, StringComparer.Ordinal)
             .FirstOrDefault();
-        var runtimeHealth = new RuntimeIpcRuntimeHealth(snapshot.Health.RuntimeVersion, true, "READY");
         var nativeHealth = new RuntimeIpcRuntimeHealth(snapshot.Health.RuntimeVersion, snapshot.Health.IsHealthy, snapshot.Health.Detail);
         return new RuntimeIpcSnapshot(
             RuntimeIpcMetadata.ProtocolVersion, snapshot.SchemaVersion, runtimeHealth, snapshot.State, threads, nativeHealth,
