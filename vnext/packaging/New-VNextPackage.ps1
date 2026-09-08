@@ -14,7 +14,8 @@ if ($SourceCommit -ne $checkedOutCommit) { throw 'supplied SourceCommit does not
 if (-not $Version) { $Version = $SourceCommit }
 if (-not $SourceRef) { $SourceRef = if ($env:GITHUB_REF) { $env:GITHUB_REF } else { (& git -C $repo branch --show-current).Trim() } }
 if ($SourceRef -notmatch '^refs/') { $SourceRef = "refs/heads/$SourceRef" }
-if (-not (& git -C $repo cat-file -e "$BaseMainSha^{commit}" 2>$null)) { throw 'BaseMainSha is not present in checked-out Git source' }
+& git -C $repo cat-file -e "$BaseMainSha^{commit}" 2>$null
+if ($LASTEXITCODE -ne 0) { throw 'BaseMainSha is not present in checked-out Git source' }
 & git -C $repo merge-base --is-ancestor $BaseMainSha $checkedOutCommit 2>$null
 if ($LASTEXITCODE -ne 0) { throw 'BaseMainSha is not an ancestor of the build commit' }
 if ($Version -notmatch '^[A-Za-z0-9._-]{1,128}$') { throw 'Version must be a safe immutable directory name' }
