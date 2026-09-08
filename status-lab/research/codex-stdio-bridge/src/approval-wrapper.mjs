@@ -2,8 +2,10 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
   ApprovalObserver,
+  NativeThreadStatusObserver,
   createSanitizedJsonlSink
 } from './bridge-core.mjs';
+import { RUNTIME_COMMAND_ENV, createRuntimeProcessAuthoritySink } from './runtime-process-authority.mjs';
 import { runTransparentWrapper } from './transparent-wrapper.mjs';
 
 export const APPROVAL_SINK_PATH_ENV = 'CODEX_BRIDGE_APPROVAL_SINK_PATH';
@@ -42,7 +44,12 @@ export async function runApprovalWrapper(options = {}) {
     env = process.env,
     stdin = process.stdin,
     stderr = process.stderr,
-    telemetrySink
+    telemetrySink,
+    authoritySink,
+    classificationResolver,
+    receiptClock,
+    runtimeCommandArgs,
+    runtimeSpawnProcess
   } = options;
 
   let sinkPath;
@@ -54,19 +61,43 @@ export async function runApprovalWrapper(options = {}) {
     return APPROVAL_CONFIG_ERROR_EXIT_CODE;
   }
 
+  let runtimeBoundary;
+  try {
+    if (env[RUNTIME_COMMAND_ENV] !== undefined) {
+      runtimeBoundary = createRuntimeProcessAuthoritySink({
+        commandPath: env[RUNTIME_COMMAND_ENV], commandArgs: runtimeCommandArgs,
+        env, spawnProcess: runtimeSpawnProcess
+      });
+    }
+  } catch {
+    pauseInput(stdin);
+    writeDiagnostic(stderr, 'codex bridge: invalid runtime authority configuration');
+    return APPROVAL_CONFIG_ERROR_EXIT_CODE;
+  }
+
   const observer = new ApprovalObserver({
     telemetrySink: telemetrySink ?? createSanitizedJsonlSink(sinkPath)
   });
-
-  return runTransparentWrapper({
-    ...options,
-    env,
-    stdin,
-    stderr,
-    wrapperPath: options.wrapperPath ?? APPROVAL_WRAPPER_PATH,
-    onClientChunk: (chunk) => observer.observeClientChunk(chunk),
-    onServerChunk: (chunk) => observer.observeServerChunk(chunk)
+  const nativeStatusObserver = new NativeThreadStatusObserver({
+    authoritySink: authoritySink ?? runtimeBoundary?.sink,
+    classificationResolver, receiptClock,
+    authorityDegraded: reason => runtimeBoundary?.markDegraded(reason)
   });
+
+  try {
+    return await runTransparentWrapper({
+      ...options,
+      env, stdin, stderr,
+      wrapperPath: options.wrapperPath ?? APPROVAL_WRAPPER_PATH,
+      onClientChunk: (chunk) => observer.observeClientChunk(chunk),
+      onServerChunk: (chunk) => {
+        observer.observeServerChunk(chunk);
+        nativeStatusObserver.observeServerChunk(chunk);
+      }
+    });
+  } finally {
+    await runtimeBoundary?.close();
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(APPROVAL_WRAPPER_PATH)) {

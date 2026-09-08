@@ -11,6 +11,7 @@ import {
   APPROVAL_SINK_PATH_ENV,
   runApprovalWrapper
 } from '../src/approval-wrapper.mjs';
+import { RUNTIME_COMMAND_ENV } from '../src/runtime-process-authority.mjs';
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const fakeChild = path.join(testDirectory, 'fixtures', 'fake-child.mjs');
@@ -89,4 +90,52 @@ test('approval wrapper rejects a relative sink without touching transport', asyn
   stdin.end();
   assert.equal(code, APPROVAL_CONFIG_ERROR_EXIT_CODE);
   assert.match(Buffer.concat(diagnostics).toString('utf8'), /invalid approval sink configuration/);
+});
+
+test('real approval wrapper seam observes native status while preserving bytes', async () => {
+  const stdin = new PassThrough(); const stdout = new PassThrough(); const stderr = new PassThrough();
+  const output = collect(stdout); const events = [];
+  const run = runApprovalWrapper({
+    argv: ['app-server'],
+    env: { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CODEX_BRIDGE_'))), CODEX_BRIDGE_CHILD_PATH: fakeChild, FAKE_CHILD_MODE: 'native' },
+    stdin, stdout, stderr,
+    authoritySink: event => events.push(event),
+    spawnProcess: (childPath, childArgs, options) => spawn(process.execPath, [childPath, ...childArgs], { ...options })
+  });
+  stdout.once('data', () => stdin.end(Buffer.from('transparent-client-bytes')));
+  assert.equal(await run, 0);
+  const bytes = await output;
+  assert.match(bytes.toString('utf8'), /thread\/status\/changed/);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].threadId, 'thread-native-fixture');
+});
+
+test('opt-in wrapper process boundary delivers sanitized native state to Runtime and stays disabled by default', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'k15-codex-runtime-boundary-'));
+  const capturePath = path.join(root, 'runtime-records.jsonl');
+  const stdin = new PassThrough(); const stdout = new PassThrough(); const stderr = new PassThrough();
+  const output = collect(stdout);
+  const runtimeScript = "let value=''; process.stdin.on('data', chunk => value += chunk); process.stdin.on('end', () => require('node:fs').writeFileSync(process.argv[1], value));";
+  const run = runApprovalWrapper({
+    argv: ['app-server'],
+    env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CODEX_BRIDGE_'))),
+      CODEX_BRIDGE_CHILD_PATH: fakeChild,
+      FAKE_CHILD_MODE: 'native',
+      [RUNTIME_COMMAND_ENV]: process.execPath
+    },
+    runtimeCommandArgs: ['-e', runtimeScript, capturePath],
+    stdin, stdout, stderr,
+    spawnProcess: (childPath, childArgs, options) => spawn(process.execPath, [childPath, ...childArgs], { ...options })
+  });
+  stdout.once('data', () => stdin.end(Buffer.from('opaque-client-bytes')));
+  assert.equal(await run, 0);
+  const transport = await output;
+  const records = (await readFile(capturePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.match(transport.toString('utf8'), /thread\/status\/changed/);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].threadId, 'thread-native-fixture');
+  assert.equal(records[0].event, 'thread_status_changed');
+  assert.doesNotMatch(await readFile(capturePath, 'utf8'), /opaque-client-bytes|fake-child|prompt|command/);
+  await rm(root, { recursive: true, force: true });
 });

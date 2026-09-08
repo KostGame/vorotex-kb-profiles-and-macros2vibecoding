@@ -46,6 +46,18 @@ internal static class ContractTests
         return Task.CompletedTask;
     }
 
+    public static Task ThreadClassificationWireNamesAreStableAndFailClosed()
+    {
+        var options = RuntimeContractJson.CreateOptions();
+        TestAssert.Equal("\"USER\"", JsonSerializer.Serialize(ThreadClassification.User, options), "USER classification wire name changed");
+        TestAssert.Equal("\"SERVICE\"", JsonSerializer.Serialize(ThreadClassification.Service, options), "SERVICE classification wire name changed");
+        TestAssert.Equal(ThreadClassification.Unknown,
+            JsonSerializer.Deserialize<ThreadClassification>("\"FUTURE\"", options),
+            "unknown classification did not fail closed");
+        TestAssert.Equal("\"UNKNOWN\"", JsonSerializer.Serialize((ThreadClassification)999, options), "unknown classification serialization changed");
+        return Task.CompletedTask;
+    }
+
     public static Task ActiveFlagsArePluralImmutableAndDeterministic()
     {
         var snapshot = new RuntimeSnapshot(
