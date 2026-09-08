@@ -37,4 +37,22 @@ internal static class PackageTests
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }
+
+    public static Task ResolverFailsClosedForMalformedSelectorAndUnknownExecutable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "k15-malformed-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var payload = Path.Combine(root, "versions", "A", "payload"); Directory.CreateDirectory(payload);
+            File.WriteAllText(Path.Combine(root, VNextPackageLayout.CurrentVersionFileName), "../escape\n");
+            File.WriteAllText(Path.Combine(payload, "Vorotex.K15.Runtime.exe"), "runtime");
+            TestAssert.True(VNextPackageLayout.ResolveExecutable(payload, "Vorotex.K15.Runtime.exe") is null, "malformed selector resolved");
+            TestAssert.True(VNextPackageLayout.ResolveExecutable(payload, "not-vnext.exe") is null, "unknown executable resolved");
+            File.WriteAllText(Path.Combine(root, VNextPackageLayout.CurrentVersionFileName), "A\n");
+            File.Delete(Path.Combine(payload, "Vorotex.K15.Runtime.exe"));
+            TestAssert.True(VNextPackageLayout.ResolveExecutable(payload, "Vorotex.K15.Runtime.exe") is null, "disappeared executable resolved");
+            return Task.CompletedTask;
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
 }

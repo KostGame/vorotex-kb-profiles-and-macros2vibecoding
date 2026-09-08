@@ -3,13 +3,19 @@ namespace Vorotex.K15.Clients;
 /// <summary>Bounded executable resolution for the vNext side-by-side package.</summary>
 public static class VNextPackageLayout
 {
+    private static readonly HashSet<string> AllowedExecutables = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Vorotex.K15.Runtime.exe", "Vorotex.K15.StatusTray.exe", "Vorotex.K15.ControlCenter.exe", "Vorotex.K15.LiveDashboard.exe"
+    };
     public const string CurrentVersionFileName = "current-version.txt";
     public const string PayloadDirectoryName = "payload";
 
     public static string? ResolveExecutable(string applicationBaseDirectory, string executableName)
     {
+        try
+        {
         if (string.IsNullOrWhiteSpace(applicationBaseDirectory) || string.IsNullOrWhiteSpace(executableName) ||
-            Path.GetFileName(executableName) != executableName || !executableName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            !AllowedExecutables.Contains(executableName) || Path.GetFileName(executableName) != executableName)
             return null;
 
         var baseDirectory = Path.GetFullPath(applicationBaseDirectory).TrimEnd(Path.DirectorySeparatorChar);
@@ -37,6 +43,10 @@ public static class VNextPackageLayout
             _ => null
         };
         return role is null ? null : ExistingCandidate(Path.Combine(baseDirectory, "..", role, executableName), executableName, Directory.GetParent(baseDirectory)!.FullName);
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+        catch (ArgumentException) { return null; }
     }
 
     private static string? ExistingCandidate(string candidate, string executableName, string allowedRoot)

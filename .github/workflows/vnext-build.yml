@@ -61,10 +61,13 @@ jobs:
         run: dotnet publish vnext/Vorotex.K15.LiveDashboard/Vorotex.K15.LiveDashboard.csproj -c Release --no-restore
       - name: Build deterministic side-by-side package
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File vnext/packaging/New-VNextPackage.ps1 -OutputDirectory "$env:RUNNER_TEMP\k15-vnext-package" -SourceCommit "${{ github.sha }}"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File vnext/packaging/New-VNextPackage.ps1 -OutputDirectory "$env:RUNNER_TEMP\k15-vnext-package" -SourceCommit "${{ github.sha }}" -BaseMainSha "46f1bd3a3ebfd5333b6be360dafed8f046f1d4c0" -SourceRef "${{ github.ref }}"
       - name: Validate package manifest and update rollback contract
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File vnext/packaging/Test-VNextPackage.ps1 -PackageDirectory "$env:RUNNER_TEMP\k15-vnext-package"
+      - name: Full codex-stdio-bridge regression suite
+        working-directory: status-lab/research/codex-stdio-bridge
+        run: npm.cmd run test:bridge
 
       - name: Legacy device ownership and protocol smoke (non-HID)
         shell: powershell

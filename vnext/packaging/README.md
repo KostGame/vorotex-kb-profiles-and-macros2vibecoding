@@ -1,6 +1,6 @@
 # vNext side-by-side package contract
 
-`New-VNextPackage.ps1` produces the Phase A package without touching the owner host or the legacy install.
+`New-VNextPackage.ps1` produces a disposable staging package without touching the owner host or the legacy install. `Apply-VNextPackage.ps1` is the repo-only apply/update/rollback path and accepts an explicit temporary install root for tests.
 
 ```text
 <package>/
@@ -15,4 +15,4 @@
     Vorotex.K15.LiveDashboard.exe
 ```
 
-`current-version.txt` is the only selection mechanism. An update writes a complete new immutable version, validates its manifest, then atomically replaces this small selection file. Rollback selects the previous version; it never copies mutable `data` backwards. The package root is distinct from `%LOCALAPPDATA%\VorotexK15\app`. Phase A makes no autostart, registry, hook, bridge, HID, or legacy-install changes.
+`current-version.txt` is the only selection mechanism. An update writes a complete new immutable version, validates its per-version manifest, then atomically replaces this small selection file using a same-volume temporary file. Rollback selects the previous version; it never copies mutable `data` backwards. The package root is distinct from `%LOCALAPPDATA%\VorotexK15\app`. Phase A makes no autostart, registry, hook, bridge, HID, or legacy-install changes.
