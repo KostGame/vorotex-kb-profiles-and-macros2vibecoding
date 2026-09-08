@@ -59,6 +59,12 @@ jobs:
         run: dotnet publish vnext/Vorotex.K15.ControlCenter/Vorotex.K15.ControlCenter.csproj -c Release --no-restore
       - name: Publish vNext Live Dashboard win-x64
         run: dotnet publish vnext/Vorotex.K15.LiveDashboard/Vorotex.K15.LiveDashboard.csproj -c Release --no-restore
+      - name: Build deterministic side-by-side package
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File vnext/packaging/New-VNextPackage.ps1 -OutputDirectory "$env:RUNNER_TEMP\k15-vnext-package" -SourceCommit "${{ github.sha }}"
+      - name: Validate package manifest and update rollback contract
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File vnext/packaging/Test-VNextPackage.ps1 -PackageDirectory "$env:RUNNER_TEMP\k15-vnext-package"
 
       - name: Legacy device ownership and protocol smoke (non-HID)
         shell: powershell
