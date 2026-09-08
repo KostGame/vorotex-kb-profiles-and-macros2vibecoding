@@ -48,6 +48,12 @@ internal static class Program
             ("concurrent ownership and RGB activity is deadlock-free", RuntimeDeviceTests.ConcurrentOwnershipAndRgbActivityCompletes),
             ("scan failure uses fail-closed IPC response", RuntimeDeviceTests.ScanFailureUsesFailClosedIpcResponse),
             ("legacy RGB policy and restore plan are exact", RuntimeDeviceTests.LegacyRgbPolicyAndRestorePlanAreExact),
+            ("restore runs before disable and stop", RuntimeDeviceTests.RestoreRunsBeforeDisableAndStop),
+            ("restore failure still releases HID", RuntimeDeviceTests.RestoreFailureStillReleasesHid),
+            ("profile switch requires a fresh baseline", RuntimeDeviceTests.ProfileSwitchRequiresFreshBaseline),
+            ("malformed lighting replies fail before evidence", RuntimeDeviceTests.MalformedLightingRepliesFailBeforeEvidence),
+            ("concurrent different candidates remain atomic", RuntimeDeviceTests.ConcurrentDifferentCandidatesRemainAtomic),
+            ("scan and mutation after stop fail closed", RuntimeDeviceTests.ScanAndMutationAfterStopFailClosed),
         };
 
         var failures = 0;

@@ -17,6 +17,7 @@ internal interface IK15DeviceHandle : IDisposable
 {
     string CandidateId { get; }
     byte ActiveSlot { get; }
+    byte ReadActiveSlot();
     void VerifyProtocol();
     RuntimeLightingSnapshot CaptureLightingSnapshot();
     void ApplyEffect(RuntimeLightingEffect effect);
@@ -142,36 +143,64 @@ internal sealed class RuntimeDeviceManager : IDisposable
     public bool Connect()
     {
         var lost = false;
-        var connected = false;
+        bool connected;
         lock (_gate)
         {
             if (_selected is null) { _lastFailure = "CANDIDATE_NOT_SELECTED"; return false; }
-            var replaced = _handle is not null;
-            _handle?.Dispose(); _handle = null;
-            lost = replaced;
-            try
-            {
-                var pending = _backend.Open(_selected);
-                try { pending.VerifyProtocol(); }
-                catch { pending.Dispose(); MarkVerificationFailure(); }
-                if (_lastFailure is null)
-                {
-                    _handle = pending;
-                    _selected = _selected with { ProtocolVerified = true, Verification = "PASS" };
-                    _candidates = _candidates.Select(x => x.CandidateId == _selected.CandidateId ? _selected : x).ToList();
-                    _preferredIdentity = _selected.Identity;
-                    ConnectionState = "CONNECTED"; _lastFailure = null;
-                    connected = true;
-                }
-            }
-            catch { ConnectionState = "ERROR"; _lastFailure = "OPEN_OR_VERIFY_FAILED"; }
+            connected = ConnectLocked(ref lost);
         }
         if (lost) OwnershipLost?.Invoke();
         return connected;
     }
 
-    public bool Connect(string candidateId) => Select(candidateId) && Connect();
-    public bool Reconnect() { lock (_gate) { if (_selected is null) return false; } return Connect(); }
+    private bool ConnectLocked(ref bool lost)
+    {
+        var connected = false;
+        var replaced = _handle is not null;
+        _handle?.Dispose(); _handle = null;
+        lost = replaced;
+        try
+        {
+            var pending = _backend.Open(_selected!);
+            try { pending.VerifyProtocol(); }
+            catch { pending.Dispose(); MarkVerificationFailure(); return false; }
+            _handle = pending;
+            _selected = _selected! with { ProtocolVerified = true, Verification = "PASS" };
+            _candidates = _candidates.Select(x => x.CandidateId == _selected.CandidateId ? _selected : x).ToList();
+            _preferredIdentity = _selected.Identity;
+            ConnectionState = "CONNECTED"; _lastFailure = null;
+            connected = true;
+        }
+        catch { ConnectionState = "ERROR"; _lastFailure = "OPEN_OR_VERIFY_FAILED"; }
+        return connected;
+    }
+
+    public bool Connect(string candidateId)
+    {
+        var lost = false;
+        bool connected;
+        lock (_gate)
+        {
+            var candidate = _candidates.SingleOrDefault(x => x.CandidateId == candidateId);
+            if (candidate is null) { _lastFailure = "CANDIDATE_NOT_FOUND"; return false; }
+            _selected = candidate;
+            connected = ConnectLocked(ref lost);
+        }
+        if (lost) OwnershipLost?.Invoke();
+        return connected;
+    }
+    public bool Reconnect()
+    {
+        var lost = false;
+        bool connected;
+        lock (_gate)
+        {
+            if (_selected is null) return false;
+            connected = ConnectLocked(ref lost);
+        }
+        if (lost) OwnershipLost?.Invoke();
+        return connected;
+    }
     public void Disconnect(string state = "DISCONNECTED") { var lost = false; lock (_gate) { lost = _handle is not null || _selected is not null; _handle?.Dispose(); _handle = null; ConnectionState = state; } if (lost) OwnershipLost?.Invoke(); }
     public void MarkConnectionLost() => Disconnect("CONNECTION_LOST");
     private void MarkVerificationFailure() { ConnectionState = "ERROR"; _lastFailure = "PROTOCOL_VERIFY_FAILED"; _selected = _selected is null ? null : _selected with { ProtocolVerified = false, Verification = "FAIL" }; }
@@ -195,13 +224,13 @@ internal sealed class RuntimeRgbController
     public string? LastFailure { get { lock (_gate) return _lastFailure; } }
     public bool RestoreAvailable { get { lock (_gate) { var view = _devices.View; return _restore is not null && _restoreCandidate == view.SelectedCandidateId && view.Connected; } } }
     public bool TransportAvailable => _devices.View.Connected;
-    internal void Disarm() => InvalidateRestoreSnapshot();
+    internal bool Disarm() => DisableAndRestore();
 
     public bool SetEnabled(bool enabled)
     {
+        if (!enabled) return DisableAndRestore();
         lock (_gate)
         {
-            if (!enabled) { Enabled = false; Effect = "OFF"; _lastFailure = null; return true; }
             if (Enabled) return true;
             var view = _devices.View;
             if (!view.Connected || view.Handle is null) { _lastFailure = "DEVICE_UNAVAILABLE"; return false; }
@@ -210,7 +239,32 @@ internal sealed class RuntimeRgbController
         }
     }
 
-    private void InvalidateRestoreSnapshot() { lock (_gate) { _restore = null; _restoreCandidate = null; Enabled = false; Effect = "OFF"; } }
+    private bool DisableAndRestore()
+    {
+        lock (_gate)
+        {
+            if (!Enabled) { InvalidateRestoreSnapshotLocked(); return true; }
+            var view = _devices.View;
+            var restored = false;
+            try
+            {
+                if (_restore is null || _restoreCandidate != view.SelectedCandidateId || !view.Connected || view.Handle is null)
+                    _lastFailure = "RESTORE_SNAPSHOT_UNAVAILABLE";
+                else
+                {
+                    view.Handle.RestoreLighting(_restore);
+                    _lastFailure = null;
+                    restored = true;
+                }
+            }
+            catch { _lastFailure = "RESTORE_FAILED"; }
+            finally { InvalidateRestoreSnapshotLocked(); }
+            return restored;
+        }
+    }
+
+    private void InvalidateRestoreSnapshot() { lock (_gate) InvalidateRestoreSnapshotLocked(); }
+    private void InvalidateRestoreSnapshotLocked() { _restore = null; _restoreCandidate = null; Enabled = false; Effect = "OFF"; }
 
     public void ApplyRuntimeState(RuntimeState state)
     {
@@ -220,7 +274,20 @@ internal sealed class RuntimeRgbController
             Effect = state switch { RuntimeState.Waiting => "WAITING", RuntimeState.Blocked => "BLOCKED", RuntimeState.DonePendingAttention => "ATTENTION", RuntimeState.Running => "RUNNING", _ => "NORMAL" };
             var view = _devices.View;
             if (!Enabled || !view.Connected || view.Handle is null) return;
-            try { var policy = RuntimeRgbPolicy.ForState(state, view.Handle.ActiveSlot); if (policy is not null) view.Handle.ApplyEffect(policy); _lastFailure = null; } catch { _lastFailure = "EFFECT_WRITE_FAILED"; connectionLost = true; }
+            try
+            {
+                var activeSlot = view.Handle.ReadActiveSlot();
+                if (_restore is null || _restore.ActiveSlot != activeSlot)
+                {
+                    _lastFailure = "PROFILE_CHANGED_REENABLE_REQUIRED";
+                    InvalidateRestoreSnapshotLocked();
+                    return;
+                }
+                var policy = RuntimeRgbPolicy.ForState(state, activeSlot);
+                if (policy is not null) view.Handle.ApplyEffect(policy with { TargetSlot = activeSlot });
+                _lastFailure = null;
+            }
+            catch { _lastFailure = "EFFECT_WRITE_FAILED"; connectionLost = true; }
         }
         if (connectionLost) _devices.MarkConnectionLost();
     }

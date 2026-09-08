@@ -134,19 +134,27 @@ internal sealed class WindowsK15DeviceHandle : IK15DeviceHandle
     public WindowsK15DeviceHandle(string candidateId, SafeFileHandle handle, RuntimeWireColorOrder wireOrder) { CandidateId = candidateId; _handle = handle; _wireOrder = wireOrder; }
     public string CandidateId { get; }
     public byte ActiveSlot => _activeSlot;
-    public void VerifyProtocol() { _activeSlot = ReadActiveSlot(); }
+    public byte ReadActiveSlot() { _activeSlot = ReadActiveSlotCore(); return _activeSlot; }
+    public void VerifyProtocol() { _activeSlot = ReadActiveSlotCore(); }
 
     public RuntimeLightingSnapshot CaptureLightingSnapshot()
     {
-        var slot = ReadActiveSlot(); _activeSlot = slot;
+        var slot = ReadActiveSlot();
         var header = Query(K15HidProtocol.LightingReadCommand, 0, 0, K15HidProtocol.LightingRecordSize);
+        K15HidProtocol.ValidateReply(header, K15HidProtocol.LightingRecordSize);
         var records = new Dictionary<byte, byte[]>();
-        foreach (var mode in ProvenModes(header[0])) records[mode] = Query(K15HidProtocol.LightingReadCommand, 0, K15HidProtocol.ModeRecordAddress(mode), K15HidProtocol.LightingRecordSize);
+        foreach (var mode in ProvenModes(header[0]))
+        {
+            var record = Query(K15HidProtocol.LightingReadCommand, 0, K15HidProtocol.ModeRecordAddress(mode), K15HidProtocol.LightingRecordSize);
+            K15HidProtocol.ValidateReply(record, K15HidProtocol.LightingRecordSize);
+            records[mode] = record;
+        }
         return new RuntimeLightingSnapshot(slot, header, records);
     }
 
     public void ApplyEffect(RuntimeLightingEffect effect)
     {
+        if (ReadActiveSlot() != effect.TargetSlot) throw new InvalidDataException("K15 active profile changed before effect write.");
         var currentHeader = Query(K15HidProtocol.LightingReadCommand, 0, 0, K15HidProtocol.LightingRecordSize);
         var header = K15HidProtocol.CreateModeHeader(currentHeader, effect.Mode);
         if (effect.Mode != K15HidProtocol.OffMode)
@@ -156,14 +164,17 @@ internal sealed class WindowsK15DeviceHandle : IK15DeviceHandle
 
     public void RestoreLighting(RuntimeLightingSnapshot snapshot)
     {
+        K15HidProtocol.ValidateReply(snapshot.Header, K15HidProtocol.LightingRecordSize);
+        if (snapshot.ActiveSlot > 1 || snapshot.ModeRecords.Any(pair => pair.Key == K15HidProtocol.OffMode || pair.Value.Length != K15HidProtocol.LightingRecordSize))
+            throw new InvalidDataException("K15 lighting snapshot contains an invalid mode record.");
         if (ReadActiveSlot() != snapshot.ActiveSlot) throw new InvalidDataException("K15 active profile changed.");
         foreach (var write in K15HidProtocol.RestorePlan(snapshot))
             WriteAndVerify(K15HidProtocol.LightingWriteCommand, K15HidProtocol.LightingReadCommand, 0, write.Address, write.Data);
     }
 
-    private byte ReadActiveSlot()
+    private byte ReadActiveSlotCore()
     {
-        for (var attempt = 0; attempt < 6; attempt++) { var value = Query(K15HidProtocol.DeviceReadCommand, K15HidProtocol.ActiveSlotSelector, 0, 1); if (value.Length == 1 && value[0] <= 1) return value[0]; Thread.Sleep(60); }
+        for (var attempt = 0; attempt < 6; attempt++) { var value = Query(K15HidProtocol.DeviceReadCommand, K15HidProtocol.ActiveSlotSelector, 0, 1); K15HidProtocol.ValidateReply(value, 1); if (value[0] <= 1) return value[0]; Thread.Sleep(60); }
         throw new TimeoutException("K15 active slot did not stabilize.");
     }
     private void WriteAndVerify(byte write, byte read, byte selector, ushort address, ReadOnlySpan<byte> data) { Write(write, selector, address, data); if (!Query(read, selector, address, (byte)data.Length).AsSpan().SequenceEqual(data)) throw new InvalidDataException("K15 readback mismatch."); }

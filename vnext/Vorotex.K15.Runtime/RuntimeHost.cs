@@ -20,6 +20,7 @@ public sealed class RuntimeHost : IDisposable
     private NativeStatusTransport _nativeStatusTransport;
     private readonly RuntimeDeviceManager _deviceManager;
     private readonly RuntimeRgbController _rgbController;
+    private bool _stoppedForMutations;
 
     public RuntimeHost(RuntimeHostOptions? options = null) : this(options, null) { }
 
@@ -63,6 +64,8 @@ public sealed class RuntimeHost : IDisposable
 
     private RuntimeIpcProtocol.RuntimeIpcCommandResult HandleDeviceCommand(string command, string? candidateId, bool? enabled)
     {
+        if (_stoppedForMutations)
+            return new RuntimeIpcProtocol.RuntimeIpcCommandResult(false, "RUNTIME_STOPPED");
         var ok = command switch
         {
             "scan_devices" => ScanDevices(),
@@ -92,15 +95,15 @@ public sealed class RuntimeHost : IDisposable
 
     private bool DisconnectAndDisable()
     {
-        _rgbController.SetEnabled(false);
+        var restored = _rgbController.SetEnabled(false);
         _deviceManager.Disconnect();
-        return true;
+        return restored;
     }
 
     private bool ScanDevices()
     {
         _deviceManager.Scan();
-        return _deviceManager.ConnectionState != "ERROR";
+        return _deviceManager.LastFailure is null;
     }
 
     public bool TryStart()
@@ -119,6 +122,7 @@ public sealed class RuntimeHost : IDisposable
 
             _singleInstanceLease = lease;
             _stopped = NewStopSignal();
+            _stoppedForMutations = false;
             _nativeStatusTransport = new NativeStatusTransport(new RuntimeStateEngine(_runtimeVersion));
             IsRunning = true;
             return true;
@@ -166,6 +170,7 @@ public sealed class RuntimeHost : IDisposable
         {
             wasRunning = IsRunning;
             IsRunning = false;
+            _stoppedForMutations = true;
             lease = _singleInstanceLease;
             _singleInstanceLease = null;
             stopped = _stopped;

@@ -40,6 +40,12 @@ internal static class K15HidProtocol
         return FrameReport(command, sequence, selector, address, new byte[length]);
     }
 
+    public static void ValidateReply(ReadOnlySpan<byte> reply, int expectedLength)
+    {
+        if (expectedLength <= 0 || reply.Length != expectedLength)
+            throw new InvalidDataException("K15 HID reply length is invalid.");
+    }
+
     public static byte[] CreateModeHeader(ReadOnlySpan<byte> originalHeader, byte mode)
     {
         if (originalHeader.Length != LightingRecordSize) throw new ArgumentException("Lighting header must be 25 bytes.");
@@ -80,4 +86,4 @@ internal static class K15HidProtocol
 
 internal readonly record struct RuntimeRgbColor(byte R, byte G, byte B);
 internal sealed record RuntimeLightingEffect(byte Mode, int Brightness, int Speed, int Direction,
-    ImmutableArray<RuntimeRgbColor> Colors, byte? PaletteMask = null);
+    ImmutableArray<RuntimeRgbColor> Colors, byte? PaletteMask = null, byte TargetSlot = 0);
