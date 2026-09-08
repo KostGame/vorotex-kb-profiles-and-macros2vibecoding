@@ -14,6 +14,8 @@ internal static class Program
         }
 
         Console.WriteLine(RuntimeContractJson.Serialize(host.Snapshot));
+        await using var ipc = new RuntimeIpcServer(host);
+        ipc.Start();
 
         using var shutdown = new CancellationTokenSource();
         ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
