@@ -168,6 +168,7 @@ public sealed class RuntimeStateEngine
                 ActiveFlags = observation.ActiveFlags,
                 LastObservedUtc = observation.ObservedUtc,
                 Classification = observation.Classification,
+                FocusHint = observation.FocusHint,
             };
 
             var decision = CompareEvidence(
@@ -394,6 +395,7 @@ public sealed class RuntimeStateEngine
         ThreadAttentionState Attention,
         DateTimeOffset? LastAttentionObservedUtc,
         ThreadClassification Classification,
+        ThreadFocusHint FocusHint,
         string AttentionFingerprint)
     {
         public static ThreadState Create(string threadId) => new(
@@ -405,6 +407,7 @@ public sealed class RuntimeStateEngine
             ThreadAttentionState.Unknown,
             null,
             ThreadClassification.User,
+            ThreadFocusHint.Unknown,
             string.Empty);
 
         public static ThreadState FromSnapshot(ThreadSnapshot snapshot)
@@ -424,6 +427,7 @@ public sealed class RuntimeStateEngine
                 snapshot.Attention,
                 snapshot.LastAttentionObservedUtc,
                 snapshot.Classification,
+                snapshot.FocusHint,
                 RuntimeStateEngine.AttentionFingerprint(snapshot.Attention));
         }
 
@@ -438,7 +442,8 @@ public sealed class RuntimeStateEngine
                 state,
                 Attention,
                 LastAttentionObservedUtc,
-                Classification);
+                Classification,
+                FocusHint);
         }
 
         private static RuntimeState Evaluate(

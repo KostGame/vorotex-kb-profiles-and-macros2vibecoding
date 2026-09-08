@@ -29,7 +29,9 @@ The vNext runtime is the future sole owner of normalized state. UI processes wil
 - `NativeStatusTransport` is the bounded JSONL seam from the existing bridge into the runtime, and
   `NativeStatusDeliveryQueue` serializes authority records while exposing overflow/degraded health.
 
-The host does not launch or own Codex, read HID, control RGB, mutate the host, install itself, configure autostart, or expose a UI/IPC transport. The bridge is an existing external stdio surface; this increment only accepts its bounded native status records.
+`RuntimeIpcServer` exposes a newline-framed `k15-runtime-ipc/v1` request/response surface over a Windows current-user-only named pipe. It supports only `ping` and `snapshot`; reserved mutation commands fail closed. Frames and request fields are bounded and allowlisted.
+
+The host does not launch or own Codex, read HID, control RGB, mutate the host, install itself, or configure autostart. The bridge is an existing external stdio surface; IPC is a thin projection of Runtime-owned state and never parses bridge/journal data.
 
 ## Legacy separation
 
@@ -45,4 +47,4 @@ dotnet run --project vnext/Vorotex.K15.Runtime.Tests/Vorotex.K15.Runtime.Tests.c
 git diff --check
 ```
 
-The host prints its initial JSON snapshot and waits for Ctrl+C. The executable tests cover deterministic serialization, stable wire names, fail-closed unknown values, single-instance ownership, cancellation shutdown, all state mappings, aggregate priority, stale/duplicate inputs, the owner-live sticky-WAITING sequence, attention separation, and deterministic rehydration.
+The host prints its initial JSON snapshot, starts the local IPC server, and waits for Ctrl+C. The executable tests cover deterministic serialization, stable wire names, fail-closed unknown values, single-instance ownership, cancellation shutdown, all state mappings, aggregate priority, stale/duplicate inputs, the owner-live sticky-WAITING sequence, attention separation, deterministic rehydration, and bounded IPC request/response behavior.

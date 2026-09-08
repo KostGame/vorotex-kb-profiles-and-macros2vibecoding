@@ -34,6 +34,9 @@ public sealed class RuntimeHost : IDisposable
 
     public NativeStatusTransport NativeStatusTransport => _nativeStatusTransport;
 
+    public string HandleIpcRequest(string json) =>
+        RuntimeIpcProtocol.Handle(json, () => Snapshot);
+
     public NativeStatusTransportResult ApplyNativeStatusJson(string json)
     {
         lock (_gate)

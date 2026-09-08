@@ -27,6 +27,11 @@ internal static class Program
             ("bridge health degrades canonical runtime snapshot", NativeThreadStatusAdapterTests.BridgeHealthDegradesCanonicalRuntimeSnapshot),
             ("native transport preserves ordered authority and health", NativeThreadStatusAdapterTests.TransportPreservesOrderedAuthorityAndHealth),
             ("native queue has explicit concurrent overflow health", NativeThreadStatusAdapterTests.ConcurrentQueueNeverReportsAcceptedLoss),
+            ("IPC ping wire shape is exact", RuntimeIpcTests.PingWireShapeIsExact),
+            ("IPC snapshot is canonical and stable", RuntimeIpcTests.SnapshotIsCanonicalAndStable),
+            ("IPC invalid requests fail closed", RuntimeIpcTests.InvalidRequestsFailClosedWithoutProviderAccess),
+            ("IPC oversized and reserved commands are bounded", RuntimeIpcTests.OversizedAndReservedCommandsAreBounded),
+            ("IPC named pipe supports concurrent clients and restart", RuntimeIpcTests.NamedPipeSupportsConcurrentClientsAndRestart),
         };
 
         var failures = 0;
