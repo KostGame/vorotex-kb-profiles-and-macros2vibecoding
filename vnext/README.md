@@ -29,6 +29,11 @@ The vNext runtime is the future sole owner of normalized state. UI processes wil
 - `NativeStatusTransport` is the bounded JSONL seam from the existing bridge into the runtime, and
   `NativeStatusDeliveryQueue` serializes authority records while exposing overflow/degraded health.
 
+`NativeAuthorityIngressServer` owns the dedicated current-user-only
+`Vorotex.K15.Runtime.NativeAuthority.v1` pipe. It accepts only the three
+versioned sanitized authority schemas, has one producer instance, and is
+separate from `RuntimeIpcServer`'s general UI command surface.
+
 `RuntimeIpcServer` exposes a newline-framed `k15-runtime-ipc/v1` request/response surface over a Windows current-user-only named pipe. It supports `ping`, `snapshot`, and the bounded explicit device/RGB commands `scan_devices`, `connect_device`, `disconnect_device`, `reconnect_device`, `set_rgb_enabled`, and `restore_lighting`. Candidate paths remain private to the runtime; projections are bounded and allowlisted.
 
 `Vorotex.K15.Clients` is the shared bounded client/projection layer for the side-by-side `Vorotex.K15.StatusTray`, `Vorotex.K15.ControlCenter`, and `Vorotex.K15.LiveDashboard` artifacts. They read Runtime snapshots, project counts directly from Runtime-provided per-thread states, filter service/canary threads by default, and route device/RGB actions only through Runtime IPC. The dashboard uses UTF-8 JSON and validates nullable timestamps before display; it never reads journals or hooks.

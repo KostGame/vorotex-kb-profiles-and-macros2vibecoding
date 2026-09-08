@@ -14,6 +14,7 @@ const script = path.join(bridgeRoot, 'production', 'Activate-CodexBridge.ps1');
 const approvalWrapper = path.join(bridgeRoot, 'src', 'approval-wrapper.mjs');
 const transparentWrapper = path.join(bridgeRoot, 'src', 'transparent-wrapper.mjs');
 const bridgeCore = path.join(bridgeRoot, 'src', 'bridge-core.mjs');
+const runtimeAuthority = path.join(bridgeRoot, 'src', 'runtime-process-authority.mjs');
 const managedVariables = [
   'CODEX_CLI_PATH',
   'CODEX_BRIDGE_NODE_PATH',
@@ -105,12 +106,14 @@ async function createBundle(temp, approvalSinkPath = '') {
   const wrapper = path.join(temp, 'approval-wrapper.mjs');
   const transparent = path.join(temp, 'transparent-wrapper.mjs');
   const core = path.join(temp, 'bridge-core.mjs');
+  const authority = path.join(temp, 'runtime-process-authority.mjs');
   await copyFile(process.execPath, child);
   await copyFile(process.execPath, codeModeHost);
   await copyFile(process.execPath, adapter);
   await copyFile(approvalWrapper, wrapper);
   await copyFile(transparentWrapper, transparent);
   await copyFile(bridgeCore, core);
+  await copyFile(runtimeAuthority, authority);
   const sha256 = async filePath => createHash('sha256').update(await readFile(filePath)).digest('hex');
   const manifest = path.join(temp, `manifest-${approvalSinkPath ? 'sink' : 'empty'}.json`);
   await writeFile(manifest, JSON.stringify({
@@ -125,13 +128,15 @@ async function createBundle(temp, approvalSinkPath = '') {
     transparentWrapperSha256: await sha256(transparent),
     bridgeCorePath: core,
     bridgeCoreSha256: await sha256(core),
+    runtimeAuthorityPath: authority,
+    runtimeAuthoritySha256: await sha256(authority),
     childPath: child,
     childSha256: await sha256(child),
     codeModeHostPath: codeModeHost,
     codeModeHostSha256: await sha256(codeModeHost),
     approvalSinkPath
   }), 'utf8');
-  return { manifest, runtimeRoot, generation, paths: { adapter, wrapper, transparent, core, child, codeModeHost } };
+  return { manifest, runtimeRoot, generation, paths: { adapter, wrapper, transparent, core, authority, child, codeModeHost } };
 }
 
 async function updateManifest(manifest, changes) {
@@ -316,6 +321,19 @@ test('production activation rejects approval-wrapper replacement-in-place', asyn
 test('production activation rejects transparent-wrapper and bridge-core replacement-in-place', async () => {
   await assertReplacementRejected('transparent');
   await assertReplacementRejected('core');
+});
+
+test('production activation has no Runtime command dependency and pins the authority module', async () => {
+  const activation = await readFile(script, 'utf8');
+  const manifestExample = await readFile(path.join(bridgeRoot, 'production', 'manifest.example.json'), 'utf8');
+  assert.equal(activation.includes('CODEX_BRIDGE_RUNTIME_COMMAND'), false);
+  assert.equal(activation.includes('VOROTEX_K15_RUNTIME_NATIVE_STATUS_STDIN'), false);
+  assert.match(manifestExample, /runtimeAuthorityPath/);
+  assert.match(manifestExample, /runtimeAuthoritySha256/);
+});
+
+test('production activation rejects runtime authority module replacement-in-place', async () => {
+  await assertReplacementRejected('authority');
 });
 
 async function assertGuardBlocked(inventory, expectedMessage) {

@@ -10,6 +10,8 @@
   "transparentWrapperSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
   "bridgeCorePath": "C:\\Users\\<owner>\\AppData\\Local\\K15\\CodexBridge\\bridge-core.mjs",
   "bridgeCoreSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
+  "runtimeAuthorityPath": "C:\\Users\\<owner>\\AppData\\Local\\K15\\CodexBridge\\runtime-process-authority.mjs",
+  "runtimeAuthoritySha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
   "childPath": "C:\\Users\\<owner>\\AppData\\Local\\OpenAI\\Codex\\bin\\<owner-reviewed-generation>\\codex.exe",
   "childSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
   "codeModeHostPath": "C:\\Users\\<owner>\\AppData\\Local\\OpenAI\\Codex\\bin\\<owner-reviewed-generation>\\codex-code-mode-host.exe",

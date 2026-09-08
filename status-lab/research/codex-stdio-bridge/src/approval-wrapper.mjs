@@ -6,7 +6,7 @@ import {
   NativeThreadMetadataObserver,
   createSanitizedJsonlSink
 } from './bridge-core.mjs';
-import { RUNTIME_COMMAND_ENV, createRuntimeProcessAuthoritySink } from './runtime-process-authority.mjs';
+import { createNamedPipeAuthoritySink } from './runtime-process-authority.mjs';
 import { runTransparentWrapper } from './transparent-wrapper.mjs';
 
 export const APPROVAL_SINK_PATH_ENV = 'CODEX_BRIDGE_APPROVAL_SINK_PATH';
@@ -49,8 +49,8 @@ export async function runApprovalWrapper(options = {}) {
     authoritySink,
     classificationResolver,
     receiptClock,
-    runtimeCommandArgs,
-    runtimeSpawnProcess
+    authorityConnector,
+    authorityPipePath
   } = options;
 
   let sinkPath;
@@ -64,16 +64,14 @@ export async function runApprovalWrapper(options = {}) {
 
   let runtimeBoundary;
   try {
-    if (env[RUNTIME_COMMAND_ENV] !== undefined) {
-      runtimeBoundary = createRuntimeProcessAuthoritySink({
-        commandPath: env[RUNTIME_COMMAND_ENV], commandArgs: runtimeCommandArgs,
-        env, spawnProcess: runtimeSpawnProcess
-      });
-    }
+    runtimeBoundary = authoritySink ? undefined : createNamedPipeAuthoritySink({
+      pipePath: authorityPipePath,
+      connectPipe: authorityConnector
+    });
   } catch {
-    pauseInput(stdin);
-    writeDiagnostic(stderr, 'codex bridge: invalid runtime authority configuration');
-    return APPROVAL_CONFIG_ERROR_EXIT_CODE;
+    // Authority is an optional side channel; its configuration must never
+    // prevent byte-transparent Codex transport.
+    runtimeBoundary = undefined;
   }
 
   const observer = new ApprovalObserver({

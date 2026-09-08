@@ -15,7 +15,9 @@ internal static class Program
 
         Console.WriteLine(RuntimeContractJson.Serialize(host.Snapshot));
         await using var ipc = new RuntimeIpcServer(host);
+        await using var authority = new NativeAuthorityIngressServer(host);
         ipc.Start();
+        authority.Start();
 
         using var shutdown = new CancellationTokenSource();
         ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
@@ -27,17 +29,7 @@ internal static class Program
         Console.CancelKeyPress += cancelHandler;
         try
         {
-            if (Environment.GetEnvironmentVariable("VOROTEX_K15_RUNTIME_NATIVE_STATUS_STDIN") == "1")
-            {
-                string? line;
-                while ((line = await Console.In.ReadLineAsync(shutdown.Token).ConfigureAwait(false)) is not null)
-                    host.ApplyNativeRuntimeRecordJson(line);
-                host.Stop();
-            }
-            else
-            {
-                await host.WaitForShutdownAsync(shutdown.Token).ConfigureAwait(false);
-            }
+            await host.WaitForShutdownAsync(shutdown.Token).ConfigureAwait(false);
             return 0;
         }
         finally

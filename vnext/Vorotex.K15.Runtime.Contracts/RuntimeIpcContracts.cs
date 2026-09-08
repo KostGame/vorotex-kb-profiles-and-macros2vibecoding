@@ -7,6 +7,10 @@ public static class RuntimeIpcMetadata
 {
     public const string ProtocolVersion = "k15-runtime-ipc/v1";
     public const int MaxFrameBytes = 16 * 1024;
+    public const string NativeAuthorityPipeName = "Vorotex.K15.Runtime.NativeAuthority.v1";
+    public const string NativeAuthorityStatusSchema = "k15-codex-thread-status/v1";
+    public const string NativeAuthorityMetadataSchema = "k15-codex-thread-metadata/v1";
+    public const string NativeAuthorityHealthSchema = "k15-codex-authority-health/v1";
     public static readonly ImmutableArray<string> Capabilities = ImmutableArray.Create(
         "ping", "snapshot", "scan_devices", "connect_device", "disconnect_device",
         "reconnect_device", "set_rgb_enabled", "restore_lighting");

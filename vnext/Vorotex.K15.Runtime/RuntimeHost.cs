@@ -74,6 +74,16 @@ public sealed class RuntimeHost : IDisposable
         return ApplyNativeStatusJson(json);
     }
 
+    internal void MarkNativeAuthorityAvailable()
+    {
+        lock (_gate) _nativeStatusTransport.MarkAvailable();
+    }
+
+    internal void MarkNativeAuthorityUnavailable()
+    {
+        lock (_gate) _nativeStatusTransport.MarkDegraded("NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE");
+    }
+
     private RuntimeIpcProtocol.RuntimeIpcCommandResult HandleDeviceCommand(string command, string? candidateId, bool? enabled)
     {
         lock (_gate)

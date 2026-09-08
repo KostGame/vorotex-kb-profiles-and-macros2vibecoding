@@ -1,103 +1,159 @@
-import { spawn } from 'node:child_process';
-import path from 'node:path';
+import net from 'node:net';
 
-export const RUNTIME_COMMAND_ENV = 'CODEX_BRIDGE_RUNTIME_COMMAND';
-export const RUNTIME_STATUS_STDIN_ENV = 'VOROTEX_K15_RUNTIME_NATIVE_STATUS_STDIN';
+export const AUTHORITY_PIPE_NAME = '\\\\.\\pipe\\Vorotex.K15.Runtime.NativeAuthority.v1';
 export const AUTHORITY_HEALTH_SCHEMA_VERSION = 'k15-codex-authority-health/v1';
-const THREAD_METADATA_SCHEMA_VERSION = 'k15-codex-thread-metadata/v1';
-const REASONS = new Set([
+export const AUTHORITY_PIPE_MAX_FRAME_BYTES = 16 * 1024;
+export const AUTHORITY_PIPE_QUEUE_CAPACITY = 64;
+
+const STATUS_SCHEMA_VERSION = 'k15-codex-thread-status/v1';
+const METADATA_SCHEMA_VERSION = 'k15-codex-thread-metadata/v1';
+const STATUS_VALUES = new Set(['notLoaded', 'idle', 'active', 'systemError']);
+const FLAG_VALUES = new Set(['waitingOnApproval', 'waitingOnUserInput']);
+const CLASSIFICATIONS = new Set(['user', 'service', 'canary']);
+const HEALTH_REASONS = new Set([
   'NATIVE_AUTHORITY_DEGRADED_OVERFLOW',
   'NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE',
   'NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE'
 ]);
 
-function requireAbsoluteCommand(value) {
-  if (typeof value !== 'string' || !path.isAbsolute(value))
-    throw new Error('runtime command must be absolute');
-  return value;
+function exactKeys(value, keys) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every(key => keys.has(key));
 }
 
-function sanitizeEvent(event) {
-  if (event?.schemaVersion === THREAD_METADATA_SCHEMA_VERSION && event?.event === 'thread_metadata_changed') {
-    if (event.source !== 'codex_stdio_bridge' || typeof event.threadId !== 'string' ||
-        typeof event.workingDirectory !== 'string' || event.threadId.length === 0 ||
-        event.workingDirectory.length === 0 || Buffer.byteLength(event.threadId, 'utf8') > 1024 ||
-        Buffer.byteLength(event.workingDirectory, 'utf8') > 1024) throw new Error('invalid thread metadata event');
-    return { schemaVersion: THREAD_METADATA_SCHEMA_VERSION, source: event.source,
-      event: event.event, threadId: event.threadId, workingDirectory: event.workingDirectory };
+function sanitizeStatus(event) {
+  const allowed = new Set(['schemaVersion', 'source', 'event', 'threadId', 'status', 'activeFlags', 'timestampUtc', 'classification']);
+  if (!exactKeys(event, allowed) || event.schemaVersion !== STATUS_SCHEMA_VERSION
+    || event.source !== 'codex_stdio_bridge' || event.event !== 'thread_status_changed'
+    || typeof event.threadId !== 'string' || event.threadId.length === 0
+    || typeof event.status !== 'string' || !STATUS_VALUES.has(event.status)
+    || typeof event.timestampUtc !== 'string' || Buffer.byteLength(event.timestampUtc, 'utf8') > 128
+    || (event.classification !== undefined && !CLASSIFICATIONS.has(event.classification))) {
+    throw new Error('invalid authority status');
   }
-  const sanitized = {
-    schemaVersion: event?.schemaVersion,
-    source: event?.source,
-    event: event?.event,
-    threadId: event?.threadId,
-    status: event?.status,
-    activeFlags: Array.isArray(event?.activeFlags) ? [...event.activeFlags] : [],
-    timestampUtc: event?.timestampUtc
-  };
-  if (event?.classification !== undefined) sanitized.classification = event.classification;
-  if (Object.values(sanitized).some(value => value === undefined)) throw new Error('invalid authority event');
-  return sanitized;
+  if (event.status === 'active') {
+    if (!Array.isArray(event.activeFlags) || event.activeFlags.length > 8
+      || event.activeFlags.some(flag => typeof flag !== 'string' || !FLAG_VALUES.has(flag))) throw new Error('invalid authority flags');
+  } else if (event.activeFlags?.length) {
+    throw new Error('non-active status has flags');
+  }
+  return { schemaVersion: event.schemaVersion, source: event.source, event: event.event,
+    threadId: event.threadId, status: event.status, activeFlags: event.activeFlags ?? [],
+    timestampUtc: event.timestampUtc, ...(event.classification === undefined ? {} : { classification: event.classification }) };
 }
 
-function healthEvent(reason) {
-  return JSON.stringify({
-    schemaVersion: AUTHORITY_HEALTH_SCHEMA_VERSION,
-    source: 'codex_stdio_bridge',
-    event: 'authority_degraded',
-    reason: REASONS.has(reason) ? reason : 'NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE'
-  }) + '\n';
+function sanitizeMetadata(event) {
+  const allowed = new Set(['schemaVersion', 'source', 'event', 'threadId', 'workingDirectory']);
+  if (!exactKeys(event, allowed) || event.schemaVersion !== METADATA_SCHEMA_VERSION
+    || event.source !== 'codex_stdio_bridge' || event.event !== 'thread_metadata_changed'
+    || typeof event.threadId !== 'string' || event.threadId.length === 0
+    || typeof event.workingDirectory !== 'string' || event.workingDirectory.length === 0
+    || Buffer.byteLength(event.threadId, 'utf8') > 1024 || Buffer.byteLength(event.workingDirectory, 'utf8') > 1024) {
+    throw new Error('invalid authority metadata');
+  }
+  return { schemaVersion: event.schemaVersion, source: event.source, event: event.event,
+    threadId: event.threadId, workingDirectory: event.workingDirectory };
+}
+
+function lineForEvent(event) {
+  const sanitized = event?.schemaVersion === METADATA_SCHEMA_VERSION
+    ? sanitizeMetadata(event) : sanitizeStatus(event);
+  const line = JSON.stringify(sanitized) + '\n';
+  if (Buffer.byteLength(line, 'utf8') > AUTHORITY_PIPE_MAX_FRAME_BYTES) throw new Error('authority frame too large');
+  return line;
+}
+
+function healthLine(reason) {
+  return JSON.stringify({ schemaVersion: AUTHORITY_HEALTH_SCHEMA_VERSION, source: 'codex_stdio_bridge',
+    event: 'authority_degraded', reason: HEALTH_REASONS.has(reason) ? reason : 'NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE' }) + '\n';
 }
 
 /**
- * Explicit opt-in process boundary. It is never constructed unless the
- * caller supplies an absolute runtime command. Runtime stdin is separate
- * from Codex stdin/stdout/stderr and receives only allowlisted JSONL.
+ * Connects to the already-running Runtime-owned authority pipe. This module
+ * never imports child_process and cannot create a Runtime process. One pipe
+ * connection is held per wrapper; the Runtime server grants ownership to the
+ * first connected wrapper and rejects competing producers as pipe-busy.
  */
-export function createRuntimeProcessAuthoritySink({
-  commandPath,
-  commandArgs = [],
-  env = process.env,
-  spawnProcess = spawn
+export function createNamedPipeAuthoritySink({
+  pipePath = AUTHORITY_PIPE_NAME,
+  connectPipe = path => net.createConnection({ path }),
+  queueCapacity = AUTHORITY_PIPE_QUEUE_CAPACITY,
+  connectTimeoutMs = 250
 } = {}) {
-  const child = spawnProcess(requireAbsoluteCommand(commandPath), commandArgs, {
-    stdio: ['pipe', 'ignore', 'ignore'],
-    env: { ...env, [RUNTIME_STATUS_STDIN_ENV]: '1' },
-    windowsHide: true
-  });
-  let unavailable = false;
-  let healthSent = false;
-  const sendHealth = (reason) => {
-    if (healthSent || unavailable) return;
-    healthSent = true;
-    try { child.stdin.write(healthEvent(reason)); } catch { /* boundary is already unavailable */ }
-  };
-  const fail = () => { sendHealth('NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE'); unavailable = true; };
-  child.once?.('error', fail);
-  child.once?.('close', (code) => { if (code !== 0) fail(); });
+  if (typeof pipePath !== 'string' || pipePath.length === 0 || !Number.isInteger(queueCapacity) || queueCapacity <= 0) {
+    throw new Error('invalid authority pipe configuration');
+  }
 
-  const sink = (event) => new Promise((resolve, reject) => {
-    if (unavailable || !child.stdin?.writable) {
-      sendHealth('NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE');
-      reject(new Error('runtime authority unavailable'));
-      return;
+  let socket;
+  let connecting;
+  let pumping = false;
+  let closed = false;
+  const queue = [];
+
+  const failSocket = () => {
+    const current = socket;
+    socket = undefined;
+    connecting = undefined;
+    if (current && !current.destroyed) current.destroy();
+  };
+
+  const connect = () => {
+    if (socket && !socket.destroyed) return Promise.resolve(socket);
+    if (connecting) return connecting;
+    connecting = new Promise((resolve, reject) => {
+      let settled = false;
+      let candidate;
+      try { candidate = connectPipe(pipePath); } catch (error) { reject(error); return; }
+      const finish = error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (error) { failSocket(); reject(error); }
+        else { socket = candidate; resolve(candidate); }
+      };
+      const timeout = setTimeout(() => finish(new Error('authority pipe connect timeout')), connectTimeoutMs);
+      candidate.once?.('connect', () => finish());
+      candidate.once?.('error', error => finish(error));
+      candidate.once?.('close', () => { if (socket === candidate) failSocket(); });
+      if (candidate.readyState === 'open' || candidate.connecting === false) finish();
+    }).finally(() => { connecting = undefined; });
+    return connecting;
+  };
+
+  const pump = async () => {
+    if (pumping || closed) return;
+    pumping = true;
+    while (!closed && queue.length) {
+      const item = queue[0];
+      try {
+        const target = await connect();
+        await new Promise((resolve, reject) => {
+          try { target.write(item.line, 'utf8', error => error ? reject(error) : resolve()); }
+          catch (error) { reject(error); }
+        });
+        queue.shift(); item.resolve();
+      } catch (error) {
+        queue.shift(); item.reject(error);
+        failSocket();
+      }
     }
-    let line;
-    try { line = JSON.stringify(sanitizeEvent(event)) + '\n'; } catch (error) { reject(error); return; }
-    try {
-      child.stdin.write(line, 'utf8', (error) => {
-        if (error) { fail(); reject(error); } else resolve();
-      });
-    } catch (error) { fail(); reject(error); }
+    pumping = false;
+  };
+
+  const sendLine = line => new Promise((resolve, reject) => {
+    if (closed || queue.length >= queueCapacity) { reject(new Error('authority pipe unavailable or full')); return; }
+    queue.push({ line, resolve, reject });
+    void pump();
   });
 
   return {
-    sink,
-    markDegraded: (reason) => sendHealth(reason),
-    close: () => new Promise(resolve => {
-      if (!child.stdin || child.stdin.destroyed) { resolve(); return; }
-      child.once?.('close', resolve);
-      child.stdin.end();
-    })
+    sink: event => sendLine(lineForEvent(event)),
+    markDegraded: reason => { void sendLine(healthLine(reason)).catch(() => {}); },
+    close: async () => {
+      closed = true;
+      const error = new Error('authority sink closed');
+      while (queue.length) queue.shift().reject(error);
+      failSocket();
+    }
   };
 }

@@ -35,6 +35,38 @@ public sealed class NativeStatusTransport
         _health = RuntimeHealthSnapshot.Degraded(_engine.Snapshot.Health.RuntimeVersion, boundedReason);
     }
 
+    public void MarkAvailable()
+    {
+        _health = RuntimeHealthSnapshot.Healthy(_engine.Snapshot.Health.RuntimeVersion);
+    }
+
+    public NativeStatusTransportResult AcceptAuthorityRecord(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || System.Text.Encoding.UTF8.GetByteCount(json) > RuntimeIpcMetadata.MaxFrameBytes)
+            return new(false, Snapshot, ImmutableArray.Create("NATIVE_AUTHORITY_FRAME_TOO_LARGE"));
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object
+                || !root.TryGetProperty("schemaVersion", out var schema)
+                || schema.ValueKind != System.Text.Json.JsonValueKind.String)
+                return new(false, Snapshot, ImmutableArray.Create("INVALID_NATIVE_AUTHORITY_SCHEMA"));
+
+            return schema.GetString() switch
+            {
+                RuntimeIpcMetadata.NativeAuthorityMetadataSchema => AcceptMetadata(json),
+                RuntimeIpcMetadata.NativeAuthorityStatusSchema or RuntimeIpcMetadata.NativeAuthorityHealthSchema => Accept(json),
+                _ => new(false, Snapshot, ImmutableArray.Create("UNKNOWN_NATIVE_AUTHORITY_SCHEMA")),
+            };
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return new(false, Snapshot, ImmutableArray.Create("MALFORMED_NATIVE_AUTHORITY_RECORD"));
+        }
+    }
+
     public NativeStatusTransportResult Accept(string json)
     {
         if (NativeAuthorityHealthAdapter.TryParse(json, out var degradedReason))
@@ -141,7 +173,7 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
                 }
                 try
                 {
-                    var result = _transport.Accept(json);
+                    var result = _transport.AcceptAuthorityRecord(json);
                     if (result.Accepted) Interlocked.Increment(ref _delivered);
                     else SinkFailure();
                 }
