@@ -26,19 +26,22 @@ internal static class NativeAuthorityIngressTests
             await WriteAsync(producer, Status("thread-real", "active", "2026-09-09T08:00:01Z", "[\"waitingOnApproval\"]"));
             await WriteAsync(producer, Status("thread-real", "active", "2026-09-09T08:00:02Z", "[]"));
             await WriteAsync(producer, Metadata("thread-real", "C:\\work\\real"));
-            await WaitForAsync(() => host.Snapshot.State == RuntimeState.Running &&
-                host.Snapshot.Threads.Any(thread => thread.WorkingDirectory == "C:\\work\\real"));
+            await WriteAsync(producer, Status("thread-real", "idle", "2026-09-09T08:00:03Z", "[]"));
+            await WaitForAsync(() => host.Snapshot.Threads.Any(thread => thread.RuntimeStatus == ThreadRuntimeStatus.Idle &&
+                thread.WorkingDirectory == "C:\\work\\real"));
             using var running = JsonDocument.Parse(host.HandleIpcRequest("{\"protocolVersion\":\"k15-runtime-ipc/v1\",\"command\":\"ping\"}"));
             TestAssert.True(running.RootElement.GetProperty("ok").GetBoolean(), "UI command IPC went offline");
         }
 
         await WaitForAsync(() => !host.Snapshot.Health.IsHealthy);
         TestAssert.Equal("NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE", host.Snapshot.Health.Detail, "disconnect health was not bounded");
-        TestAssert.Equal(RuntimeState.Running, host.Snapshot.State, "disconnect manufactured a stale WAITING state");
+        TestAssert.Equal(ThreadRuntimeStatus.Idle, host.Snapshot.Threads.Single(thread => thread.ThreadId == "thread-real").RuntimeStatus, "disconnect changed the terminal idle evidence");
 
         await using (var reconnected = await ConnectAsync(pipe))
         {
-            await WriteAsync(reconnected, Status("thread-real", "active", "2026-09-09T08:00:03Z", "[]"));
+            await Task.Delay(100);
+            TestAssert.False(host.Snapshot.Health.IsHealthy, "reconnect without status falsely synchronized authority");
+            await WriteAsync(reconnected, Status("thread-real", "active", "2026-09-09T08:00:04Z", "[]"));
             await WaitForAsync(() => host.Snapshot.Health.IsHealthy && host.Snapshot.State == RuntimeState.Running);
         }
 
@@ -47,6 +50,33 @@ internal static class NativeAuthorityIngressTests
         TestAssert.Equal("DISCONNECTED", projection.GetProperty("device").GetProperty("connectionState").GetString(), "authority lifecycle changed device ownership");
         TestAssert.False(projection.GetProperty("device").GetProperty("protocolVerified").GetBoolean(), "authority lifecycle changed HID verification");
         TestAssert.False(projection.GetProperty("rgb").GetProperty("enabled").GetBoolean(), "authority lifecycle enabled RGB");
+    }
+
+    public static async Task ByteStreamFramingPreservesRecordsAndRecoversAfterOversize()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var mutex = "Vorotex.K15.Runtime.Tests.Framing." + suffix;
+        var pipe = "Vorotex.K15.Runtime.Tests.FramingPipe." + suffix;
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = mutex });
+        TestAssert.True(host.TryStart(), "runtime failed to start");
+        await using var ingress = new NativeAuthorityIngressServer(host, pipe);
+        ingress.Start();
+        await using var producer = await ConnectAsync(pipe);
+
+        var first = Status("thread-frame", "active", "2026-09-09T08:01:00Z", "[\"waitingOnApproval\"]");
+        var second = Status("thread-frame", "active", "2026-09-09T08:01:01Z", "[]");
+        var third = Status("thread-frame", "idle", "2026-09-09T08:01:02Z", "[]");
+        await WriteBytesAsync(producer, Encoding.UTF8.GetBytes(first + "\n" + second + "\n"));
+        await WriteBytesAsync(producer, Encoding.UTF8.GetBytes(third[..40]));
+        await WriteBytesAsync(producer, Encoding.UTF8.GetBytes(third[40..] + "\n"));
+        await WriteBytesAsync(producer, Encoding.UTF8.GetBytes(new string('x', RuntimeIpcMetadata.MaxFrameBytes + 1) + "\n" + Metadata("thread-frame", "C:\\frame" ) + "\n"));
+
+        await Task.Delay(250);
+        var framedThread = host.Snapshot.Threads.SingleOrDefault(t => t.ThreadId == "thread-frame");
+        TestAssert.True(framedThread is not null, "framing did not deliver a thread record");
+        TestAssert.Equal(ThreadRuntimeStatus.Idle, framedThread!.RuntimeStatus, $"JSONL record order was not preserved; state={host.Snapshot.State}, health={host.Snapshot.Health.Detail}");
+        TestAssert.Equal("C:\\frame", framedThread.WorkingDirectory, "oversized frame recovery lost the following valid record");
+        TestAssert.True(host.Snapshot.Health.IsHealthy, $"valid status did not restore health; detail={host.Snapshot.Health.Detail}");
     }
 
     public static async Task IngressIsAllowlistedBoundedAndSingleProducer()
@@ -78,8 +108,11 @@ internal static class NativeAuthorityIngressTests
         return Task.CompletedTask;
     }
 
-    private static string Status(string threadId, string status, string timestamp, string flags) =>
-        $"{{\"schemaVersion\":\"k15-codex-thread-status/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"thread_status_changed\",\"threadId\":\"{threadId}\",\"status\":\"{status}\",\"activeFlags\":{flags},\"timestampUtc\":\"{timestamp}\"}}";
+    private static string Status(string threadId, string status, string timestamp, string flags)
+    {
+        var activeFlags = status == "active" ? $",\"activeFlags\":{flags}" : string.Empty;
+        return $"{{\"schemaVersion\":\"k15-codex-thread-status/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"thread_status_changed\",\"threadId\":\"{threadId}\",\"status\":\"{status}\"{activeFlags},\"timestampUtc\":\"{timestamp}\"}}";
+    }
 
     private static string Metadata(string threadId, string cwd) =>
         $"{{\"schemaVersion\":\"k15-codex-thread-metadata/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"thread_metadata_changed\",\"threadId\":\"{threadId}\",\"workingDirectory\":\"{cwd.Replace("\\", "\\\\", StringComparison.Ordinal)}\"}}";
@@ -93,7 +126,11 @@ internal static class NativeAuthorityIngressTests
 
     private static async Task WriteAsync(NamedPipeClientStream pipe, string value)
     {
-        var bytes = Encoding.UTF8.GetBytes(value + "\n");
+        await WriteBytesAsync(pipe, Encoding.UTF8.GetBytes(value + "\n"));
+    }
+
+    private static async Task WriteBytesAsync(NamedPipeClientStream pipe, byte[] bytes)
+    {
         await pipe.WriteAsync(bytes);
         await pipe.FlushAsync();
     }

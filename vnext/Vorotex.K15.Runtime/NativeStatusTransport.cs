@@ -37,7 +37,8 @@ public sealed class NativeStatusTransport
 
     public void MarkAvailable()
     {
-        _health = RuntimeHealthSnapshot.Healthy(_engine.Snapshot.Health.RuntimeVersion);
+        if (_health.Detail == "NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE")
+            _health = RuntimeHealthSnapshot.Healthy(_engine.Snapshot.Health.RuntimeVersion);
     }
 
     public NativeStatusTransportResult AcceptAuthorityRecord(string json)
@@ -80,6 +81,7 @@ public sealed class NativeStatusTransport
             return new(false, Snapshot, parsed.Diagnostics);
 
         var result = _engine.Apply(NativeThreadStatusAdapter.ToObservation(parsed.Event!));
+        MarkAvailable();
         return new(true, result.Snapshot with { Health = _health }, result.Diagnostics);
     }
 

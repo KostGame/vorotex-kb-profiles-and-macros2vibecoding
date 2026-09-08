@@ -211,6 +211,17 @@ function Read-Manifest {
         childPath = Require-PinnedFile ([string] $manifest.childPath) 'childPath' ([string] $manifest.childSha256) 'childSha256'
         codeModeHostPath = Require-PinnedFile ([string] $manifest.codeModeHostPath) 'codeModeHostPath' ([string] $manifest.codeModeHostSha256) 'codeModeHostSha256'
     }
+    $wrapperDirectory = [IO.Path]::GetDirectoryName($paths.wrapperPath)
+    foreach ($sibling in @(
+        @{ Name = 'transparentWrapperPath'; File = 'transparent-wrapper.mjs' },
+        @{ Name = 'bridgeCorePath'; File = 'bridge-core.mjs' },
+        @{ Name = 'runtimeAuthorityPath'; File = 'runtime-process-authority.mjs' }
+    )) {
+        $expectedSibling = [IO.Path]::Combine($wrapperDirectory, $sibling.File)
+        if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFullPath($paths[$sibling.Name]), $expectedSibling)) {
+            Fail "$($sibling.Name) must be the canonical wrapper sibling $($sibling.File)"
+        }
+    }
     if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFileName($paths.childPath), 'codex.exe')) { Fail 'childPath must name codex.exe' }
     if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFileName($paths.codeModeHostPath), 'codex-code-mode-host.exe')) { Fail 'codeModeHostPath must name codex-code-mode-host.exe' }
     $childGenerationDirectory = [IO.Path]::GetDirectoryName($paths.childPath)

@@ -1,6 +1,5 @@
 using System.IO.Pipes;
 using System.Text;
-using System.Text.Json;
 using Vorotex.K15.Runtime.Contracts;
 
 namespace Vorotex.K15.Runtime;
@@ -69,38 +68,85 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
 
     private async Task HandleProducerAsync(NamedPipeServerStream pipe)
     {
-        _host.MarkNativeAuthorityAvailable();
+        var decoder = new BoundedJsonLineDecoder(RuntimeIpcMetadata.MaxFrameBytes);
         while (!_stop.IsCancellationRequested && pipe.IsConnected)
         {
-            var line = await ReadBoundedLineAsync(pipe, _stop.Token).ConfigureAwait(false);
+            var line = await decoder.ReadLineAsync(pipe, _stop.Token).ConfigureAwait(false);
             if (line is null) break;
+            if (line.Length > RuntimeIpcMetadata.MaxFrameBytes)
+            {
+                // The decoder has already consumed exactly through the line
+                // terminator. Do not enqueue the sentinel: an oversized frame
+                // is a bounded transport rejection, not a sink failure.
+                continue;
+            }
             if (line.Length == 0 || !_queue.TryEnqueue(line))
             {
                 // Invalid/oversized input is rejected without affecting the
                 // Runtime/UI command pipe or transparent Codex transport.
-                if (line.Length > RuntimeIpcMetadata.MaxFrameBytes) _host.MarkNativeAuthorityUnavailable();
             }
         }
     }
 
-    private static async Task<string?> ReadBoundedLineAsync(Stream pipe, CancellationToken cancellationToken)
+    private sealed class BoundedJsonLineDecoder
     {
-        var bytes = new List<byte>(RuntimeIpcMetadata.MaxFrameBytes + 1);
-        var buffer = new byte[1024];
-        while (true)
+        private readonly int _maxFrameBytes;
+        private readonly Queue<string> _ready = new();
+        private readonly List<byte> _current = new();
+        private bool _discardingOversized;
+
+        public BoundedJsonLineDecoder(int maxFrameBytes) => _maxFrameBytes = maxFrameBytes;
+
+        public async Task<string?> ReadLineAsync(Stream pipe, CancellationToken cancellationToken)
         {
-            var read = await pipe.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (read == 0) return bytes.Count == 0 ? null : string.Empty;
-            for (var index = 0; index < read; index++)
+            var buffer = new byte[1024];
+            while (_ready.Count == 0)
             {
-                if (buffer[index] == (byte)'\n')
-                    return Encoding.UTF8.GetString(bytes.ToArray()).TrimEnd('\r');
-                bytes.Add(buffer[index]);
-                if (bytes.Count > RuntimeIpcMetadata.MaxFrameBytes)
+                var read = await pipe.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                if (read == 0)
                 {
-                    while (index + 1 < read && buffer[index + 1] != (byte)'\n') index++;
-                    return new string('x', RuntimeIpcMetadata.MaxFrameBytes + 1);
+                    if (_current.Count != 0 || _discardingOversized)
+                    {
+                        _current.Clear();
+                        _discardingOversized = false;
+                        return string.Empty;
+                    }
+                    return null;
                 }
+                Feed(buffer, read);
+            }
+            return _ready.Dequeue();
+        }
+
+        private void Feed(byte[] buffer, int count)
+        {
+            for (var index = 0; index < count; index++)
+            {
+                var value = buffer[index];
+                if (value == (byte)'\n')
+                {
+                    if (_discardingOversized)
+                    {
+                        _ready.Enqueue(new string('x', _maxFrameBytes + 1));
+                        _discardingOversized = false;
+                        _current.Clear();
+                    }
+                    else
+                    {
+                        _ready.Enqueue(Encoding.UTF8.GetString(_current.ToArray()).TrimEnd('\r'));
+                        _current.Clear();
+                    }
+                    continue;
+                }
+
+                if (_discardingOversized) continue;
+                if (_current.Count == _maxFrameBytes)
+                {
+                    _current.Clear();
+                    _discardingOversized = true;
+                    continue;
+                }
+                _current.Add(value);
             }
         }
     }

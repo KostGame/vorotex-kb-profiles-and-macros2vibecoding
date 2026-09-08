@@ -73,7 +73,13 @@ jobs:
         run: powershell -NoProfile -ExecutionPolicy Bypass -File vnext/packaging/Test-VNextPackage.ps1 -PackageDirectory "$env:RUNNER_TEMP\k15-vnext-package"
       - name: Full codex-stdio-bridge regression suite
         working-directory: status-lab/research/codex-stdio-bridge
-        run: npm.cmd run test:bridge
+        run: npm.cmd test
+
+      - name: Explicit diff check
+        shell: powershell
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+        run: git diff --check "$env:BASE_SHA..$env:GITHUB_SHA"
 
       - name: Legacy device ownership and protocol smoke (non-HID)
         shell: powershell

@@ -336,6 +336,31 @@ test('production activation rejects runtime authority module replacement-in-plac
   await assertReplacementRejected('authority');
 });
 
+test('production activation rejects reviewed decoy when the real imported sibling is modified before environment mutation', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const { manifest, paths } = await createBundle(temp);
+    const decoyDirectory = path.join(temp, 'reviewed-decoy');
+    await mkdir(decoyDirectory);
+    const decoy = path.join(decoyDirectory, 'transparent-wrapper.mjs');
+    await copyFile(paths.transparent, decoy);
+    await updateManifest(manifest, {
+      transparentWrapperPath: decoy,
+      transparentWrapperSha256: await sha256(decoy)
+    });
+    await writeFile(paths.transparent, Buffer.concat([await readFile(paths.transparent), Buffer.from('\nmodified-real-sibling\n')]));
+    const environment = path.join(temp, 'environment.json');
+    await writeFile(environment, JSON.stringify({ CODEX_CLI_PATH: 'unchanged' }), 'utf8');
+    await assert.rejects(
+      powershell(['-File', script, '-Mode', 'Enable', '-ManifestPath', manifest, '-StatePath', path.join(temp, 'state.json'), '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess']),
+      error => error.code === 2
+    );
+    assert.deepEqual(await readJson(environment), { CODEX_CLI_PATH: 'unchanged' });
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
 async function assertGuardBlocked(inventory, expectedMessage) {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
   try {

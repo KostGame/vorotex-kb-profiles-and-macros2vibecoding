@@ -61,6 +61,7 @@ internal static class Program
             ("control commands remain bounded Runtime commands", ClientTests.ControlCommandsRemainBoundedRuntimeCommands),
             ("real named pipe reconnect preserves runtime ownership", ClientTests.RealNamedPipeRuntimeRestartReconnectsWithoutMutation),
             ("real authority pipe preserves Runtime and UI lifecycle", NativeAuthorityIngressTests.RealPipeLifecycleKeepsRuntimeAndUiOnline),
+            ("authority JSONL framing preserves coalesced fragmented and recovered records", NativeAuthorityIngressTests.ByteStreamFramingPreservesRecordsAndRecoversAfterOversize),
             ("authority ingress is bounded and single-producer", NativeAuthorityIngressTests.IngressIsAllowlistedBoundedAndSingleProducer),
             ("bridge cannot acquire a second Runtime lease", NativeAuthorityIngressTests.BridgeCannotAcquireSecondRuntimeLease),
             ("package resolver accepts active and rejects stale payloads", PackageTests.ResolverAcceptsActivePayloadAndRejectsStalePayload),
