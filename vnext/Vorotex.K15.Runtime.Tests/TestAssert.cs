@@ -30,4 +30,17 @@ internal static class TestAssert
             throw new InvalidOperationException($"{message}; expected '{expected}', actual '{actual}'");
         }
     }
+
+    public static async Task ThrowsAsync(Func<Task> action, string message)
+    {
+        try
+        {
+            await action().ConfigureAwait(false);
+        }
+        catch
+        {
+            return;
+        }
+        throw new InvalidOperationException(message);
+    }
 }

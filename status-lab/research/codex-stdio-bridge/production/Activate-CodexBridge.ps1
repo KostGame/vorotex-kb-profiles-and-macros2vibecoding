@@ -189,8 +189,8 @@ function Read-Manifest {
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     $required = @(
         'schema',
-        'adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'childPath', 'codeModeHostPath',
-        'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'childSha256', 'codeModeHostSha256',
+        'adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'runtimeAuthorityPath', 'childPath', 'codeModeHostPath',
+        'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'runtimeAuthoritySha256', 'childSha256', 'codeModeHostSha256',
         'approvalSinkPath'
     )
     Assert-ExactPropertyNames $manifest $required 'production manifest'
@@ -198,7 +198,7 @@ function Read-Manifest {
     foreach ($name in $required) {
         if ($manifest.$name -isnot [string]) { Fail "manifest field $name must be a string" }
     }
-    foreach ($name in @('adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'childPath', 'codeModeHostPath', 'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'childSha256', 'codeModeHostSha256')) {
+    foreach ($name in @('adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'runtimeAuthorityPath', 'childPath', 'codeModeHostPath', 'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'runtimeAuthoritySha256', 'childSha256', 'codeModeHostSha256')) {
         if ([string]::IsNullOrWhiteSpace([string] $manifest.$name)) { Fail "manifest field $name is required" }
     }
     $paths = [ordered]@{
@@ -207,8 +207,20 @@ function Read-Manifest {
         wrapperPath = Require-PinnedFile ([string] $manifest.wrapperPath) 'wrapperPath' ([string] $manifest.wrapperSha256) 'wrapperSha256'
         transparentWrapperPath = Require-PinnedFile ([string] $manifest.transparentWrapperPath) 'transparentWrapperPath' ([string] $manifest.transparentWrapperSha256) 'transparentWrapperSha256'
         bridgeCorePath = Require-PinnedFile ([string] $manifest.bridgeCorePath) 'bridgeCorePath' ([string] $manifest.bridgeCoreSha256) 'bridgeCoreSha256'
+        runtimeAuthorityPath = Require-PinnedFile ([string] $manifest.runtimeAuthorityPath) 'runtimeAuthorityPath' ([string] $manifest.runtimeAuthoritySha256) 'runtimeAuthoritySha256'
         childPath = Require-PinnedFile ([string] $manifest.childPath) 'childPath' ([string] $manifest.childSha256) 'childSha256'
         codeModeHostPath = Require-PinnedFile ([string] $manifest.codeModeHostPath) 'codeModeHostPath' ([string] $manifest.codeModeHostSha256) 'codeModeHostSha256'
+    }
+    $wrapperDirectory = [IO.Path]::GetDirectoryName($paths.wrapperPath)
+    foreach ($sibling in @(
+        @{ Name = 'transparentWrapperPath'; File = 'transparent-wrapper.mjs' },
+        @{ Name = 'bridgeCorePath'; File = 'bridge-core.mjs' },
+        @{ Name = 'runtimeAuthorityPath'; File = 'runtime-process-authority.mjs' }
+    )) {
+        $expectedSibling = [IO.Path]::Combine($wrapperDirectory, $sibling.File)
+        if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFullPath($paths[$sibling.Name]), $expectedSibling)) {
+            Fail "$($sibling.Name) must be the canonical wrapper sibling $($sibling.File)"
+        }
     }
     if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFileName($paths.childPath), 'codex.exe')) { Fail 'childPath must name codex.exe' }
     if (-not [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFileName($paths.codeModeHostPath), 'codex-code-mode-host.exe')) { Fail 'codeModeHostPath must name codex-code-mode-host.exe' }

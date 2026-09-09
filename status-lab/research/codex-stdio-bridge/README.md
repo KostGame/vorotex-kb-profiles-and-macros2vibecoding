@@ -123,11 +123,11 @@ and sanitize to `activeFlags: []`. It emits the bounded
 timestamp, and optional `user`/`service`/`canary` classification). A serialized
 queue of 64 records preserves arrival order; overflow and sink failures are
 reported as fixed health envelopes and never block the transparent `pipe()`
-transport. The vNext runtime accepts both records through its opt-in stdin
-boundary (`VOROTEX_K15_RUNTIME_NATIVE_STATUS_STDIN=1`) and owns all state
-mapping. The approval wrapper creates that process boundary only when an
-absolute `CODEX_BRIDGE_RUNTIME_COMMAND` is explicitly supplied; it is disabled
-by default and is not activated by this repository.
+transport. The vNext runtime accepts these records through its dedicated
+current-user-only named-pipe ingress (`\\.\pipe\Vorotex.K15.Runtime.NativeAuthority.v1`)
+and owns all state mapping. The bridge connects to the already-running Runtime
+and never spawns a Runtime process; the general Runtime UI command pipe remains
+separate.
 # Codex stdio bridge
 
 ## Proven Runtime metadata path
@@ -141,5 +141,5 @@ status, prompts, tool items, model data, or arbitrary RPC content.
 
 `thread/status/changed` remains the native status authority path; metadata is
 merged by exact thread id in Runtime and cannot affect status ordering or
-authority health. Stdio remains byte-transparent, and the Runtime process
-boundary is opt-in and hidden by default.
+authority health. Stdio remains byte-transparent; authority delivery is an
+optional fail-open connection to the already-running Runtime pipe.

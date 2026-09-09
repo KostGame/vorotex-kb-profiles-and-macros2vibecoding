@@ -12,6 +12,7 @@ const adapterPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'K15.Codex
 const fakeChildPath = path.join(bridgeDirectory, 'bin', 'fake-child-test', 'K15.CodexBridge.FakeChild.exe');
 const wrapperPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'transparent-wrapper.mjs');
 const approvalWrapperPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'approval-wrapper.mjs');
+const authorityModulePath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'runtime-process-authority.mjs');
 
 function environmentFor(overrides = {}, { packagedWrapper = false } = {}) {
   const environment = {
@@ -106,6 +107,14 @@ test('packaged wrapper is usable when no wrapper override is provided', async ()
   });
   assert.equal(result.code, 0);
   assert.deepEqual(JSON.parse(result.stdout.toString('utf8')), ['app-server']);
+});
+
+test('production authority module is included and cannot spawn Runtime', async () => {
+  assert.equal((await stat(authorityModulePath)).isFile(), true);
+  const source = await readFile(authorityModulePath, 'utf8');
+  assert.equal(source.includes("node:child_process"), false);
+  assert.doesNotMatch(source, /spawn\s*\(/);
+  assert.match(source, /AUTHORITY_PIPE_NAME/);
 });
 
 test('forwards arbitrary binary stdin and stdout unchanged', async () => {

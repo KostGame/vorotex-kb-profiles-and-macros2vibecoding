@@ -8,7 +8,9 @@ The owner keeps a reviewed bundle at a stable per-user path:
 
 `ordinary Codex Desktop -> User CODEX_CLI_PATH -> K15.CodexBridge.WindowsAdapter.exe -> approval-wrapper.mjs -> exact codex.exe`
 
-`Activate-CodexBridge.ps1` requires production manifest v2. It validates the exact non-reparse adapter, Node, approval wrapper, transparent wrapper, bridge core, `codex.exe`, and sibling `codex-code-mode-host.exe` paths plus a SHA-256 pin for every file before any environment change. The two Codex runtime files must be in the same generation directory; the script never searches for or adopts another generation.
+`Activate-CodexBridge.ps1` requires production manifest v2. It validates the exact non-reparse adapter, Node, approval wrapper, transparent wrapper, bridge core, `runtime-process-authority.mjs`, `codex.exe`, and sibling `codex-code-mode-host.exe` paths plus a SHA-256 pin for every file before any environment change. The two Codex runtime files must be in the same generation directory; the script never searches for or adopts another generation.
+
+The approval wrapper connects to the already-running `Vorotex.K15.Runtime.exe` through the fixed `\\.\pipe\Vorotex.K15.Runtime.NativeAuthority.v1` ingress. There is no runtime-command environment variable and the bridge never spawns a Runtime process. The Runtime owns the single-instance lease and the dedicated ingress; the general UI command pipe remains separate.
 
 `Enable` snapshots all bridge-owned User variables atomically to activation-state v3 and records the exact SHA-256 of the approved manifest bytes together with a bounded, sorted inventory of direct child generation directories under the approved runtime bin root. Inventory metadata contains only the generation name and whether `codex.exe` and `codex-code-mode-host.exe` are present; it does not contain prompts, protocol data, user content, or candidate hashes. Machine environment and package files remain untouched.
 
@@ -33,7 +35,7 @@ After active writes, `Enable` independently rereads all six variables and requir
 
 ## Update and rollback semantics
 
-Every executable/module in the chain, including Node, has an explicit review pin. Replacement-in-place of the adapter, either wrapper, bridge core, Node, `codex.exe`, or `codex-code-mode-host.exe` causes `Validate` and `Enable` to fail closed before any User environment mutation. It is never silently adopted.
+Every executable/module in the chain, including Node and `runtime-process-authority.mjs`, has an explicit review pin. Replacement-in-place of the adapter, either wrapper, bridge core, authority module, Node, `codex.exe`, or `codex-code-mode-host.exe` causes `Validate` and `Enable` to fail closed before any User environment mutation. It is never silently adopted.
 
 `Status` is read-only and reports `ACTIVE=YES|NO` plus one bounded runtime health state: `INACTIVE`, `HEALTHY`, `CHILD_RUNTIME_STALE`, or `UPDATE_REVALIDATION_REQUIRED`. `INACTIVE` means no activation state exists. `HEALTHY` requires a valid v3 state, an unchanged canonical manifest path and exact manifest-byte SHA-256, a valid v2 manifest, exact active User environment, an intact pinned child/host pair, and an unchanged runtime inventory. `CHILD_RUNTIME_STALE` means the approved pair or activation is no longer valid. `UPDATE_REVALIDATION_REQUIRED` means the approved pair is intact but the manifest identity/path or runtime inventory changed; a new coherent or partial generation is not an approval.
 

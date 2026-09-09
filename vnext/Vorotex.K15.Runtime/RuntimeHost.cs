@@ -21,6 +21,8 @@ public sealed class RuntimeHost : IDisposable
     private readonly RuntimeDeviceManager _deviceManager;
     private readonly RuntimeRgbController _rgbController;
     private bool _stoppedForMutations;
+    private long _nativeAuthorityGeneration;
+    private bool _nativeAuthorityConnected;
 
     public RuntimeHost(RuntimeHostOptions? options = null) : this(options, null) { }
 
@@ -69,9 +71,69 @@ public sealed class RuntimeHost : IDisposable
 
     public NativeStatusTransportResult ApplyNativeRuntimeRecordJson(string json)
     {
+        return ApplyNativeAuthorityRecordJson(json);
+    }
+
+    internal NativeStatusTransportResult ApplyNativeAuthorityRecordJson(string json)
+    {
         if (json.Contains("\"k15-codex-thread-metadata/v1\"", StringComparison.Ordinal))
             return ApplyNativeThreadMetadataJson(json);
+        if (json.Contains("\"k15-codex-authority-health/v1\"", StringComparison.Ordinal))
+        {
+            lock (_gate) return _nativeStatusTransport.AcceptAuthorityRecord(json);
+        }
         return ApplyNativeStatusJson(json);
+    }
+
+    internal NativeStatusTransportResult ApplyNativeAuthorityRecordJson(long generation, string json)
+    {
+        lock (_gate)
+        {
+            if (!_nativeAuthorityConnected || generation != _nativeAuthorityGeneration)
+                return new(false, Snapshot, ImmutableArray.Create("NATIVE_AUTHORITY_OLD_PRODUCER_GENERATION"));
+            return ApplyNativeAuthorityRecordJsonLocked(json);
+        }
+    }
+
+    private NativeStatusTransportResult ApplyNativeAuthorityRecordJsonLocked(string json)
+    {
+        if (json.Contains("\"k15-codex-thread-metadata/v1\"", StringComparison.Ordinal))
+            return _nativeStatusTransport.AcceptMetadata(json);
+        if (json.Contains("\"k15-codex-authority-health/v1\"", StringComparison.Ordinal))
+            return _nativeStatusTransport.AcceptAuthorityRecord(json);
+        var result = _nativeStatusTransport.Accept(json);
+        if (result.Accepted) _rgbController.ApplyRuntimeState(Snapshot.State);
+        return result;
+    }
+
+    internal long BeginNativeAuthorityProducerGeneration()
+    {
+        lock (_gate)
+        {
+            _nativeAuthorityGeneration++;
+            _nativeAuthorityConnected = true;
+            return _nativeAuthorityGeneration;
+        }
+    }
+
+    internal void MarkNativeAuthorityDegraded(string reason)
+    {
+        lock (_gate) _nativeStatusTransport.MarkDegraded(reason);
+    }
+
+    internal void MarkNativeAuthorityAvailable()
+    {
+        lock (_gate) _nativeStatusTransport.MarkAvailable();
+    }
+
+    internal void MarkNativeAuthorityUnavailable(long generation = 0)
+    {
+        lock (_gate)
+        {
+            if (generation != 0 && generation != _nativeAuthorityGeneration) return;
+            _nativeAuthorityConnected = false;
+            _nativeStatusTransport.MarkDegraded("NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE");
+        }
     }
 
     private RuntimeIpcProtocol.RuntimeIpcCommandResult HandleDeviceCommand(string command, string? candidateId, bool? enabled)

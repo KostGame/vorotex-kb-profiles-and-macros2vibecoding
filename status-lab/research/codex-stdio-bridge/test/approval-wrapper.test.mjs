@@ -11,7 +11,6 @@ import {
   APPROVAL_SINK_PATH_ENV,
   runApprovalWrapper
 } from '../src/approval-wrapper.mjs';
-import { RUNTIME_COMMAND_ENV } from '../src/runtime-process-authority.mjs';
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const fakeChild = path.join(testDirectory, 'fixtures', 'fake-child.mjs');
@@ -110,51 +109,54 @@ test('real approval wrapper seam observes native status while preserving bytes',
   assert.equal(events[0].threadId, 'thread-native-fixture');
 });
 
-test('opt-in wrapper process boundary delivers sanitized native state to Runtime and stays disabled by default', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'k15-codex-runtime-boundary-'));
-  const capturePath = path.join(root, 'runtime-records.jsonl');
+test('authority pipe boundary delivers sanitized native state without spawning Runtime', async () => {
+  const records = [];
   const stdin = new PassThrough(); const stdout = new PassThrough(); const stderr = new PassThrough();
   const output = collect(stdout);
-  const runtimeScript = "let value=''; process.stdin.on('data', chunk => value += chunk); process.stdin.on('end', () => require('node:fs').writeFileSync(process.argv[1], value));";
   const run = runApprovalWrapper({
     argv: ['app-server'],
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CODEX_BRIDGE_'))),
       CODEX_BRIDGE_CHILD_PATH: fakeChild,
-      FAKE_CHILD_MODE: 'native',
-      [RUNTIME_COMMAND_ENV]: process.execPath
+      FAKE_CHILD_MODE: 'native'
     },
-    runtimeCommandArgs: ['-e', runtimeScript, capturePath],
+    authorityPipePath: 'test-native-authority',
+    authorityConnector: () => {
+      const socket = new PassThrough();
+      socket.on('data', chunk => records.push(...chunk.toString('utf8').trim().split('\n').filter(Boolean).map(JSON.parse)));
+      setImmediate(() => socket.emit('connect'));
+      return socket;
+    },
     stdin, stdout, stderr,
     spawnProcess: (childPath, childArgs, options) => spawn(process.execPath, [childPath, ...childArgs], { ...options })
   });
   stdout.once('data', () => stdin.end(Buffer.from('opaque-client-bytes')));
   assert.equal(await run, 0);
   const transport = await output;
-  const records = (await readFile(capturePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  await new Promise(resolve => setImmediate(resolve));
   assert.match(transport.toString('utf8'), /thread\/status\/changed/);
   assert.equal(records.length, 1);
   assert.equal(records[0].threadId, 'thread-native-fixture');
   assert.equal(records[0].event, 'thread_status_changed');
-  assert.doesNotMatch(await readFile(capturePath, 'utf8'), /opaque-client-bytes|fake-child|prompt|command/);
-  await rm(root, { recursive: true, force: true });
+  assert.doesNotMatch(JSON.stringify(records), /opaque-client-bytes|fake-child|prompt|command/);
 });
 
-test('runtime process boundary forwards metadata cwd and drops unrelated fields', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'k15-codex-metadata-boundary-'));
-  const capturePath = path.join(root, 'runtime-records.jsonl');
+test('authority pipe boundary forwards metadata cwd and drops unrelated fields', async () => {
+  const records = [];
   const stdin = new PassThrough(); const stdout = new PassThrough(); const stderr = new PassThrough();
   const output = collect(stdout);
-  const runtimeScript = "let value=''; process.stdin.on('data', chunk => value += chunk); process.stdin.on('end', () => require('node:fs').writeFileSync(process.argv[1], value));";
   const run = runApprovalWrapper({ argv: ['app-server'], env: {
-    CODEX_BRIDGE_CHILD_PATH: fakeChild, FAKE_CHILD_MODE: 'metadata', [RUNTIME_COMMAND_ENV]: process.execPath
-  }, runtimeCommandArgs: ['-e', runtimeScript, capturePath], stdin, stdout, stderr,
+    CODEX_BRIDGE_CHILD_PATH: fakeChild, FAKE_CHILD_MODE: 'metadata'
+  }, authorityPipePath: 'test-native-authority', authorityConnector: () => {
+    const socket = new PassThrough();
+    socket.on('data', chunk => records.push(...chunk.toString('utf8').trim().split('\n').filter(Boolean).map(JSON.parse)));
+    setImmediate(() => socket.emit('connect'));
+    return socket;
+  }, stdin, stdout, stderr,
   spawnProcess: (childPath, childArgs, options) => spawn(process.execPath, [childPath, ...childArgs], { ...options }) });
   stdout.once('data', () => stdin.end(Buffer.from('opaque-client-bytes')));
   assert.equal(await run, 0); await output;
-  const records = (await readFile(capturePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(records[0], { schemaVersion: 'k15-codex-thread-metadata/v1', source: 'codex_stdio_bridge',
     event: 'thread_metadata_changed', threadId: 'thread-metadata-fixture', workingDirectory: 'G:\\Мой диск\\AgentLoop Exchange\\inbox' });
-  assert.doesNotMatch(await readFile(capturePath, 'utf8'), /SECRET|PRIVATE|prompt|model/);
-  await rm(root, { recursive: true, force: true });
+  assert.doesNotMatch(JSON.stringify(records), /SECRET|PRIVATE|prompt|model/);
 });

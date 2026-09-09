@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.IO.Pipes;
+using System.Text;
 using System.Text.Json;
 using Vorotex.K15.Runtime;
 using Vorotex.K15.Runtime.Contracts;
@@ -33,17 +35,65 @@ internal static class RuntimeDeviceTests
         return Task.CompletedTask;
     }
 
-    public static Task RgbUsesFakeTransportAndPreservesStateAuthority()
+    public static async Task RgbUsesFakeTransportAndPreservesStateAuthority()
     {
         var backend = new FakeBackend();
         using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "rgb-" + Guid.NewGuid().ToString("N") }, backend);
         host.HandleIpcRequest(Request("scan_devices"));
         host.HandleIpcRequest(Request("connect_device", ("candidateId", "candidate-a")));
         TestAssert.True(host.HandleIpcRequest(Request("set_rgb_enabled", ("enabled", true))).Contains("\"ok\":true"), "RGB did not enable");
-        host.ApplyNativeStatusJson("{\"schemaVersion\":\"k15-codex-thread-status/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"thread_status_changed\",\"threadId\":\"t\",\"status\":\"active\",\"activeFlags\":[\"waitingOnApproval\"],\"timestampUtc\":\"2026-09-08T00:00:00Z\"}");
-        TestAssert.Equal(K15HidProtocol.SingleColorBreathingMode.ToString(), backend.LastHandle!.Effects[^1], "canonical state did not choose deterministic effect");
+        var direct = host.ApplyNativeStatusJson("{\"schemaVersion\":\"k15-codex-thread-status/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"thread_status_changed\",\"threadId\":\"direct\",\"status\":\"active\",\"activeFlags\":[\"waitingOnApproval\"],\"timestampUtc\":\"2026-09-08T00:00:00Z\"}");
+        TestAssert.True(direct.Accepted, "direct accepted RuntimeHost status was rejected");
+        var directEffect = backend.LastHandle!.Effects[^1];
+
+        var pipe = "Vorotex.K15.Runtime.Tests.RgbAuthorityPipe." + Guid.NewGuid().ToString("N");
+        await using var ingress = new NativeAuthorityIngressServer(host, pipe);
+        ingress.Start();
+        await using (var producer = await ConnectAsync(pipe))
+        {
+            await WriteAsync(producer, Status("authority", "active", "2026-09-08T00:00:01Z", "[\"waitingOnApproval\"]"));
+            await WaitForAsync(() => backend.LastHandle.Effects.Count >= 2);
+            TestAssert.Equal(directEffect, backend.LastHandle.Effects[^1], "authority status bypassed canonical RGB projection");
+            var writesBeforeMetadata = backend.TotalEffectWrites;
+            await WriteAsync(producer, Metadata("authority", "C:\\authority"));
+            await Task.Delay(100);
+            TestAssert.Equal(writesBeforeMetadata, backend.TotalEffectWrites, "metadata changed RGB projection");
+        }
+        await Task.Delay(100);
+        var writesBeforeReconnect = backend.TotalEffectWrites;
+        await using (var reconnected = await ConnectAsync(pipe))
+        {
+            await Task.Delay(100);
+            TestAssert.Equal(writesBeforeReconnect, backend.TotalEffectWrites, "disconnect/reconnect changed RGB without status");
+        }
+        var writesBeforeStop = backend.TotalEffectWrites;
+        var apply = Task.Run(() => host.ApplyNativeStatusJson("{\"schemaVersion\":\"k15-codex-thread-status/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"thread_status_changed\",\"threadId\":\"race\",\"status\":\"active\",\"activeFlags\":[],\"timestampUtc\":\"2026-09-08T00:00:02Z\"}"));
+        host.Stop();
+        await apply;
+        TestAssert.Equal(writesBeforeStop, backend.TotalEffectWrites, "RGB wrote after Runtime stop");
         TestAssert.Equal(0, backend.RealWrites, "fake test performed a physical write");
-        return Task.CompletedTask;
+    }
+
+    private static string Status(string threadId, string status, string timestamp, string flags) =>
+        $"{{\"schemaVersion\":\"k15-codex-thread-status/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"thread_status_changed\",\"threadId\":\"{threadId}\",\"status\":\"{status}\",\"activeFlags\":{flags},\"timestampUtc\":\"{timestamp}\"}}";
+    private static string Metadata(string threadId, string cwd) =>
+        $"{{\"schemaVersion\":\"k15-codex-thread-metadata/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"thread_metadata_changed\",\"threadId\":\"{threadId}\",\"workingDirectory\":\"{cwd.Replace("\\", "\\\\", StringComparison.Ordinal)}\"}}";
+    private static async Task<NamedPipeClientStream> ConnectAsync(string pipeName)
+    {
+        var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.Asynchronous);
+        await client.ConnectAsync(2000);
+        return client;
+    }
+    private static async Task WriteAsync(NamedPipeClientStream pipe, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value + "\n");
+        await pipe.WriteAsync(bytes);
+        await pipe.FlushAsync();
+    }
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        for (var i = 0; i < 100 && !condition(); i++) await Task.Delay(10);
+        TestAssert.True(condition(), "bounded fake RGB authority wait timed out");
     }
 
     public static Task IpcCommandsAreBoundedAndDoNotExposePaths()
@@ -312,7 +362,7 @@ internal static class RuntimeDeviceTests
         return JsonSerializer.Serialize(values);
     }
 
-    private sealed class FakeBackend : IK15DeviceBackend
+    internal sealed class FakeBackend : IK15DeviceBackend
     {
         public bool VerifyFails { get; init; }
         public bool DuplicateIdentity { get; set; }
@@ -358,7 +408,7 @@ internal static class RuntimeDeviceTests
         }
     }
 
-    private sealed class FakeHandle : IK15DeviceHandle
+    internal sealed class FakeHandle : IK15DeviceHandle
     {
         private readonly bool _verifyFails;
         private readonly Func<bool> _failEffect;
