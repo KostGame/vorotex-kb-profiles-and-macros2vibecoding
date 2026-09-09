@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - 'vnext/**'
+      - 'status-lab/research/codex-stdio-bridge/**'
       - '.github/workflows/vnext-build.yml'
   push:
     branches:
       - 'agent/**'
     paths:
       - 'vnext/**'
+      - 'status-lab/research/codex-stdio-bridge/**'
       - '.github/workflows/vnext-build.yml'
 
 permissions:

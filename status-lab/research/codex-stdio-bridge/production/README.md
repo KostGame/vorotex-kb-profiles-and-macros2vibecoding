@@ -16,7 +16,7 @@ The approval wrapper connects to the already-running `Vorotex.K15.Runtime.exe` t
 
 For every managed variable, the activation state records an explicit `presence` (`ABSENT` or `PRESENT`) and the exact string `value`; `PRESENT` with `""` is not collapsed to `ABSENT`. The real production primitive reads the current user's `HKCU\Environment` value-name set before reading its string, so it does not infer presence from `GetEnvironmentVariable`. It also preserves `String` versus `ExpandString` when restoring a present baseline.
 
-The optional approval sink is configured explicitly in the manifest. Empty means no side-channel file is created. The adapter and wrappers continue to forward transport independently of observer/sink failure.
+The optional approval sink and bounded diagnostics snapshot are configured explicitly in the manifest. Empty means the corresponding side-channel file is not created. The adapter and wrappers continue to forward transport independently of observer/sink failure. Diagnostics contain only fixed counters/enums/timestamps; they never contain protocol records, prompts, tool/model/reasoning data, or identifiers.
 
 ## Owner operations
 

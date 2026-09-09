@@ -24,8 +24,10 @@ $ManagedVariables = @(
     'CODEX_BRIDGE_WRAPPER_PATH',
     'CODEX_BRIDGE_CHILD_PATH',
     'CODEX_BRIDGE_CHILD_SHA256',
-    'CODEX_BRIDGE_APPROVAL_SINK_PATH'
+    'CODEX_BRIDGE_APPROVAL_SINK_PATH',
+    'CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH'
 )
+$PreDiagnosticsManagedVariables = @($ManagedVariables | Where-Object { $_ -ne 'CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH' })
 $ManifestSchema = 'k15-codex-bridge/production-manifest-v2'
 $ActivationStateSchema = 'k15-codex-bridge/activation-state-v3'
 $LegacyActivationStateSchema = 'k15-codex-bridge/activation-state-v2'
@@ -49,9 +51,8 @@ function Assert-ExactPropertyNames($Object, [string[]] $ExpectedNames, [string] 
     if ($null -eq $Object) { Fail "$Context is required" }
     $actualNames = @($Object.PSObject.Properties.Name)
     if ($actualNames.Count -ne $ExpectedNames.Count) { Fail "$Context has an unexpected property set" }
-    foreach ($name in $ExpectedNames) {
-        if ($null -eq $Object.PSObject.Properties[$name]) { Fail "$Context is missing $name" }
-    }
+    if (@($actualNames | Where-Object { $_ -notin $ExpectedNames }).Count -ne 0) { Fail "$Context has an unexpected property set" }
+    foreach ($name in $ExpectedNames) { if ($null -eq $Object.PSObject.Properties[$name]) { Fail "$Context is missing $name" } }
 }
 
 function Assert-EnvironmentEntry($Entry, [string] $Name, [string] $Context) {
@@ -193,9 +194,15 @@ function Read-Manifest {
         'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'runtimeAuthoritySha256', 'childSha256', 'codeModeHostSha256',
         'approvalSinkPath'
     )
-    Assert-ExactPropertyNames $manifest $required 'production manifest'
+    $manifestNames = @($manifest.PSObject.Properties.Name)
+    $allowedManifestNames = @($required + 'diagnosticsSinkPath')
+    if ($manifestNames.Count -notin @($required.Count, $allowedManifestNames.Count) -or
+        @($manifestNames | Where-Object { $_ -notin $allowedManifestNames }).Count -ne 0) {
+        Fail 'production manifest has an unexpected property set'
+    }
+    foreach ($name in $required) { if ($null -eq $manifest.PSObject.Properties[$name]) { Fail "production manifest is missing $name" } }
     if ($manifest.schema -ne $ManifestSchema) { Fail 'unsupported production manifest schema' }
-    foreach ($name in $required) {
+    foreach ($name in $manifestNames) {
         if ($manifest.$name -isnot [string]) { Fail "manifest field $name must be a string" }
     }
     foreach ($name in @('adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'runtimeAuthorityPath', 'childPath', 'codeModeHostPath', 'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'runtimeAuthoritySha256', 'childSha256', 'codeModeHostSha256')) {
@@ -233,10 +240,12 @@ function Read-Manifest {
         if (-not $uniquePaths.Add([IO.Path]::GetFullPath($paths[$name]))) { Fail "manifest path $name duplicates another executable path" }
     }
     $approvalSinkPath = Require-OptionalOutputPath ([string] $manifest.approvalSinkPath) 'approvalSinkPath'
+    $diagnosticsSinkPath = if ($null -eq $manifest.PSObject.Properties['diagnosticsSinkPath']) { '' } else { Require-OptionalOutputPath ([string] $manifest.diagnosticsSinkPath) 'diagnosticsSinkPath' }
     return [pscustomobject]@{
         Manifest = $manifest
         Paths = $paths
         ApprovalSinkPath = $approvalSinkPath
+        DiagnosticsSinkPath = $diagnosticsSinkPath
         GenerationName = [IO.Path]::GetFileName($childGenerationDirectory)
         RuntimeRoot = $runtimeRoot
     }
@@ -394,6 +403,7 @@ function Get-ActiveEnvironment($Resolved) {
         CODEX_BRIDGE_CHILD_PATH = New-EnvironmentEntry $true $Resolved.Paths.childPath
         CODEX_BRIDGE_CHILD_SHA256 = New-EnvironmentEntry $true ([string] $Resolved.Manifest.childSha256).ToLowerInvariant()
         CODEX_BRIDGE_APPROVAL_SINK_PATH = New-EnvironmentEntry (-not [string]::IsNullOrEmpty($Resolved.ApprovalSinkPath)) $Resolved.ApprovalSinkPath
+        CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH = New-EnvironmentEntry (-not [string]::IsNullOrEmpty($Resolved.DiagnosticsSinkPath)) $Resolved.DiagnosticsSinkPath
     }
     return $active
 }
@@ -411,9 +421,9 @@ function Get-PostcheckEntry($Actual, [string] $Phase, [string] $Name) {
     return $Actual
 }
 
-function Assert-UserEnvironmentMatches($Expected, [string] $Phase) {
+function Assert-UserEnvironmentMatches($Expected, [string] $Phase, [string[]] $Names = $ManagedVariables) {
     $mismatches = @()
-    foreach ($name in $ManagedVariables) {
+    foreach ($name in $Names) {
         $expectedEntry = Assert-EnvironmentEntry $Expected[$name] $name "$Phase expected"
         $actualEntry = Get-PostcheckEntry (Get-UserEnvironmentEntry $name) $Phase $name
         $actualEntry = Assert-EnvironmentEntry $actualEntry $name "$Phase actual"
@@ -452,14 +462,19 @@ function Read-ActivationState([string] $Path) {
         $runtimeInventory = Assert-RuntimeInventory $state.runtimeBaseline.runtimeInventory 'activation state runtimeInventory'
     }
     if ($state.manifestPath -isnot [string] -or [string]::IsNullOrWhiteSpace($state.manifestPath)) { Fail 'activation state manifestPath is invalid' }
-    Assert-ExactPropertyNames $state.original $ManagedVariables 'activation state original'
+    $originalNames = @($state.original.PSObject.Properties.Name)
+    $expectedOriginalNames = if ($state.schema -eq $LegacyActivationStateSchema -or $originalNames.Count -eq $PreDiagnosticsManagedVariables.Count) {
+        $PreDiagnosticsManagedVariables
+    } else { $ManagedVariables }
+    Assert-ExactPropertyNames $state.original $expectedOriginalNames 'activation state original'
     $original = [ordered]@{}
-    foreach ($name in $ManagedVariables) { $original[$name] = Assert-EnvironmentEntry $state.original.$name $name 'activation state original' }
+    foreach ($name in $originalNames) { $original[$name] = Assert-EnvironmentEntry $state.original.$name $name 'activation state original' }
     return [pscustomobject]@{
         ManifestPath = $state.manifestPath
         ManifestSha256 = if ($state.schema -eq $ActivationStateSchema) { ([string] $state.manifestSha256).ToLowerInvariant() } else { $null }
         Original = $original
         IsLegacy = $state.schema -eq $LegacyActivationStateSchema
+        ManagedVariables = $originalNames
         RuntimeBaseline = if ($state.schema -eq $ActivationStateSchema) {
             [pscustomobject]@{ ApprovedGeneration = $state.runtimeBaseline.approvedGeneration; RuntimeInventory = $runtimeInventory }
         } else { $null }
@@ -486,9 +501,9 @@ function Assert-CodexDesktopClosed {
     }
 }
 
-function Restore-OriginalEnvironment($Original) {
-    foreach ($name in $ManagedVariables) { Set-UserEnvironmentEntry $name $Original[$name] }
-    Assert-UserEnvironmentMatches $Original 'EnableRollback'
+function Restore-OriginalEnvironment($Original, [string[]] $Names = $ManagedVariables) {
+    foreach ($name in $Names) { Set-UserEnvironmentEntry $name $Original[$name] }
+    Assert-UserEnvironmentMatches $Original 'EnableRollback' $Names
 }
 
 try {
@@ -538,7 +553,7 @@ try {
                 exit 0
             }
             $active = Get-ActiveEnvironment $resolved
-            Assert-UserEnvironmentMatches $active 'StatusActive'
+            Assert-UserEnvironmentMatches $active 'StatusActive' $state.ManagedVariables
             $currentInventory = Get-RuntimeInventory $resolved.RuntimeRoot
             if (-not (Test-RuntimeInventoryEqual $state.RuntimeBaseline.RuntimeInventory $currentInventory)) {
                 Write-RuntimeStatus 'YES' 'UPDATE_REVALIDATION_REQUIRED' 'RUNTIME_INVENTORY_CHANGED'
@@ -600,8 +615,8 @@ try {
         }
         $state = Read-ActivationState $stateFile
         Assert-CodexDesktopClosed
-        foreach ($name in $ManagedVariables) { Set-UserEnvironmentEntry $name $state.Original[$name] }
-        Assert-UserEnvironmentMatches $state.Original 'DisableBaseline'
+        foreach ($name in $state.ManagedVariables) { Set-UserEnvironmentEntry $name $state.Original[$name] }
+        Assert-UserEnvironmentMatches $state.Original 'DisableBaseline' $state.ManagedVariables
         Assert-UserEnvironmentBroadcast -Mode $BroadcastMode | Out-Null
         Remove-Item -LiteralPath $stateFile -Force
         'ACTIVE=NO'

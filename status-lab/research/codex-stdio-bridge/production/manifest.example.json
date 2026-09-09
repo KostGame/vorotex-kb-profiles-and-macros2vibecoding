@@ -16,5 +16,6 @@
   "childSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
   "codeModeHostPath": "C:\\Users\\<owner>\\AppData\\Local\\OpenAI\\Codex\\bin\\<owner-reviewed-generation>\\codex-code-mode-host.exe",
   "codeModeHostSha256": "REPLACE_WITH_OWNER_VERIFIED_SHA256",
-  "approvalSinkPath": ""
+  "approvalSinkPath": "",
+  "diagnosticsSinkPath": ""
 }

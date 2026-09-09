@@ -78,7 +78,8 @@ export function createNamedPipeAuthoritySink({
   pipePath = AUTHORITY_PIPE_NAME,
   connectPipe = path => net.createConnection({ path }),
   queueCapacity = AUTHORITY_PIPE_QUEUE_CAPACITY,
-  connectTimeoutMs = 250
+  connectTimeoutMs = 250,
+  diagnostics
 } = {}) {
   if (typeof pipePath !== 'string' || pipePath.length === 0 || !Number.isInteger(queueCapacity) || queueCapacity <= 0) {
     throw new Error('invalid authority pipe configuration');
@@ -100,6 +101,7 @@ export function createNamedPipeAuthoritySink({
   const connect = () => {
     if (socket && !socket.destroyed) return Promise.resolve(socket);
     if (connecting) return connecting;
+    diagnostics?.recordPipe('connectAttempts');
     connecting = new Promise((resolve, reject) => {
       let settled = false;
       let candidate;
@@ -108,8 +110,8 @@ export function createNamedPipeAuthoritySink({
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        if (error) { failSocket(); reject(error); }
-        else { socket = candidate; resolve(candidate); }
+        if (error) { failSocket(); diagnostics?.recordPipe('connectFailures', error?.message?.includes('timeout') ? 'timeout' : error?.code === 'EBUSY' ? 'busy' : 'unavailable'); reject(error); }
+        else { socket = candidate; diagnostics?.recordPipe('connectSuccesses'); resolve(candidate); }
       };
       const timeout = setTimeout(() => finish(new Error('authority pipe connect timeout')), connectTimeoutMs);
       candidate.once?.('connect', () => finish());
