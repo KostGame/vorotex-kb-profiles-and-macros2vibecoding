@@ -136,6 +136,10 @@ internal static class NativeAuthorityIngressTests
         {
             await Task.Delay(50);
             TestAssert.False(host.Snapshot.Health.IsHealthy, "reconnect without status cleared resync degradation");
+            await WriteAsync(second, Status("A", "active", "2026-09-09T08:04:59Z", "[\"waitingOnApproval\"]"));
+            await WriteAsync(second, Status("A", "active", "2026-09-09T08:05:00Z", "[\"waitingOnApproval\"]"));
+            await Task.Delay(50);
+            TestAssert.False(host.Snapshot.Health.IsHealthy, "stale/duplicate A evidence cleared resync degradation");
             await WriteAsync(second, Status("B", "active", "2026-09-09T08:05:01Z", "[]"));
             await WaitForAsync(() => host.Snapshot.Threads.Any(t => t.ThreadId == "B"));
             TestAssert.False(host.Snapshot.Health.IsHealthy, "B status certified stale A WAITING");
@@ -162,6 +166,38 @@ internal static class NativeAuthorityIngressTests
         TestAssert.True(ping.RootElement.GetProperty("ok").GetBoolean(), "UI IPC went offline during resync");
         TestAssert.False(host.DeviceManager.IsConnected, "resync changed device ownership");
         TestAssert.False(host.RgbController.Enabled, "resync enabled RGB");
+
+        await VerifyQueuedOldGenerationCannotCertifyAsync();
+    }
+
+    private static async Task VerifyQueuedOldGenerationCannotCertifyAsync()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "Vorotex.K15.Runtime.Tests.QueueResync." + suffix });
+        TestAssert.True(host.TryStart(), "queued resync runtime failed to start");
+        TestAssert.True(host.ApplyNativeStatusJson(Status("queued", "active", "2026-09-09T08:06:00Z", "[\"waitingOnApproval\"]")).Accepted,
+            "queued resync baseline was rejected");
+        var generation = host.BeginNativeAuthorityProducerGeneration();
+        host.MarkNativeAuthorityUnavailable(generation);
+
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        await using var queue = new NativeStatusDeliveryQueue(
+            (long recordGeneration, string json) =>
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(5));
+                return host.ApplyNativeAuthorityRecordJson(recordGeneration, json);
+            },
+            host.MarkNativeAuthorityDegraded,
+            capacity: 4);
+        TestAssert.True(queue.TryEnqueue(generation, Status("queued", "active", "2026-09-09T08:07:00Z", "[]")),
+            "old-generation record was not queued");
+        TestAssert.True(entered.Wait(TimeSpan.FromSeconds(5)), "queue consumer did not reach deterministic barrier");
+        host.MarkNativeAuthorityUnavailable(generation);
+        release.Set();
+        await WaitForAsync(() => queue.Health.SinkFailures == 1);
+        TestAssert.False(host.Snapshot.Health.IsHealthy, "old queued generation certified authority after disconnect");
     }
 
     private static string Status(string threadId, string status, string timestamp, string flags)

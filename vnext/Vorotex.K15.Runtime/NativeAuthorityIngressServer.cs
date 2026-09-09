@@ -24,7 +24,7 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _pipeName = pipeName ?? RuntimeIpcMetadata.NativeAuthorityPipeName;
         _queue = new NativeStatusDeliveryQueue(
-            _host.ApplyNativeAuthorityRecordJson,
+            (long generation, string json) => _host.ApplyNativeAuthorityRecordJson(generation, json),
             _host.MarkNativeAuthorityDegraded,
             queueCapacity);
     }
@@ -48,10 +48,12 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                     _pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 lock (_listenerGate) _listener = pipe;
+                var generation = 0L;
                 try
                 {
                     await pipe.WaitForConnectionAsync(_stop.Token).ConfigureAwait(false);
-                    await HandleProducerAsync(pipe).ConfigureAwait(false);
+                    generation = _host.BeginNativeAuthorityProducerGeneration();
+                    await HandleProducerAsync(pipe, generation).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
                 catch (IOException) when (!_stop.IsCancellationRequested) { }
@@ -62,14 +64,15 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                         if (ReferenceEquals(_listener, pipe)) _listener = null;
                     }
                     await pipe.DisposeAsync().ConfigureAwait(false);
-                    if (!_stop.IsCancellationRequested) _host.MarkNativeAuthorityUnavailable();
+                    if (!_stop.IsCancellationRequested && generation != 0)
+                        _host.MarkNativeAuthorityUnavailable(generation);
                 }
             }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
     }
 
-    private async Task HandleProducerAsync(NamedPipeServerStream pipe)
+    private async Task HandleProducerAsync(NamedPipeServerStream pipe, long generation)
     {
         var decoder = new BoundedJsonLineDecoder(RuntimeIpcMetadata.MaxFrameBytes);
         while (!_stop.IsCancellationRequested && pipe.IsConnected)
@@ -83,7 +86,7 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                 // is a bounded transport rejection, not a sink failure.
                 continue;
             }
-            if (line.Length == 0 || !_queue.TryEnqueue(line))
+            if (line.Length == 0 || !_queue.TryEnqueue(generation, line))
             {
                 // Invalid/oversized input is rejected without affecting the
                 // Runtime/UI command pipe or transparent Codex transport.

@@ -110,7 +110,9 @@ public sealed class NativeStatusTransport
             return new(false, Snapshot, parsed.Diagnostics);
 
         var result = _engine.Apply(NativeThreadStatusAdapter.ToObservation(parsed.Event!));
-        MarkAvailable(parsed.Event!.ThreadId);
+        if (!result.Diagnostics.Contains("STALE_NATIVE_RUNTIME_OBSERVATION_IGNORED")
+            && !result.Diagnostics.Contains("DUPLICATE_NATIVE_RUNTIME_OBSERVATION_IGNORED"))
+            MarkAvailable(parsed.Event!.ThreadId);
         return new(true, result.Snapshot with { Health = _health }, result.Diagnostics);
     }
 
@@ -137,9 +139,9 @@ public sealed record NativeStatusDeliveryHealth(
 /// </summary>
 public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
 {
-    private readonly Func<string, NativeStatusTransportResult> _apply;
+    private readonly Func<long, string, NativeStatusTransportResult> _apply;
     private readonly Action<string> _markDegraded;
-    private readonly Queue<string> _queue = new();
+    private readonly Queue<QueuedRecord> _queue = new();
     private readonly object _gate = new();
     private readonly int _capacity;
     private readonly CancellationTokenSource _stop = new();
@@ -153,7 +155,7 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
     public NativeStatusDeliveryQueue(NativeStatusTransport transport, int capacity = 64)
     {
         ArgumentNullException.ThrowIfNull(transport);
-        _apply = transport.AcceptAuthorityRecord;
+        _apply = (_, json) => transport.AcceptAuthorityRecord(json);
         _markDegraded = transport.MarkDegraded;
         if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
         _capacity = capacity;
@@ -162,6 +164,14 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
 
     public NativeStatusDeliveryQueue(
         Func<string, NativeStatusTransportResult> apply,
+        Action<string> markDegraded,
+        int capacity = 64)
+        : this((_, json) => apply(json), markDegraded, capacity)
+    {
+    }
+
+    public NativeStatusDeliveryQueue(
+        Func<long, string, NativeStatusTransportResult> apply,
         Action<string> markDegraded,
         int capacity = 64)
     {
@@ -175,6 +185,9 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
     }
 
     public bool TryEnqueue(string json)
+        => TryEnqueue(0, json);
+
+    public bool TryEnqueue(long producerGeneration, string json)
     {
         if (string.IsNullOrWhiteSpace(json) || json.Length > 64 * 1024)
         {
@@ -189,7 +202,7 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
                 Overflow();
                 return false;
             }
-            _queue.Enqueue(json);
+            _queue.Enqueue(new QueuedRecord(producerGeneration, json));
         }
 
         Interlocked.Increment(ref _accepted);
@@ -212,15 +225,15 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
             while (true)
             {
                 await _signal.WaitAsync(_stop.Token).ConfigureAwait(false);
-                string json;
+                QueuedRecord record;
                 lock (_gate)
                 {
                     if (_queue.Count == 0) continue;
-                    json = _queue.Dequeue();
+                    record = _queue.Dequeue();
                 }
                 try
                 {
-                    var result = _apply(json);
+                    var result = _apply(record.ProducerGeneration, record.Json);
                     if (result.Accepted) Interlocked.Increment(ref _delivered);
                     else SinkFailure();
                 }
@@ -245,4 +258,6 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
     private int QueueCount() { lock (_gate) return _queue.Count; }
     private void Overflow() { Interlocked.Increment(ref _overflow); _markDegraded("NATIVE_AUTHORITY_DEGRADED_OVERFLOW"); }
     private void SinkFailure() { Interlocked.Increment(ref _sinkFailures); _markDegraded("NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE"); }
+
+    private sealed record QueuedRecord(long ProducerGeneration, string Json);
 }
