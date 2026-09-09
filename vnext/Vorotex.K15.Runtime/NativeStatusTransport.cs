@@ -11,8 +11,12 @@ public sealed record NativeStatusTransportResult(
 /// <summary>Bounded JSONL boundary from the bridge into the runtime owner.</summary>
 public sealed class NativeStatusTransport
 {
+    private const int MaxResyncThreads = 128;
     private readonly RuntimeStateEngine _engine;
+    private readonly HashSet<string> _staleNonterminalThreads = new(StringComparer.Ordinal);
     private RuntimeHealthSnapshot _health;
+    private bool _resyncRequired;
+    private bool _resyncOverflow;
 
     public NativeStatusTransport(RuntimeStateEngine? engine = null)
     {
@@ -29,15 +33,40 @@ public sealed class NativeStatusTransport
             "NATIVE_AUTHORITY_DEGRADED_OVERFLOW" => reason,
             "NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE" => reason,
             "NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE" => reason,
+            "NATIVE_AUTHORITY_DEGRADED_RESYNC_REQUIRED" => reason,
             _ => "NATIVE_AUTHORITY_DEGRADED_UNKNOWN"
         };
 
-        _health = RuntimeHealthSnapshot.Degraded(_engine.Snapshot.Health.RuntimeVersion, boundedReason);
+        if (boundedReason == "NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE" && _health.Detail != boundedReason)
+        {
+            _staleNonterminalThreads.Clear();
+            foreach (var thread in _engine.Snapshot.Threads.Where(thread => thread.RuntimeStatus == ThreadRuntimeStatus.Active))
+            {
+                if (_staleNonterminalThreads.Count == MaxResyncThreads)
+                {
+                    _resyncOverflow = true;
+                    break;
+                }
+                _staleNonterminalThreads.Add(thread.ThreadId);
+            }
+            _resyncRequired = _staleNonterminalThreads.Count != 0 || _resyncOverflow;
+        }
+
+        _health = RuntimeHealthSnapshot.Degraded(_engine.Snapshot.Health.RuntimeVersion,
+            _resyncRequired ? "NATIVE_AUTHORITY_DEGRADED_RESYNC_REQUIRED" : boundedReason);
     }
 
-    public void MarkAvailable()
+    public void MarkAvailable(string? refreshedThreadId = null)
     {
-        if (_health.Detail == "NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE")
+        if (_resyncRequired && refreshedThreadId is not null)
+            _staleNonterminalThreads.Remove(refreshedThreadId);
+
+        if (_resyncRequired && (_resyncOverflow || _staleNonterminalThreads.Count != 0))
+            return;
+
+        _resyncRequired = false;
+        _resyncOverflow = false;
+        if (_health.Detail is "NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE" or "NATIVE_AUTHORITY_DEGRADED_RESYNC_REQUIRED")
             _health = RuntimeHealthSnapshot.Healthy(_engine.Snapshot.Health.RuntimeVersion);
     }
 
@@ -81,7 +110,7 @@ public sealed class NativeStatusTransport
             return new(false, Snapshot, parsed.Diagnostics);
 
         var result = _engine.Apply(NativeThreadStatusAdapter.ToObservation(parsed.Event!));
-        MarkAvailable();
+        MarkAvailable(parsed.Event!.ThreadId);
         return new(true, result.Snapshot with { Health = _health }, result.Diagnostics);
     }
 

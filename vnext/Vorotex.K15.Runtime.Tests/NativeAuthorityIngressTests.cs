@@ -45,6 +45,8 @@ internal static class NativeAuthorityIngressTests
             await WaitForAsync(() => host.Snapshot.Health.IsHealthy && host.Snapshot.State == RuntimeState.Running);
         }
 
+        await VerifyStaleNonterminalResyncContractAsync();
+
         using var finalSnapshot = JsonDocument.Parse(host.HandleIpcRequest("{\"protocolVersion\":\"k15-runtime-ipc/v1\",\"command\":\"snapshot\"}"));
         var projection = finalSnapshot.RootElement.GetProperty("snapshot");
         TestAssert.Equal("DISCONNECTED", projection.GetProperty("device").GetProperty("connectionState").GetString(), "authority lifecycle changed device ownership");
@@ -112,6 +114,54 @@ internal static class NativeAuthorityIngressTests
         TestAssert.True(first.TryStart(), "first runtime did not own lease");
         TestAssert.False(second.TryStart(), "second Runtime acquired canonical lease");
         return Task.CompletedTask;
+    }
+
+    private static async Task VerifyStaleNonterminalResyncContractAsync()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "Vorotex.K15.Runtime.Tests.Resync." + suffix });
+        TestAssert.True(host.TryStart(), "resync runtime failed to start");
+        var pipe = "Vorotex.K15.Runtime.Tests.ResyncPipe." + suffix;
+        await using var ingress = new NativeAuthorityIngressServer(host, pipe);
+        await using var ui = new RuntimeIpcServer(host, pipe + ".ui");
+        ingress.Start(); ui.Start();
+
+        await using (var first = await ConnectAsync(pipe))
+        {
+            await WriteAsync(first, Status("A", "active", "2026-09-09T08:05:00Z", "[\"waitingOnApproval\"]"));
+            await WaitForAsync(() => host.Snapshot.State == RuntimeState.Waiting);
+        }
+        await WaitForAsync(() => !host.Snapshot.Health.IsHealthy);
+        await using (var second = await ConnectAsync(pipe))
+        {
+            await Task.Delay(50);
+            TestAssert.False(host.Snapshot.Health.IsHealthy, "reconnect without status cleared resync degradation");
+            await WriteAsync(second, Status("B", "active", "2026-09-09T08:05:01Z", "[]"));
+            await WaitForAsync(() => host.Snapshot.Threads.Any(t => t.ThreadId == "B"));
+            TestAssert.False(host.Snapshot.Health.IsHealthy, "B status certified stale A WAITING");
+            await WriteAsync(second, Status("A", "active", "2026-09-09T08:05:02Z", "[]"));
+            await WaitForAsync(() => host.Snapshot.Health.IsHealthy && host.Snapshot.State == RuntimeState.Running);
+        }
+
+        await using (var third = await ConnectAsync(pipe))
+        {
+            await WriteAsync(third, Status("A", "active", "2026-09-09T08:05:03Z", "[]"));
+            await WaitForAsync(() => host.Snapshot.State == RuntimeState.Running);
+        }
+        await WaitForAsync(() => !host.Snapshot.Health.IsHealthy);
+        await using (var fourth = await ConnectAsync(pipe))
+        {
+            await WriteAsync(fourth, Status("B", "active", "2026-09-09T08:05:04Z", "[]"));
+            await Task.Delay(50);
+            TestAssert.False(host.Snapshot.Health.IsHealthy, "B status certified stale A RUNNING");
+            await WriteAsync(fourth, Status("A", "idle", "2026-09-09T08:05:05Z", "[]"));
+            await WaitForAsync(() => host.Snapshot.Health.IsHealthy);
+        }
+
+        using var ping = JsonDocument.Parse(host.HandleIpcRequest("{\"protocolVersion\":\"k15-runtime-ipc/v1\",\"command\":\"ping\"}"));
+        TestAssert.True(ping.RootElement.GetProperty("ok").GetBoolean(), "UI IPC went offline during resync");
+        TestAssert.False(host.DeviceManager.IsConnected, "resync changed device ownership");
+        TestAssert.False(host.RgbController.Enabled, "resync enabled RGB");
     }
 
     private static string Status(string threadId, string status, string timestamp, string flags)
