@@ -191,6 +191,14 @@ async function writePre158V3State(statePath, manifestPath, original, manifestSha
   }), 'utf8');
 }
 
+async function writeMalformedLegacyState(statePath, manifestPath, original) {
+  await writeFile(statePath, JSON.stringify({
+    schema: 'k15-codex-bridge/activation-state-v2',
+    manifestPath: path.resolve(manifestPath),
+    original
+  }), 'utf8');
+}
+
 test('production activation validates exact files and pin without touching User or Machine environment', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
   try {
@@ -544,6 +552,35 @@ test('pre-158 v3 state and v2 manifest remain status-readable and disable-restor
     assert.match(disabled.stdout, /ACTIVE=NO/); assert.deepEqual(await readJson(environment), {});
     await assert.rejects(readFile(state, 'utf8'));
   } finally { await rm(temp, { recursive: true, force: true }); }
+});
+
+test('malformed six-of-seven activation states fail closed before Status or Disable mutation', async () => {
+  for (const schema of ['k15-codex-bridge/activation-state-v3', 'k15-codex-bridge/activation-state-v2']) {
+    const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+    try {
+      const { manifest } = await createBundle(temp);
+      const state = path.join(temp, 'malformed-state.json'); const environment = path.join(temp, 'environment.json');
+      const malformedOriginal = Object.fromEntries(managedVariables.slice(1).map(name => [name, {
+        presence: 'ABSENT', value: '', registryKind: 'None'
+      }]));
+      if (schema.endsWith('v3')) {
+        await writePre158V3State(state, manifest, malformedOriginal, await sha256(manifest));
+      } else {
+        await writeMalformedLegacyState(state, manifest, malformedOriginal);
+      }
+      const before = { CODEX_CLI_PATH: 'untouched-cli', CODEX_BRIDGE_APPROVAL_SINK_PATH: 'untouched-sink' };
+      await writeFile(environment, JSON.stringify(before), 'utf8');
+      const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+      for (const mode of ['Status', 'Disable']) {
+        await assert.rejects(
+          powershell(['-File', script, '-Mode', mode, ...common]),
+          error => error.code === 2
+        );
+        assert.deepEqual(await readJson(environment), before);
+        await readFile(state, 'utf8');
+      }
+    } finally { await rm(temp, { recursive: true, force: true }); }
+  }
 });
 
 test('isolated Enable, Status, Disable round-trip clears stale empty sink and restores exact state', async () => {

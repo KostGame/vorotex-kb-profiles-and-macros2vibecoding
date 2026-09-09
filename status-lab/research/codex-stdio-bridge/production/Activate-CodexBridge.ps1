@@ -51,9 +51,8 @@ function Assert-ExactPropertyNames($Object, [string[]] $ExpectedNames, [string] 
     if ($null -eq $Object) { Fail "$Context is required" }
     $actualNames = @($Object.PSObject.Properties.Name)
     if ($actualNames.Count -ne $ExpectedNames.Count) { Fail "$Context has an unexpected property set" }
-    foreach ($name in $ExpectedNames) {
-        if ($null -eq $Object.PSObject.Properties[$name]) { Fail "$Context is missing $name" }
-    }
+    if (@($actualNames | Where-Object { $_ -notin $ExpectedNames }).Count -ne 0) { Fail "$Context has an unexpected property set" }
+    foreach ($name in $ExpectedNames) { if ($null -eq $Object.PSObject.Properties[$name]) { Fail "$Context is missing $name" } }
 }
 
 function Assert-EnvironmentEntry($Entry, [string] $Name, [string] $Context) {
@@ -464,9 +463,10 @@ function Read-ActivationState([string] $Path) {
     }
     if ($state.manifestPath -isnot [string] -or [string]::IsNullOrWhiteSpace($state.manifestPath)) { Fail 'activation state manifestPath is invalid' }
     $originalNames = @($state.original.PSObject.Properties.Name)
-    if ($originalNames.Count -notin @($ManagedVariables.Count, $PreDiagnosticsManagedVariables.Count) -or
-        @($originalNames | Where-Object { $_ -notin $ManagedVariables }).Count -ne 0) { Fail 'activation state original has an unexpected property set' }
-    if ($state.schema -eq $LegacyActivationStateSchema -and $originalNames.Count -ne $PreDiagnosticsManagedVariables.Count) { Fail 'legacy activation state original has an unexpected property set' }
+    $expectedOriginalNames = if ($state.schema -eq $LegacyActivationStateSchema -or $originalNames.Count -eq $PreDiagnosticsManagedVariables.Count) {
+        $PreDiagnosticsManagedVariables
+    } else { $ManagedVariables }
+    Assert-ExactPropertyNames $state.original $expectedOriginalNames 'activation state original'
     $original = [ordered]@{}
     foreach ($name in $originalNames) { $original[$name] = Assert-EnvironmentEntry $state.original.$name $name 'activation state original' }
     return [pscustomobject]@{
