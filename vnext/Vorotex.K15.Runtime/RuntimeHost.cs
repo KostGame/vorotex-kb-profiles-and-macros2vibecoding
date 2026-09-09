@@ -69,9 +69,23 @@ public sealed class RuntimeHost : IDisposable
 
     public NativeStatusTransportResult ApplyNativeRuntimeRecordJson(string json)
     {
+        return ApplyNativeAuthorityRecordJson(json);
+    }
+
+    internal NativeStatusTransportResult ApplyNativeAuthorityRecordJson(string json)
+    {
         if (json.Contains("\"k15-codex-thread-metadata/v1\"", StringComparison.Ordinal))
             return ApplyNativeThreadMetadataJson(json);
+        if (json.Contains("\"k15-codex-authority-health/v1\"", StringComparison.Ordinal))
+        {
+            lock (_gate) return _nativeStatusTransport.AcceptAuthorityRecord(json);
+        }
         return ApplyNativeStatusJson(json);
+    }
+
+    internal void MarkNativeAuthorityDegraded(string reason)
+    {
+        lock (_gate) _nativeStatusTransport.MarkDegraded(reason);
     }
 
     internal void MarkNativeAuthorityAvailable()

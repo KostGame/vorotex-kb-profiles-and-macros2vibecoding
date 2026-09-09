@@ -108,7 +108,8 @@ public sealed record NativeStatusDeliveryHealth(
 /// </summary>
 public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
 {
-    private readonly NativeStatusTransport _transport;
+    private readonly Func<string, NativeStatusTransportResult> _apply;
+    private readonly Action<string> _markDegraded;
     private readonly Queue<string> _queue = new();
     private readonly object _gate = new();
     private readonly int _capacity;
@@ -123,8 +124,23 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
     public NativeStatusDeliveryQueue(NativeStatusTransport transport, int capacity = 64)
     {
         ArgumentNullException.ThrowIfNull(transport);
+        _apply = transport.AcceptAuthorityRecord;
+        _markDegraded = transport.MarkDegraded;
         if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
-        _transport = transport;
+        _capacity = capacity;
+        _worker = Task.Run(ConsumeAsync);
+    }
+
+    public NativeStatusDeliveryQueue(
+        Func<string, NativeStatusTransportResult> apply,
+        Action<string> markDegraded,
+        int capacity = 64)
+    {
+        ArgumentNullException.ThrowIfNull(apply);
+        ArgumentNullException.ThrowIfNull(markDegraded);
+        if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
+        _apply = apply;
+        _markDegraded = markDegraded;
         _capacity = capacity;
         _worker = Task.Run(ConsumeAsync);
     }
@@ -175,7 +191,7 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
                 }
                 try
                 {
-                    var result = _transport.AcceptAuthorityRecord(json);
+                    var result = _apply(json);
                     if (result.Accepted) Interlocked.Increment(ref _delivered);
                     else SinkFailure();
                 }
@@ -198,6 +214,6 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
     }
 
     private int QueueCount() { lock (_gate) return _queue.Count; }
-    private void Overflow() { Interlocked.Increment(ref _overflow); _transport.MarkDegraded("NATIVE_AUTHORITY_DEGRADED_OVERFLOW"); }
-    private void SinkFailure() { Interlocked.Increment(ref _sinkFailures); _transport.MarkDegraded("NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE"); }
+    private void Overflow() { Interlocked.Increment(ref _overflow); _markDegraded("NATIVE_AUTHORITY_DEGRADED_OVERFLOW"); }
+    private void SinkFailure() { Interlocked.Increment(ref _sinkFailures); _markDegraded("NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE"); }
 }

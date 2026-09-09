@@ -23,7 +23,10 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _pipeName = pipeName ?? RuntimeIpcMetadata.NativeAuthorityPipeName;
-        _queue = new NativeStatusDeliveryQueue(_host.NativeStatusTransport, queueCapacity);
+        _queue = new NativeStatusDeliveryQueue(
+            _host.ApplyNativeAuthorityRecordJson,
+            _host.MarkNativeAuthorityDegraded,
+            queueCapacity);
     }
 
     public void Start()
@@ -133,7 +136,17 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                     }
                     else
                     {
-                        _ready.Enqueue(Encoding.UTF8.GetString(_current.ToArray()).TrimEnd('\r'));
+                        try
+                        {
+                            _ready.Enqueue(StrictUtf8.GetString(_current.ToArray()).TrimEnd('\r'));
+                        }
+                        catch (DecoderFallbackException)
+                        {
+                            // An invalid frame is rejected at the frame boundary.
+                            // The decoder has consumed through its newline, so the
+                            // next JSONL record remains independently processable.
+                            _ready.Enqueue(string.Empty);
+                        }
                         _current.Clear();
                     }
                     continue;
@@ -149,6 +162,8 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                 _current.Add(value);
             }
         }
+
+        private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     }
 
     public async ValueTask DisposeAsync()

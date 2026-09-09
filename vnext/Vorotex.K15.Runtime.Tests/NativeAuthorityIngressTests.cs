@@ -69,13 +69,19 @@ internal static class NativeAuthorityIngressTests
         await WriteBytesAsync(producer, Encoding.UTF8.GetBytes(first + "\n" + second + "\n"));
         await WriteBytesAsync(producer, Encoding.UTF8.GetBytes(third[..40]));
         await WriteBytesAsync(producer, Encoding.UTF8.GetBytes(third[40..] + "\n"));
-        await WriteBytesAsync(producer, Encoding.UTF8.GetBytes(new string('x', RuntimeIpcMetadata.MaxFrameBytes + 1) + "\n" + Metadata("thread-frame", "C:\\frame" ) + "\n"));
+        var invalid = Encoding.UTF8.GetBytes(Status("invalid", "active", "2026-09-09T08:01:03Z", "[]"));
+        var invalidThreadByte = Array.IndexOf(invalid, (byte)'i');
+        invalid[invalidThreadByte] = 0xC3;
+        await WriteBytesAsync(producer, new string('x', RuntimeIpcMetadata.MaxFrameBytes + 1).Select(ch => (byte)ch)
+            .Concat(new byte[] { (byte)'\n' }).Concat(invalid).Concat(new byte[] { (byte)'\n' })
+            .Concat(Encoding.UTF8.GetBytes(Metadata("thread-frame", "C:\\frame") + "\n")).ToArray());
 
         await Task.Delay(250);
         var framedThread = host.Snapshot.Threads.SingleOrDefault(t => t.ThreadId == "thread-frame");
         TestAssert.True(framedThread is not null, "framing did not deliver a thread record");
         TestAssert.Equal(ThreadRuntimeStatus.Idle, framedThread!.RuntimeStatus, $"JSONL record order was not preserved; state={host.Snapshot.State}, health={host.Snapshot.Health.Detail}");
         TestAssert.Equal("C:\\frame", framedThread.WorkingDirectory, "oversized frame recovery lost the following valid record");
+        TestAssert.False(host.Snapshot.Threads.Any(t => t.ThreadId == "invalid"), "invalid UTF-8 frame mutated thread state");
         TestAssert.True(host.Snapshot.Health.IsHealthy, $"valid status did not restore health; detail={host.Snapshot.Health.Detail}");
     }
 
