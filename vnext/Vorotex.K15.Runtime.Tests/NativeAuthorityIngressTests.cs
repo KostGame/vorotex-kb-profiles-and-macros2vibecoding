@@ -175,29 +175,39 @@ internal static class NativeAuthorityIngressTests
         var suffix = Guid.NewGuid().ToString("N");
         using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = "Vorotex.K15.Runtime.Tests.QueueResync." + suffix });
         TestAssert.True(host.TryStart(), "queued resync runtime failed to start");
-        TestAssert.True(host.ApplyNativeStatusJson(Status("queued", "active", "2026-09-09T08:06:00Z", "[\"waitingOnApproval\"]")).Accepted,
-            "queued resync baseline was rejected");
         var generation = host.BeginNativeAuthorityProducerGeneration();
         host.MarkNativeAuthorityUnavailable(generation);
 
         using var entered = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        using var completed = new ManualResetEventSlim(false);
         await using var queue = new NativeStatusDeliveryQueue(
             (long recordGeneration, string json) =>
             {
                 entered.Set();
                 release.Wait(TimeSpan.FromSeconds(5));
-                return host.ApplyNativeAuthorityRecordJson(recordGeneration, json);
+                var result = host.ApplyNativeAuthorityRecordJson(recordGeneration, json);
+                completed.Set();
+                return result;
             },
             host.MarkNativeAuthorityDegraded,
             capacity: 4);
         TestAssert.True(queue.TryEnqueue(generation, Status("queued", "active", "2026-09-09T08:07:00Z", "[]")),
             "old-generation record was not queued");
         TestAssert.True(entered.Wait(TimeSpan.FromSeconds(5)), "queue consumer did not reach deterministic barrier");
-        host.MarkNativeAuthorityUnavailable(generation);
+        var currentGeneration = host.BeginNativeAuthorityProducerGeneration();
         release.Set();
-        await WaitForAsync(() => queue.Health.SinkFailures == 1);
-        TestAssert.False(host.Snapshot.Health.IsHealthy, "old queued generation certified authority after disconnect");
+        TestAssert.True(completed.Wait(TimeSpan.FromSeconds(5)), "old queued record did not complete after release");
+        TestAssert.Equal(0L, queue.Health.SinkFailures, "expected stale-generation discard became sink failure");
+        TestAssert.True(host.Snapshot.Threads.IsEmpty, "old queued generation mutated Runtime state");
+        TestAssert.True(host.ApplyNativeAuthorityRecordJson(currentGeneration,
+            Status("current", "active", "2026-09-09T08:07:01Z", "[]")).Accepted,
+            "current-generation status was rejected");
+        TestAssert.True(host.Snapshot.Health.IsHealthy, "current-generation status did not restore authority health");
+        using var ping = JsonDocument.Parse(host.HandleIpcRequest("{\"protocolVersion\":\"k15-runtime-ipc/v1\",\"command\":\"ping\"}"));
+        TestAssert.True(ping.RootElement.GetProperty("ok").GetBoolean(), "UI IPC went offline during stale discard");
+        TestAssert.False(host.DeviceManager.IsConnected, "stale discard changed device ownership");
+        TestAssert.False(host.RgbController.Enabled, "stale discard enabled RGB");
     }
 
     private static string Status(string threadId, string status, string timestamp, string flags)

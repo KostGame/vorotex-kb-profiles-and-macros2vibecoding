@@ -235,7 +235,7 @@ public sealed class NativeStatusDeliveryQueue : IAsyncDisposable
                 {
                     var result = _apply(record.ProducerGeneration, record.Json);
                     if (result.Accepted) Interlocked.Increment(ref _delivered);
-                    else SinkFailure();
+                    else if (!result.Diagnostics.Contains("NATIVE_AUTHORITY_OLD_PRODUCER_GENERATION")) SinkFailure();
                 }
                 catch
                 {
