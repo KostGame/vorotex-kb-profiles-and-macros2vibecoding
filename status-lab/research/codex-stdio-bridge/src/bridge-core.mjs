@@ -1,4 +1,4 @@
-import { appendFile as appendFileAsync, mkdir as mkdirAsync } from 'node:fs/promises';
+import { appendFile as appendFileAsync, mkdir as mkdirAsync, rename as renameAsync, unlink as unlinkAsync, writeFile as writeFileAsync } from 'node:fs/promises';
 import path from 'node:path';
 
 const REQUEST_FAMILIES = new Map([
@@ -19,6 +19,12 @@ const THREAD_STATUSES = new Set(['notLoaded', 'idle', 'active', 'systemError']);
 const THREAD_FLAGS = new Set(['waitingOnApproval', 'waitingOnUserInput']);
 const THREAD_CLASSIFICATIONS = new Set(['user', 'service', 'canary']);
 const MAX_AUTHORITY_QUEUE = 64;
+const MAX_DIAGNOSTIC_FILE_BYTES = 64 * 1024;
+export const BRIDGE_DIAGNOSTICS_SCHEMA_VERSION = 'k15-codex-bridge-diagnostics/v1';
+export const BRIDGE_DIAGNOSTIC_REJECTION_REASONS = Object.freeze([
+  'invalid_envelope', 'invalid_thread_id', 'invalid_status', 'invalid_active_flags',
+  'invalid_emitted_at_ms', 'invalid_classification'
+]);
 
 function optionalString(value) {
   return typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= MAX_FIELD_BYTES
@@ -47,6 +53,84 @@ function pendingKey(family, id, metadata = {}) {
     metadata.turnId ?? '',
     metadata.itemId ?? ''
   ]);
+}
+
+/**
+ * Counts only fixed, sanitized bridge facts. It never receives a JSON string
+ * and never exposes a protocol object to its sink. The partial buffer is
+ * bounded framing state and is discarded when it exceeds the limit.
+ */
+export class BridgeDiagnostics {
+  #sink; #busy = false; #pending; #partial = Buffer.alloc(0); #snapshot;
+  constructor({ sink = () => {}, generation = undefined, clock = () => new Date() } = {}) {
+    this.#sink = sink; this.#clock = clock;
+    this.#snapshot = { schemaVersion: BRIDGE_DIAGNOSTICS_SCHEMA_VERSION, component: 'codex_stdio_bridge',
+      ...(typeof generation === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(generation) ? { generation } : {}),
+      serverStdoutChunks: 0, serverStdoutBytes: 0, completeRecords: 0, jsonParseSuccess: 0, jsonParseFailure: 0,
+      threadStatusSeen: 0, threadStartedSeen: 0, nativeStatusAccepted: 0,
+      rejectedStatus: Object.fromEntries(BRIDGE_DIAGNOSTIC_REJECTION_REASONS.map(reason => [reason, 0])),
+      authorityQueue: { accepted: 0, delivered: 0, overflow: 0, sinkFailures: 0 },
+      namedPipe: { connectAttempts: 0, connectSuccesses: 0, connectFailures: 0,
+        failureReasons: { unavailable: 0, timeout: 0, busy: 0, unknown: 0 } },
+      updatedAtUtc: this.#timestamp()
+    };
+  }
+  #clock;
+  observeServerChunk(chunk) {
+    const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    this.#snapshot.serverStdoutChunks += 1; this.#snapshot.serverStdoutBytes += input.length;
+    const combined = this.#partial.length === 0 ? input : Buffer.concat([this.#partial, input]);
+    let start = 0;
+    for (let index = 0; index < combined.length; index += 1) {
+      if (combined[index] !== 0x0a) continue;
+      const line = combined.subarray(start, index);
+      this.#snapshot.completeRecords += 1;
+      if (line.length > MAX_PARTIAL_BYTES) this.#snapshot.jsonParseFailure += 1;
+      else {
+        try {
+          const message = JSON.parse(line.toString('utf8'));
+          this.#snapshot.jsonParseSuccess += 1;
+          if (message?.method === 'thread/status/changed') this.#snapshot.threadStatusSeen += 1;
+          if (message?.method === 'thread/started') this.#snapshot.threadStartedSeen += 1;
+        } catch { this.#snapshot.jsonParseFailure += 1; }
+      }
+      start = index + 1;
+    }
+    const remainder = combined.subarray(start);
+    this.#partial = remainder.length > MAX_PARTIAL_BYTES ? Buffer.alloc(0) : Buffer.from(remainder);
+    this.#flush();
+  }
+  recordStatusAccepted() { this.#snapshot.nativeStatusAccepted += 1; this.#flush(); }
+  recordStatusRejected(reason) {
+    if (BRIDGE_DIAGNOSTIC_REJECTION_REASONS.includes(reason)) this.#snapshot.rejectedStatus[reason] += 1;
+    this.#flush();
+  }
+  recordAuthority(kind) {
+    if (Object.hasOwn(this.#snapshot.authorityQueue, kind)) this.#snapshot.authorityQueue[kind] += 1;
+    this.#flush();
+  }
+  recordPipe(kind, reason = 'unknown') {
+    if (kind === 'connectAttempts') this.#snapshot.namedPipe.connectAttempts += 1;
+    else if (kind === 'connectSuccesses') this.#snapshot.namedPipe.connectSuccesses += 1;
+    else if (kind === 'connectFailures') {
+      this.#snapshot.namedPipe.connectFailures += 1;
+      if (Object.hasOwn(this.#snapshot.namedPipe.failureReasons, reason)) this.#snapshot.namedPipe.failureReasons[reason] += 1;
+      else this.#snapshot.namedPipe.failureReasons.unknown += 1;
+    }
+    this.#flush();
+  }
+  snapshot() { return JSON.parse(JSON.stringify(this.#snapshot)); }
+  #timestamp() { try { const value = this.#clock?.(); return value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString() : undefined; } catch { return undefined; } }
+  #flush() {
+    const timestamp = this.#timestamp(); if (timestamp) this.#snapshot.updatedAtUtc = timestamp;
+    const current = this.snapshot();
+    if (this.#busy) { this.#pending = current; return; }
+    this.#busy = true;
+    try { Promise.resolve(this.#sink(current)).catch(() => {}).finally(() => {
+      this.#busy = false;
+      if (this.#pending) { this.#pending = undefined; this.#flush(); }
+    }); } catch { this.#busy = false; }
+  }
 }
 
 /**
@@ -208,12 +292,13 @@ export class ApprovalObserver {
 }
 
 export class NativeThreadStatusObserver {
-  #sink; #classify; #receiptClock; #authorityDegraded; #queue = []; #busy = false; #accepted = 0; #delivered = 0; #overflow = 0; #sinkFailures = 0; #partial = Buffer.alloc(0);
-  constructor({ authoritySink = () => {}, classificationResolver = () => undefined, receiptClock = () => new Date(), authorityDegraded = () => {} } = {}) {
+  #sink; #classify; #receiptClock; #authorityDegraded; #diagnostics; #queue = []; #busy = false; #accepted = 0; #delivered = 0; #overflow = 0; #sinkFailures = 0; #partial = Buffer.alloc(0);
+  constructor({ authoritySink = () => {}, classificationResolver = () => undefined, receiptClock = () => new Date(), authorityDegraded = () => {}, diagnostics } = {}) {
     this.#sink = authoritySink;
     this.#classify = classificationResolver;
     this.#receiptClock = receiptClock;
     this.#authorityDegraded = authorityDegraded;
+    this.#diagnostics = diagnostics;
   }
   observeServerChunk(chunk) {
     const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -237,7 +322,7 @@ export class NativeThreadStatusObserver {
   #observeMessage(message) {
     if (!message || typeof message !== 'object' || Array.isArray(message) || message.method !== 'thread/status/changed') return;
     const params = message.params;
-    if (!params || typeof params !== 'object' || Array.isArray(params)) return;
+    if (!params || typeof params !== 'object' || Array.isArray(params)) { this.#diagnostics?.recordStatusRejected('invalid_envelope'); return; }
     const threadId = optionalString(params.threadId);
     const statusObject = params.status;
     const status = optionalString(statusObject?.type);
@@ -248,14 +333,16 @@ export class NativeThreadStatusObserver {
     const timestamp = hasEmittedAt && Number.isSafeInteger(emittedAtMs) && emittedAtMs >= 0 && emittedAtMs <= 8640000000000000
       ? new Date(emittedAtMs).toISOString() : hasEmittedAt ? undefined : this.#receiptTimestamp();
     const classification = optionalString(this.#classify(threadId));
-    if (!threadId || !THREAD_STATUSES.has(status) ||
-        (status === 'active' && (!hasFlags || !Array.isArray(flagsValue))) ||
-        (status !== 'active' && hasFlags) ||
-        (status === 'active' && flagsValue.length > 8) ||
-        !timestamp || Number.isNaN(Date.parse(timestamp)) || (classification !== undefined && !THREAD_CLASSIFICATIONS.has(classification))) return;
+    if (!threadId) { this.#diagnostics?.recordStatusRejected('invalid_thread_id'); return; }
+    if (!THREAD_STATUSES.has(status)) { this.#diagnostics?.recordStatusRejected('invalid_status'); return; }
+    if (hasFlags && status !== 'active') { this.#diagnostics?.recordStatusRejected('invalid_active_flags'); return; }
+    if (status === 'active' && (!hasFlags || !Array.isArray(flagsValue) || flagsValue.length > 8)) { this.#diagnostics?.recordStatusRejected('invalid_active_flags'); return; }
+    if (hasEmittedAt && (!Number.isSafeInteger(emittedAtMs) || emittedAtMs < 0 || emittedAtMs > 8640000000000000)) { this.#diagnostics?.recordStatusRejected('invalid_emitted_at_ms'); return; }
+    if (!timestamp || Number.isNaN(Date.parse(timestamp))) { this.#diagnostics?.recordStatusRejected('invalid_emitted_at_ms'); return; }
+    if (classification !== undefined && !THREAD_CLASSIFICATIONS.has(classification)) { this.#diagnostics?.recordStatusRejected('invalid_classification'); return; }
     const activeFlags = [];
     for (const flag of status === 'active' ? flagsValue : []) {
-      if (typeof flag !== 'string' || !THREAD_FLAGS.has(flag) || activeFlags.includes(flag)) return;
+      if (typeof flag !== 'string' || !THREAD_FLAGS.has(flag) || activeFlags.includes(flag)) { this.#diagnostics?.recordStatusRejected('invalid_active_flags'); return; }
       activeFlags.push(flag);
     }
     activeFlags.sort((left, right) => left === 'waitingOnApproval' ? -1 : right === 'waitingOnApproval' ? 1 : 0);
@@ -264,10 +351,11 @@ export class NativeThreadStatusObserver {
     if (classification !== undefined) event.classification = classification;
     if (this.#queue.length >= MAX_AUTHORITY_QUEUE) {
       this.#overflow += 1;
+      this.#diagnostics?.recordAuthority('overflow');
       try { this.#authorityDegraded('NATIVE_AUTHORITY_DEGRADED_OVERFLOW'); } catch { /* optional health path */ }
       return;
     }
-    this.#queue.push(event); this.#accepted += 1; this.#drain();
+    this.#queue.push(event); this.#accepted += 1; this.#diagnostics?.recordStatusAccepted(); this.#diagnostics?.recordAuthority('accepted'); this.#drain();
   }
 
   #receiptTimestamp() {
@@ -280,13 +368,15 @@ export class NativeThreadStatusObserver {
     if (this.#busy || this.#queue.length === 0) return;
     this.#busy = true; const event = this.#queue.shift();
     try {
-      Promise.resolve(this.#sink(event)).then(() => { this.#delivered += 1; }, () => {
+      Promise.resolve(this.#sink(event)).then(() => { this.#delivered += 1; this.#diagnostics?.recordAuthority('delivered'); }, () => {
         this.#sinkFailures += 1;
+        this.#diagnostics?.recordAuthority('sinkFailures');
         try { this.#authorityDegraded('NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE'); } catch { /* optional health path */ }
       })
         .finally(() => { this.#busy = false; this.#drain(); });
     } catch {
       this.#sinkFailures += 1;
+      this.#diagnostics?.recordAuthority('sinkFailures');
       try { this.#authorityDegraded('NATIVE_AUTHORITY_DEGRADED_SINK_FAILURE'); } catch { /* optional health path */ }
       this.#busy = false; this.#drain();
     }
@@ -368,17 +458,37 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
   };
 }
 
+/** Writes one bounded sanitized snapshot, replacing the previous snapshot atomically. */
+export function createSanitizedDiagnosticsSink(filePath, { writeFile, rename, makeDirectory } = {}) {
+  if (typeof filePath !== 'string' || filePath.length === 0) return () => {};
+  const write = writeFile ?? writeFileAsync; const replace = rename ?? renameAsync; const mkdir = makeDirectory ?? mkdirAsync;
+  let directoryReady; let busy = false;
+  return snapshot => {
+    if (busy) return;
+    const line = JSON.stringify(snapshot) + '\n';
+    if (Buffer.byteLength(line, 'utf8') > MAX_DIAGNOSTIC_FILE_BYTES) return;
+    busy = true;
+    const tempPath = filePath + '.tmp';
+    if (!directoryReady) directoryReady = mkdir(path.dirname(filePath), { recursive: true });
+    return Promise.resolve(directoryReady)
+      .then(() => write(tempPath, line, { encoding: 'utf8' }))
+      .then(() => replace(tempPath, filePath))
+      .catch(() => unlinkAsync(tempPath).catch(() => {}))
+      .finally(() => { busy = false; });
+  };
+}
+
 /**
  * Connects already-created fake-process streams. Node's pipe() is the entire
  * transport path, so its native backpressure and close behavior remain intact.
  * Observers receive the same Buffer chunks but never write to either transport.
  */
-export function connectTransparentBridge({ clientInput, clientOutput, childInput, childOutput, childStderr, stderrOutput, telemetrySink, authoritySink }) {
+export function connectTransparentBridge({ clientInput, clientOutput, childInput, childOutput, childStderr, stderrOutput, telemetrySink, authoritySink, diagnostics }) {
   const observer = new ApprovalObserver({ telemetrySink });
-  const nativeObserver = new NativeThreadStatusObserver({ authoritySink });
+  const nativeObserver = new NativeThreadStatusObserver({ authoritySink, diagnostics });
   const metadataObserver = new NativeThreadMetadataObserver({ metadataSink: authoritySink });
   clientInput.on('data', (chunk) => observer.observeClientChunk(chunk));
-  childOutput.on('data', (chunk) => { observer.observeServerChunk(chunk); nativeObserver.observeServerChunk(chunk); metadataObserver.observeServerChunk(chunk); });
+  childOutput.on('data', (chunk) => { diagnostics?.observeServerChunk(chunk); observer.observeServerChunk(chunk); nativeObserver.observeServerChunk(chunk); metadataObserver.observeServerChunk(chunk); });
   clientInput.pipe(childInput);
   childOutput.pipe(clientOutput);
   if (childStderr && stderrOutput) childStderr.pipe(stderrOutput);

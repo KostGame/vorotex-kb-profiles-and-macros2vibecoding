@@ -4,12 +4,15 @@ import {
   ApprovalObserver,
   NativeThreadStatusObserver,
   NativeThreadMetadataObserver,
-  createSanitizedJsonlSink
+  createSanitizedJsonlSink,
+  BridgeDiagnostics,
+  createSanitizedDiagnosticsSink
 } from './bridge-core.mjs';
 import { createNamedPipeAuthoritySink } from './runtime-process-authority.mjs';
 import { runTransparentWrapper } from './transparent-wrapper.mjs';
 
 export const APPROVAL_SINK_PATH_ENV = 'CODEX_BRIDGE_APPROVAL_SINK_PATH';
+export const DIAGNOSTICS_SINK_PATH_ENV = 'CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH';
 export const APPROVAL_WRAPPER_PATH = fileURLToPath(import.meta.url);
 export const APPROVAL_CONFIG_ERROR_EXIT_CODE = 2;
 
@@ -54,8 +57,10 @@ export async function runApprovalWrapper(options = {}) {
   } = options;
 
   let sinkPath;
+  let diagnosticsPath;
   try {
     sinkPath = optionalAbsoluteSinkPath(env[APPROVAL_SINK_PATH_ENV]);
+    diagnosticsPath = optionalAbsoluteSinkPath(env[DIAGNOSTICS_SINK_PATH_ENV]);
   } catch {
     pauseInput(stdin);
     writeDiagnostic(stderr, 'codex bridge: invalid approval sink configuration');
@@ -63,10 +68,14 @@ export async function runApprovalWrapper(options = {}) {
   }
 
   let runtimeBoundary;
+  const diagnostics = options.diagnostics ?? new BridgeDiagnostics({
+    sink: createSanitizedDiagnosticsSink(diagnosticsPath)
+  });
   try {
     runtimeBoundary = authoritySink ? undefined : createNamedPipeAuthoritySink({
       pipePath: authorityPipePath,
-      connectPipe: authorityConnector
+      connectPipe: authorityConnector,
+      diagnostics
     });
   } catch {
     // Authority is an optional side channel; its configuration must never
@@ -80,7 +89,8 @@ export async function runApprovalWrapper(options = {}) {
   const nativeStatusObserver = new NativeThreadStatusObserver({
     authoritySink: authoritySink ?? runtimeBoundary?.sink,
     classificationResolver, receiptClock,
-    authorityDegraded: reason => runtimeBoundary?.markDegraded(reason)
+    authorityDegraded: reason => runtimeBoundary?.markDegraded(reason),
+    diagnostics
   });
   const nativeThreadMetadataObserver = new NativeThreadMetadataObserver({
     metadataSink: authoritySink ?? runtimeBoundary?.sink
@@ -93,6 +103,7 @@ export async function runApprovalWrapper(options = {}) {
       wrapperPath: options.wrapperPath ?? APPROVAL_WRAPPER_PATH,
       onClientChunk: (chunk) => observer.observeClientChunk(chunk),
       onServerChunk: (chunk) => {
+        diagnostics.observeServerChunk(chunk);
         observer.observeServerChunk(chunk);
         nativeStatusObserver.observeServerChunk(chunk);
         nativeThreadMetadataObserver.observeServerChunk(chunk);

@@ -23,7 +23,8 @@ const managedVariables = [
   'CODEX_BRIDGE_WRAPPER_PATH',
   'CODEX_BRIDGE_CHILD_PATH',
   'CODEX_BRIDGE_CHILD_SHA256',
-  'CODEX_BRIDGE_APPROVAL_SINK_PATH'
+  'CODEX_BRIDGE_APPROVAL_SINK_PATH',
+  'CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH'
 ];
 
 async function powershell(argumentsList) {
@@ -98,7 +99,7 @@ async function removeIsolatedRegistryEnvironment(subKey) {
   );
 }
 
-async function createBundle(temp, approvalSinkPath = '') {
+async function createBundle(temp, approvalSinkPath = '', diagnosticsSinkPath = '') {
   const runtimeRoot = path.join(temp, 'runtime-bin');
   const generation = path.join(runtimeRoot, 'generation-a');
   await mkdir(generation, { recursive: true });
@@ -117,7 +118,7 @@ async function createBundle(temp, approvalSinkPath = '') {
   await copyFile(bridgeCore, core);
   await copyFile(runtimeAuthority, authority);
   const sha256 = async filePath => createHash('sha256').update(await readFile(filePath)).digest('hex');
-  const manifest = path.join(temp, `manifest-${approvalSinkPath ? 'sink' : 'empty'}.json`);
+  const manifest = path.join(temp, `manifest-${approvalSinkPath || diagnosticsSinkPath ? 'sink' : 'empty'}.json`);
   await writeFile(manifest, JSON.stringify({
     schema: 'k15-codex-bridge/production-manifest-v2',
     adapterPath: adapter,
@@ -136,7 +137,8 @@ async function createBundle(temp, approvalSinkPath = '') {
     childSha256: await sha256(child),
     codeModeHostPath: codeModeHost,
     codeModeHostSha256: await sha256(codeModeHost),
-    approvalSinkPath
+    approvalSinkPath,
+    diagnosticsSinkPath
   }), 'utf8');
   return { manifest, runtimeRoot, generation, paths: { adapter, wrapper, transparent, core, authority, child, codeModeHost } };
 }
@@ -475,7 +477,8 @@ test('isolated Windows registry primitive preserves mixed absent, present-empty,
     CODEX_BRIDGE_WRAPPER_PATH: { presence: 'PRESENT', value: 'stock-wrapper', registryKind: 'String' },
     CODEX_BRIDGE_CHILD_PATH: { presence: 'PRESENT', value: '%USERPROFILE%\\stock-child.exe', registryKind: 'ExpandString' },
     CODEX_BRIDGE_CHILD_SHA256: { presence: 'ABSENT', value: '', registryKind: 'None' },
-    CODEX_BRIDGE_APPROVAL_SINK_PATH: { presence: 'PRESENT', value: '', registryKind: 'String' }
+    CODEX_BRIDGE_APPROVAL_SINK_PATH: { presence: 'PRESENT', value: '', registryKind: 'String' },
+    CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH: { presence: 'ABSENT', value: '', registryKind: 'None' }
   };
   try {
     const { manifest } = await createBundle(temp);
@@ -708,7 +711,8 @@ test('legacy activation-state-v2 Disable restores exact presence including PRESE
       CODEX_BRIDGE_WRAPPER_PATH: { presence: 'ABSENT', value: '', registryKind: 'None' },
       CODEX_BRIDGE_CHILD_PATH: { presence: 'PRESENT', value: 'stock-child', registryKind: 'ExpandString' },
       CODEX_BRIDGE_CHILD_SHA256: { presence: 'ABSENT', value: '', registryKind: 'None' },
-      CODEX_BRIDGE_APPROVAL_SINK_PATH: { presence: 'ABSENT', value: '', registryKind: 'None' }
+    CODEX_BRIDGE_APPROVAL_SINK_PATH: { presence: 'ABSENT', value: '', registryKind: 'None' },
+    CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH: { presence: 'ABSENT', value: '', registryKind: 'None' }
     };
     await writeLegacyState(state, manifest, original);
     await writeFile(environment, JSON.stringify({
@@ -735,17 +739,19 @@ test('legacy activation-state-v2 Disable restores exact presence including PRESE
   }
 });
 
-test('isolated Enable sets non-empty sink and Disable restores absent sink', async () => {
+test('isolated Enable sets non-empty approval and diagnostics sinks and Disable restores absent sinks', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
   try {
     const sink = path.join(temp, 'sanitized-events.jsonl');
-    const { manifest } = await createBundle(temp, sink);
+    const diagnostics = path.join(temp, 'bridge-diagnostics.json');
+    const { manifest } = await createBundle(temp, sink, diagnostics);
     const state = path.join(temp, 'state.json');
     const environment = path.join(temp, 'environment.json');
     await writeFile(environment, JSON.stringify({ CODEX_CLI_PATH: 'stock-codex' }), 'utf8');
     const common = ['-ManifestPath', manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
     await powershell(['-File', script, '-Mode', 'Enable', ...common]);
     assert.equal((await readJson(environment)).CODEX_BRIDGE_APPROVAL_SINK_PATH, sink);
+    assert.equal((await readJson(environment)).CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH, diagnostics);
     await powershell(['-File', script, '-Mode', 'Disable', ...common]);
     assert.deepEqual(await readJson(environment), { CODEX_CLI_PATH: 'stock-codex' });
   } finally {

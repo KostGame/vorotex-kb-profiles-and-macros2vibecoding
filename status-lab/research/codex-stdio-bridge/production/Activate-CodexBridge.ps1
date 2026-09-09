@@ -24,7 +24,8 @@ $ManagedVariables = @(
     'CODEX_BRIDGE_WRAPPER_PATH',
     'CODEX_BRIDGE_CHILD_PATH',
     'CODEX_BRIDGE_CHILD_SHA256',
-    'CODEX_BRIDGE_APPROVAL_SINK_PATH'
+    'CODEX_BRIDGE_APPROVAL_SINK_PATH',
+    'CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH'
 )
 $ManifestSchema = 'k15-codex-bridge/production-manifest-v2'
 $ActivationStateSchema = 'k15-codex-bridge/activation-state-v3'
@@ -191,7 +192,7 @@ function Read-Manifest {
         'schema',
         'adapterPath', 'nodePath', 'wrapperPath', 'transparentWrapperPath', 'bridgeCorePath', 'runtimeAuthorityPath', 'childPath', 'codeModeHostPath',
         'adapterSha256', 'nodeSha256', 'wrapperSha256', 'transparentWrapperSha256', 'bridgeCoreSha256', 'runtimeAuthoritySha256', 'childSha256', 'codeModeHostSha256',
-        'approvalSinkPath'
+        'approvalSinkPath', 'diagnosticsSinkPath'
     )
     Assert-ExactPropertyNames $manifest $required 'production manifest'
     if ($manifest.schema -ne $ManifestSchema) { Fail 'unsupported production manifest schema' }
@@ -233,10 +234,12 @@ function Read-Manifest {
         if (-not $uniquePaths.Add([IO.Path]::GetFullPath($paths[$name]))) { Fail "manifest path $name duplicates another executable path" }
     }
     $approvalSinkPath = Require-OptionalOutputPath ([string] $manifest.approvalSinkPath) 'approvalSinkPath'
+    $diagnosticsSinkPath = Require-OptionalOutputPath ([string] $manifest.diagnosticsSinkPath) 'diagnosticsSinkPath'
     return [pscustomobject]@{
         Manifest = $manifest
         Paths = $paths
         ApprovalSinkPath = $approvalSinkPath
+        DiagnosticsSinkPath = $diagnosticsSinkPath
         GenerationName = [IO.Path]::GetFileName($childGenerationDirectory)
         RuntimeRoot = $runtimeRoot
     }
@@ -394,6 +397,7 @@ function Get-ActiveEnvironment($Resolved) {
         CODEX_BRIDGE_CHILD_PATH = New-EnvironmentEntry $true $Resolved.Paths.childPath
         CODEX_BRIDGE_CHILD_SHA256 = New-EnvironmentEntry $true ([string] $Resolved.Manifest.childSha256).ToLowerInvariant()
         CODEX_BRIDGE_APPROVAL_SINK_PATH = New-EnvironmentEntry (-not [string]::IsNullOrEmpty($Resolved.ApprovalSinkPath)) $Resolved.ApprovalSinkPath
+        CODEX_BRIDGE_DIAGNOSTICS_SINK_PATH = New-EnvironmentEntry (-not [string]::IsNullOrEmpty($Resolved.DiagnosticsSinkPath)) $Resolved.DiagnosticsSinkPath
     }
     return $active
 }
