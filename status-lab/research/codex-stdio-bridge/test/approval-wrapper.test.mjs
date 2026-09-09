@@ -9,6 +9,7 @@ import test from 'node:test';
 import {
   APPROVAL_CONFIG_ERROR_EXIT_CODE,
   APPROVAL_SINK_PATH_ENV,
+  DIAGNOSTICS_SINK_PATH_ENV,
   runApprovalWrapper
 } from '../src/approval-wrapper.mjs';
 
@@ -89,6 +90,23 @@ test('approval wrapper rejects a relative sink without touching transport', asyn
   stdin.end();
   assert.equal(code, APPROVAL_CONFIG_ERROR_EXIT_CODE);
   assert.match(Buffer.concat(diagnostics).toString('utf8'), /invalid approval sink configuration/);
+});
+
+test('invalid optional diagnostics configuration is fail-open and byte-transparent', async () => {
+  const stdin = new PassThrough(); const stdout = new PassThrough(); const stderr = new PassThrough();
+  const output = collect(stdout); const errors = [];
+  stderr.on('data', chunk => errors.push(Buffer.from(chunk)));
+  const run = runApprovalWrapper({
+    argv: ['echo'],
+    env: { CODEX_BRIDGE_CHILD_PATH: fakeChild, FAKE_CHILD_MODE: 'echo', [DIAGNOSTICS_SINK_PATH_ENV]: 'relative-diagnostics.json' },
+    stdin, stdout, stderr,
+    spawnProcess: (childPath, childArgs, options) => spawn(process.execPath, [childPath, ...childArgs], { ...options })
+  });
+  const payload = Buffer.from('opaque\0transport\nbytes');
+  stdin.end(payload);
+  assert.equal(await run, 0);
+  assert.deepEqual(await output, payload);
+  assert.match(Buffer.concat(errors).toString('utf8'), /diagnostics disabled/);
 });
 
 test('real approval wrapper seam observes native status while preserving bytes', async () => {

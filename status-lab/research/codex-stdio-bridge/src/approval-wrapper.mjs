@@ -60,12 +60,13 @@ export async function runApprovalWrapper(options = {}) {
   let diagnosticsPath;
   try {
     sinkPath = optionalAbsoluteSinkPath(env[APPROVAL_SINK_PATH_ENV]);
-    diagnosticsPath = optionalAbsoluteSinkPath(env[DIAGNOSTICS_SINK_PATH_ENV]);
   } catch {
     pauseInput(stdin);
     writeDiagnostic(stderr, 'codex bridge: invalid approval sink configuration');
     return APPROVAL_CONFIG_ERROR_EXIT_CODE;
   }
+  try { diagnosticsPath = optionalAbsoluteSinkPath(env[DIAGNOSTICS_SINK_PATH_ENV]); }
+  catch { diagnosticsPath = undefined; writeDiagnostic(stderr, 'codex bridge: diagnostics disabled'); }
 
   let runtimeBoundary;
   const diagnostics = options.diagnostics ?? new BridgeDiagnostics({

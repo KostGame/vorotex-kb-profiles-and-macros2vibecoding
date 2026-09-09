@@ -172,10 +172,22 @@ function environmentValues(entries) {
 }
 
 async function writeLegacyState(statePath, manifestPath, original) {
+  const legacyOriginal = Object.fromEntries(Object.entries(original).filter(([name]) => managedVariables.slice(0, 6).includes(name)));
   await writeFile(statePath, JSON.stringify({
     schema: 'k15-codex-bridge/activation-state-v2',
     manifestPath: path.resolve(manifestPath),
-    original
+    original: legacyOriginal
+  }), 'utf8');
+}
+
+async function writePre158V3State(statePath, manifestPath, original, manifestSha256) {
+  await writeFile(statePath, JSON.stringify({
+    schema: 'k15-codex-bridge/activation-state-v3',
+    manifestPath: path.resolve(manifestPath), manifestSha256,
+    original,
+    runtimeBaseline: { approvedGeneration: 'generation-a', runtimeInventory: [{
+      generation: 'generation-a', codexExePresent: true, codeModeHostPresent: true
+    }] }
   }), 'utf8');
 }
 
@@ -505,6 +517,33 @@ test('isolated Windows registry primitive preserves mixed absent, present-empty,
     await removeIsolatedRegistryEnvironment(registrySubKey);
     await rm(temp, { recursive: true, force: true });
   }
+});
+
+test('pre-158 v3 state and v2 manifest remain status-readable and disable-restorable', async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-production-'));
+  try {
+    const bundle = await createBundle(temp);
+    const oldManifest = await readJson(bundle.manifest);
+    delete oldManifest.diagnosticsSinkPath;
+    await writeFile(bundle.manifest, JSON.stringify(oldManifest), 'utf8');
+    const state = path.join(temp, 'pre-158-state.json'); const environment = path.join(temp, 'environment.json');
+    const original = absentEnvironment();
+    const oldOriginal = Object.fromEntries(managedVariables.slice(0, 6).map(name => [name, original[name]]));
+    await writePre158V3State(state, bundle.manifest, oldOriginal, await sha256(bundle.manifest));
+    await writeFile(environment, JSON.stringify({
+      CODEX_CLI_PATH: bundle.paths.adapter,
+      CODEX_BRIDGE_NODE_PATH: process.execPath,
+      CODEX_BRIDGE_WRAPPER_PATH: bundle.paths.wrapper,
+      CODEX_BRIDGE_CHILD_PATH: bundle.paths.child,
+      CODEX_BRIDGE_CHILD_SHA256: oldManifest.childSha256
+    }), 'utf8');
+    const common = ['-ManifestPath', bundle.manifest, '-StatePath', state, '-EnvironmentStorePath', environment, '-BroadcastMode', 'FakeSuccess'];
+    const status = await powershell(['-File', script, '-Mode', 'Status', ...common]);
+    assert.match(status.stdout, /ACTIVE=YES/); assert.match(status.stdout, /RUNTIME_HEALTH=HEALTHY/);
+    const disabled = await powershell(['-File', script, '-Mode', 'Disable', ...common]);
+    assert.match(disabled.stdout, /ACTIVE=NO/); assert.deepEqual(await readJson(environment), {});
+    await assert.rejects(readFile(state, 'utf8'));
+  } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
 test('isolated Enable, Status, Disable round-trip clears stale empty sink and restores exact state', async () => {

@@ -135,7 +135,7 @@ export function createNamedPipeAuthoritySink({
         });
         queue.shift(); item.resolve();
       } catch (error) {
-        queue.shift(); item.reject(error); diagnostics?.recordAuthority('sinkFailures');
+        queue.shift(); item.reject(error);
         failSocket();
       }
     }
@@ -143,7 +143,7 @@ export function createNamedPipeAuthoritySink({
   };
 
   const sendLine = line => new Promise((resolve, reject) => {
-    if (closed || queue.length >= queueCapacity) { diagnostics?.recordAuthority('sinkFailures'); reject(new Error('authority pipe unavailable or full')); return; }
+    if (closed || queue.length >= queueCapacity) { reject(new Error('authority pipe unavailable or full')); return; }
     queue.push({ line, resolve, reject });
     void pump();
   });

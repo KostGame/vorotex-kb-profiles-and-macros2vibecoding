@@ -71,14 +71,16 @@ test('status rejection counters use only the fixed allowlist and malformed recor
 
 test('diagnostics remain fail-open on sink errors and named-pipe failures use fixed reasons', async () => {
   const diagnostics = new BridgeDiagnostics({ sink: () => { throw new Error('raw secret must not escape'); } });
-  diagnostics.recordAuthority('overflow'); diagnostics.recordAuthority('sinkFailures');
   const connector = () => { const socket = new PassThrough(); process.nextTick(() => socket.emit('error', Object.assign(new Error('private detail'), { code: 'ENOENT' }))); return socket; };
   const boundary = createNamedPipeAuthoritySink({ diagnostics, connectPipe: connector, connectTimeoutMs: 10 });
-  await assert.rejects(boundary.sink({ schemaVersion: 'k15-codex-thread-status/v1', source: 'codex_stdio_bridge', event: 'thread_status_changed', threadId: 'x', status: 'idle', activeFlags: [], timestampUtc: new Date().toISOString() }));
+  const observer = new NativeThreadStatusObserver({ diagnostics, authoritySink: boundary.sink });
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/status/changed', params: { threadId: 'x', status: { type: 'idle' } } }) + '\n'));
+  await new Promise(resolve => setImmediate(resolve));
   await boundary.close();
   const snapshot = diagnostics.snapshot();
-  assert.equal(snapshot.authorityQueue.overflow, 1);
-  assert.equal(snapshot.authorityQueue.sinkFailures >= 2, true);
+  assert.equal(snapshot.authorityQueue.accepted, 1);
+  assert.equal(snapshot.authorityQueue.delivered, 0);
+  assert.equal(snapshot.authorityQueue.sinkFailures, 1);
   assert.equal(snapshot.namedPipe.connectAttempts, 1);
   assert.equal(snapshot.namedPipe.connectFailures, 1);
   assert.equal(snapshot.namedPipe.failureReasons.unavailable, 1);
