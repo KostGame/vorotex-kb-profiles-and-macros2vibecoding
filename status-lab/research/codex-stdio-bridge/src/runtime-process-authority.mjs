@@ -72,7 +72,8 @@ function healthLine(reason) {
  * Connects to the already-running Runtime-owned authority pipe. This module
  * never imports child_process and cannot create a Runtime process. One pipe
  * connection is held per wrapper; the Runtime server grants ownership to the
- * first connected wrapper and rejects competing producers as pipe-busy.
+ * bounded concurrent wrappers; the Runtime owns the single authority epoch
+ * and keeps the Codex transport fail-open when the optional side channel is unavailable.
  */
 export function createNamedPipeAuthoritySink({
   pipePath = AUTHORITY_PIPE_NAME,

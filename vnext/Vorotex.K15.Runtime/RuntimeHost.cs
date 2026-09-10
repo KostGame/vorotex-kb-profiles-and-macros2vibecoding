@@ -22,6 +22,7 @@ public sealed class RuntimeHost : IDisposable
     private readonly RuntimeRgbController _rgbController;
     private bool _stoppedForMutations;
     private long _nativeAuthorityGeneration;
+    private int _nativeAuthorityProducerCount;
     private bool _nativeAuthorityConnected;
 
     public RuntimeHost(RuntimeHostOptions? options = null) : this(options, null) { }
@@ -110,8 +111,12 @@ public sealed class RuntimeHost : IDisposable
     {
         lock (_gate)
         {
-            _nativeAuthorityGeneration++;
-            _nativeAuthorityConnected = true;
+            if (!_nativeAuthorityConnected)
+            {
+                _nativeAuthorityGeneration++;
+                _nativeAuthorityConnected = true;
+            }
+            _nativeAuthorityProducerCount++;
             return _nativeAuthorityGeneration;
         }
     }
@@ -130,7 +135,17 @@ public sealed class RuntimeHost : IDisposable
     {
         lock (_gate)
         {
-            if (generation != 0 && generation != _nativeAuthorityGeneration) return;
+            if (generation != 0)
+            {
+                if (!_nativeAuthorityConnected || generation != _nativeAuthorityGeneration || _nativeAuthorityProducerCount == 0)
+                    return;
+                _nativeAuthorityProducerCount--;
+                if (_nativeAuthorityProducerCount != 0) return;
+            }
+            else
+            {
+                _nativeAuthorityProducerCount = 0;
+            }
             _nativeAuthorityConnected = false;
             _nativeStatusTransport.MarkDegraded("NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE");
         }

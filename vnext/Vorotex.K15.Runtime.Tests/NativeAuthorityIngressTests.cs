@@ -87,7 +87,7 @@ internal static class NativeAuthorityIngressTests
         TestAssert.True(host.Snapshot.Health.IsHealthy, $"valid status did not restore health; detail={host.Snapshot.Health.Detail}");
     }
 
-    public static async Task IngressIsAllowlistedBoundedAndSingleProducer()
+    public static async Task IngressIsAllowlistedBoundedAndSupportsCompetingProducers()
     {
         var suffix = Guid.NewGuid().ToString("N");
         var mutex = "Vorotex.K15.Runtime.Tests.Authority." + suffix;
@@ -96,13 +96,25 @@ internal static class NativeAuthorityIngressTests
         TestAssert.True(host.TryStart(), "runtime failed to start");
         await using var ingress = new NativeAuthorityIngressServer(host, pipe, queueCapacity: 2);
         ingress.Start();
-        await using var producer = await ConnectAsync(pipe);
-        await TestAssert.ThrowsAsync(() => ConnectAsync(pipe, 250), "second wrapper acquired producer ownership");
-        await WriteAsync(producer, "{\"protocolVersion\":\"k15-runtime-ipc/v1\",\"command\":\"shutdown_runtime\"}");
-        await WriteAsync(producer, new string('x', RuntimeIpcMetadata.MaxFrameBytes + 1));
-        await WriteAsync(producer, "{\"schemaVersion\":\"future/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"authority_degraded\",\"reason\":\"NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE\"}");
+        await using var backgroundProducer = await ConnectAsync(pipe);
+        await using (var userProducer = await ConnectAsync(pipe, 500))
+        {
+            await WriteAsync(userProducer, Status("user-thread", "active", "2026-09-09T08:02:00Z", "[\"waitingOnApproval\"]"));
+            await WaitForAsync(() => host.Snapshot.State == RuntimeState.Waiting, "user producer did not deliver waiting status");
+            await WriteAsync(userProducer, Status("user-thread", "active", "2026-09-09T08:02:01Z", "[]"));
+            await WaitForAsync(() => host.Snapshot.State == RuntimeState.Running, "user producer did not deliver running status");
+            await WriteAsync(userProducer, Status("user-thread", "idle", "2026-09-09T08:02:02Z", "[]"));
+            await WaitForAsync(() => host.Snapshot.Threads.Single(thread => thread.ThreadId == "user-thread").RuntimeStatus == ThreadRuntimeStatus.Idle,
+                "user producer did not deliver terminal idle status");
+        }
         await Task.Delay(100);
-        TestAssert.Equal(RuntimeState.Normal, host.Snapshot.State, "general/unknown ingress record changed state");
+        TestAssert.True(host.Snapshot.Health.IsHealthy, "one competing producer disconnect degraded the shared authority epoch");
+        var terminalState = host.Snapshot.State;
+        await WriteAsync(backgroundProducer, "{\"protocolVersion\":\"k15-runtime-ipc/v1\",\"command\":\"shutdown_runtime\"}");
+        await WriteAsync(backgroundProducer, new string('x', RuntimeIpcMetadata.MaxFrameBytes + 1));
+        await WriteAsync(backgroundProducer, "{\"schemaVersion\":\"future/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"authority_degraded\",\"reason\":\"NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE\"}");
+        await Task.Delay(100);
+        TestAssert.Equal(terminalState, host.Snapshot.State, "general/unknown ingress record changed state");
         TestAssert.True(host.Snapshot.Health.Detail.StartsWith("NATIVE_AUTHORITY_DEGRADED_", StringComparison.Ordinal), "invalid ingress health was not bounded");
     }
 
@@ -237,9 +249,9 @@ internal static class NativeAuthorityIngressTests
         await pipe.FlushAsync();
     }
 
-    private static async Task WaitForAsync(Func<bool> condition)
+    private static async Task WaitForAsync(Func<bool> condition, string message = "condition did not become true within bounded wait")
     {
         for (var attempt = 0; attempt < 100 && !condition(); attempt++) await Task.Delay(10);
-        TestAssert.True(condition(), "condition did not become true within bounded wait");
+        TestAssert.True(condition(), message);
     }
 }
