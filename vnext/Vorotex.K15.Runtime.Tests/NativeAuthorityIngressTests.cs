@@ -108,7 +108,9 @@ internal static class NativeAuthorityIngressTests
                 "user producer did not deliver terminal idle status");
         }
         await Task.Delay(100);
-        TestAssert.True(host.Snapshot.Health.IsHealthy, "one competing producer disconnect degraded the shared authority epoch");
+        TestAssert.False(host.Snapshot.Health.IsHealthy, "competing producer disconnect was not visible to authority health");
+        await WriteAsync(backgroundProducer, Status("user-thread", "idle", "2026-09-09T08:02:03Z", "[]"));
+        await WaitForAsync(() => host.Snapshot.Health.IsHealthy, "remaining producer did not restore authority health with fresh evidence");
         var terminalState = host.Snapshot.State;
         await WriteAsync(backgroundProducer, "{\"protocolVersion\":\"k15-runtime-ipc/v1\",\"command\":\"shutdown_runtime\"}");
         await WriteAsync(backgroundProducer, new string('x', RuntimeIpcMetadata.MaxFrameBytes + 1));
@@ -116,6 +118,38 @@ internal static class NativeAuthorityIngressTests
         await Task.Delay(100);
         TestAssert.Equal(terminalState, host.Snapshot.State, "general/unknown ingress record changed state");
         TestAssert.True(host.Snapshot.Health.Detail.StartsWith("NATIVE_AUTHORITY_DEGRADED_", StringComparison.Ordinal), "invalid ingress health was not bounded");
+    }
+
+    public static async Task ProducerDisconnectRequiresPerThreadResync()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var mutex = "Vorotex.K15.Runtime.Tests.AuthorityResync." + suffix;
+        var pipe = "Vorotex.K15.Runtime.Tests.AuthorityResyncPipe." + suffix;
+        using var host = new RuntimeHost(new RuntimeHostOptions { SingleInstanceName = mutex });
+        TestAssert.True(host.TryStart(), "runtime failed to start");
+        await using var ingress = new NativeAuthorityIngressServer(host, pipe);
+        ingress.Start();
+        await using var backgroundProducer = await ConnectAsync(pipe);
+        await using (var statusProducer = await ConnectAsync(pipe, 500))
+        {
+            await WriteAsync(statusProducer, Status("A", "active", "2026-09-10T08:03:00Z", "[]"));
+            await WaitForAsync(() => host.Snapshot.State == RuntimeState.Running, "status producer did not deliver A running evidence");
+        }
+
+        await WaitForAsync(() => host.Snapshot.Health.Detail == "NATIVE_AUTHORITY_DEGRADED_RESYNC_REQUIRED",
+            "disconnecting the status producer did not require bounded authority resync");
+        await WriteAsync(backgroundProducer, Status("B", "active", "2026-09-10T08:03:01Z", "[]"));
+        await WaitForAsync(() => host.Snapshot.Threads.Any(thread => thread.ThreadId == "B"),
+            "remaining producer did not deliver unrelated B evidence");
+        TestAssert.Equal("NATIVE_AUTHORITY_DEGRADED_RESYNC_REQUIRED", host.Snapshot.Health.Detail,
+            "fresh unrelated B evidence certified stale A");
+
+        await WriteAsync(backgroundProducer, Status("A", "active", "2026-09-10T08:03:02Z", "[]"));
+        await WaitForAsync(() => host.Snapshot.Health.IsHealthy && host.Snapshot.State == RuntimeState.Running,
+            "fresh A evidence did not complete authority resync");
+        await WriteAsync(backgroundProducer, Status("A", "idle", "2026-09-10T08:03:03Z", "[]"));
+        await WaitForAsync(() => host.Snapshot.Threads.Single(thread => thread.ThreadId == "A").RuntimeStatus == ThreadRuntimeStatus.Idle,
+            "remaining producer stopped delivering subsequent A evidence");
     }
 
     public static Task BridgeCannotAcquireSecondRuntimeLease()

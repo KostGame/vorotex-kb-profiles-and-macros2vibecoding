@@ -140,7 +140,13 @@ public sealed class RuntimeHost : IDisposable
                 if (!_nativeAuthorityConnected || generation != _nativeAuthorityGeneration || _nativeAuthorityProducerCount == 0)
                     return;
                 _nativeAuthorityProducerCount--;
-                if (_nativeAuthorityProducerCount != 0) return;
+                if (_nativeAuthorityProducerCount != 0)
+                {
+                    // A remaining producer keeps the shared epoch valid, but
+                    // cannot prove that it still owns every thread's status.
+                    _nativeStatusTransport.MarkDegraded("NATIVE_AUTHORITY_DEGRADED_UNAVAILABLE");
+                    return;
+                }
             }
             else
             {
