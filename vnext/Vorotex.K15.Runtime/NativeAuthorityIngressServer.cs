@@ -11,11 +11,14 @@ namespace Vorotex.K15.Runtime;
 /// </summary>
 public sealed class NativeAuthorityIngressServer : IAsyncDisposable
 {
+    private const int MaxProducerConnections = 8;
     private readonly RuntimeHost _host;
     private readonly string _pipeName;
     private readonly NativeStatusDeliveryQueue _queue;
     private readonly CancellationTokenSource _stop = new();
+    private readonly SemaphoreSlim _producerSlots = new(MaxProducerConnections, MaxProducerConnections);
     private readonly object _listenerGate = new();
+    private readonly List<Task> _producers = new();
     private NamedPipeServerStream? _listener;
     private Task? _acceptLoop;
 
@@ -41,35 +44,70 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
         {
             while (!_stop.IsCancellationRequested)
             {
-                // Exactly one server instance gives the first connected wrapper
-                // deterministic producer ownership. Other wrappers see busy and
-                // remain fail-open for the transparent Codex transport.
-                var pipe = new NamedPipeServerStream(
-                    _pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-                lock (_listenerGate) _listener = pipe;
+                await _producerSlots.WaitAsync(_stop.Token).ConfigureAwait(false);
+                NamedPipeServerStream? pipe = null;
+                var handedOff = false;
                 var generation = 0L;
                 try
                 {
+                    pipe = new NamedPipeServerStream(
+                        _pipeName, PipeDirection.In, MaxProducerConnections, PipeTransmissionMode.Byte,
+                        PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                    lock (_listenerGate) _listener = pipe;
                     await pipe.WaitForConnectionAsync(_stop.Token).ConfigureAwait(false);
                     generation = _host.BeginNativeAuthorityProducerGeneration();
-                    await HandleProducerAsync(pipe, generation).ConfigureAwait(false);
+                    var producer = HandleProducerLifetimeAsync(pipe, generation);
+                    lock (_listenerGate)
+                    {
+                        _producers.Add(producer);
+                        if (ReferenceEquals(_listener, pipe)) _listener = null;
+                    }
+                    ObserveProducerCompletion(producer);
+                    handedOff = true;
                 }
                 catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
                 catch (IOException) when (!_stop.IsCancellationRequested) { }
                 finally
                 {
-                    lock (_listenerGate)
+                    if (pipe is not null && !handedOff)
                     {
-                        if (ReferenceEquals(_listener, pipe)) _listener = null;
+                        lock (_listenerGate)
+                        {
+                            if (ReferenceEquals(_listener, pipe)) _listener = null;
+                        }
+                        await pipe.DisposeAsync().ConfigureAwait(false);
+                        _producerSlots.Release();
                     }
-                    await pipe.DisposeAsync().ConfigureAwait(false);
-                    if (!_stop.IsCancellationRequested && generation != 0)
-                        _host.MarkNativeAuthorityUnavailable(generation);
                 }
             }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
+    }
+
+    private async Task HandleProducerLifetimeAsync(NamedPipeServerStream pipe, long generation)
+    {
+        try
+        {
+            await HandleProducerAsync(pipe, generation).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
+        catch (IOException) when (!_stop.IsCancellationRequested) { }
+        finally
+        {
+            await pipe.DisposeAsync().ConfigureAwait(false);
+            if (!_stop.IsCancellationRequested && generation != 0)
+                _host.MarkNativeAuthorityUnavailable(generation);
+            _producerSlots.Release();
+        }
+    }
+
+    private void ObserveProducerCompletion(Task producer)
+    {
+        _ = producer.ContinueWith(completed =>
+        {
+            _ = completed.Exception;
+            lock (_listenerGate) _producers.Remove(completed);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     private async Task HandleProducerAsync(NamedPipeServerStream pipe, long generation)
@@ -177,7 +215,11 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
         {
             try { await _acceptLoop.ConfigureAwait(false); } catch (OperationCanceledException) { }
         }
+        Task[] producers;
+        lock (_listenerGate) producers = _producers.ToArray();
+        try { await Task.WhenAll(producers).ConfigureAwait(false); } catch { }
         await _queue.DisposeAsync().ConfigureAwait(false);
+        _producerSlots.Dispose();
         _stop.Dispose();
     }
 }
