@@ -71,7 +71,9 @@ export class BridgeDiagnostics {
       rejectedStatus: Object.fromEntries(BRIDGE_DIAGNOSTIC_REJECTION_REASONS.map(reason => [reason, 0])),
       authorityQueue: { accepted: 0, delivered: 0, overflow: 0, sinkFailures: 0 },
       namedPipe: { connectAttempts: 0, connectSuccesses: 0, connectFailures: 0,
-        failureReasons: { unavailable: 0, timeout: 0, busy: 0, unknown: 0 } },
+        frameWriteAttempts: 0, frameWriteSuccesses: 0, frameWriteFailures: 0,
+        failureReasons: { unavailable: 0, timeout: 0, busy: 0, unknown: 0 },
+        writeFailureReasons: { unavailable: 0, remote_close: 0, unknown: 0 } },
       updatedAtUtc: this.#timestamp()
     };
   }
@@ -116,6 +118,13 @@ export class BridgeDiagnostics {
       this.#snapshot.namedPipe.connectFailures += 1;
       if (Object.hasOwn(this.#snapshot.namedPipe.failureReasons, reason)) this.#snapshot.namedPipe.failureReasons[reason] += 1;
       else this.#snapshot.namedPipe.failureReasons.unknown += 1;
+    }
+    else if (kind === 'frameWriteAttempts') this.#snapshot.namedPipe.frameWriteAttempts += 1;
+    else if (kind === 'frameWriteSuccesses') this.#snapshot.namedPipe.frameWriteSuccesses += 1;
+    else if (kind === 'frameWriteFailures') {
+      this.#snapshot.namedPipe.frameWriteFailures += 1;
+      if (Object.hasOwn(this.#snapshot.namedPipe.writeFailureReasons, reason)) this.#snapshot.namedPipe.writeFailureReasons[reason] += 1;
+      else this.#snapshot.namedPipe.writeFailureReasons.unknown += 1;
     }
     this.#flush();
   }

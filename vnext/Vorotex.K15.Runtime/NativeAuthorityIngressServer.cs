@@ -19,6 +19,15 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
     private readonly SemaphoreSlim _producerSlots = new(MaxProducerConnections, MaxProducerConnections);
     private readonly object _listenerGate = new();
     private readonly List<Task> _producers = new();
+    private long _acceptedProducers;
+    private long _disconnectsBeforeFirstFrame;
+    private long _decodedFrames;
+    private long _queueAccepted;
+    private long _queueRejected;
+    private long _ioFailures;
+    private long _ioUnavailableFailures;
+    private long _ioRemoteCloseFailures;
+    private long _ioUnknownFailures;
     private NamedPipeServerStream? _listener;
     private Task? _acceptLoop;
 
@@ -38,6 +47,17 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
         _acceptLoop = AcceptLoopAsync();
     }
 
+    public NativeAuthorityIngressHealth Health => new(
+        AcceptedProducers: Volatile.Read(ref _acceptedProducers),
+        DisconnectsBeforeFirstFrame: Volatile.Read(ref _disconnectsBeforeFirstFrame),
+        DecodedFrames: Volatile.Read(ref _decodedFrames),
+        QueueAccepted: Volatile.Read(ref _queueAccepted),
+        QueueRejected: Volatile.Read(ref _queueRejected),
+        IoFailures: Volatile.Read(ref _ioFailures),
+        IoUnavailableFailures: Volatile.Read(ref _ioUnavailableFailures),
+        IoRemoteCloseFailures: Volatile.Read(ref _ioRemoteCloseFailures),
+        IoUnknownFailures: Volatile.Read(ref _ioUnknownFailures));
+
     private async Task AcceptLoopAsync()
     {
         try
@@ -51,10 +71,11 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                 try
                 {
                     pipe = new NamedPipeServerStream(
-                        _pipeName, PipeDirection.In, MaxProducerConnections, PipeTransmissionMode.Byte,
+                        _pipeName, PipeDirection.InOut, MaxProducerConnections, PipeTransmissionMode.Byte,
                         PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                     lock (_listenerGate) _listener = pipe;
                     await pipe.WaitForConnectionAsync(_stop.Token).ConfigureAwait(false);
+                    Interlocked.Increment(ref _acceptedProducers);
                     generation = _host.BeginNativeAuthorityProducerGeneration();
                     var producer = HandleProducerLifetimeAsync(pipe, generation);
                     lock (_listenerGate)
@@ -66,7 +87,10 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                     handedOff = true;
                 }
                 catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
-                catch (IOException) when (!_stop.IsCancellationRequested) { }
+                catch (IOException) when (!_stop.IsCancellationRequested)
+                {
+                    RecordIoFailure(remoteClose: false);
+                }
                 finally
                 {
                     if (pipe is not null && !handedOff)
@@ -86,14 +110,20 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
 
     private async Task HandleProducerLifetimeAsync(NamedPipeServerStream pipe, long generation)
     {
+        var sawCompleteFrame = false;
         try
         {
-            await HandleProducerAsync(pipe, generation).ConfigureAwait(false);
+            sawCompleteFrame = await HandleProducerAsync(pipe, generation).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
-        catch (IOException) when (!_stop.IsCancellationRequested) { }
+        catch (IOException) when (!_stop.IsCancellationRequested)
+        {
+            RecordIoFailure(remoteClose: true);
+        }
         finally
         {
+            if (!sawCompleteFrame && !_stop.IsCancellationRequested)
+                Interlocked.Increment(ref _disconnectsBeforeFirstFrame);
             await pipe.DisposeAsync().ConfigureAwait(false);
             if (!_stop.IsCancellationRequested && generation != 0)
                 _host.MarkNativeAuthorityUnavailable(generation);
@@ -110,38 +140,54 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
-    private async Task HandleProducerAsync(NamedPipeServerStream pipe, long generation)
+    private async Task<bool> HandleProducerAsync(NamedPipeServerStream pipe, long generation)
     {
         var decoder = new BoundedJsonLineDecoder(RuntimeIpcMetadata.MaxFrameBytes);
-        while (!_stop.IsCancellationRequested && pipe.IsConnected)
+        var sawCompleteFrame = false;
+        while (!_stop.IsCancellationRequested)
         {
-            var line = await decoder.ReadLineAsync(pipe, _stop.Token).ConfigureAwait(false);
-            if (line is null) break;
+            var decoded = await decoder.ReadLineAsync(pipe, _stop.Token).ConfigureAwait(false);
+            if (decoded is null) break;
+            if (!decoded.IsComplete)
+            {
+                Interlocked.Increment(ref _queueRejected);
+                continue;
+            }
+            var line = decoded.Value;
+            sawCompleteFrame = true;
+            Interlocked.Increment(ref _decodedFrames);
             if (line.Length > RuntimeIpcMetadata.MaxFrameBytes)
             {
                 // The decoder has already consumed exactly through the line
                 // terminator. Do not enqueue the sentinel: an oversized frame
                 // is a bounded transport rejection, not a sink failure.
+                Interlocked.Increment(ref _queueRejected);
                 continue;
             }
             if (line.Length == 0 || !_queue.TryEnqueue(generation, line))
             {
+                Interlocked.Increment(ref _queueRejected);
                 // Invalid/oversized input is rejected without affecting the
                 // Runtime/UI command pipe or transparent Codex transport.
             }
+            else
+            {
+                Interlocked.Increment(ref _queueAccepted);
+            }
         }
+        return sawCompleteFrame;
     }
 
     private sealed class BoundedJsonLineDecoder
     {
         private readonly int _maxFrameBytes;
-        private readonly Queue<string> _ready = new();
+        private readonly Queue<DecodedLine> _ready = new();
         private readonly List<byte> _current = new();
         private bool _discardingOversized;
 
         public BoundedJsonLineDecoder(int maxFrameBytes) => _maxFrameBytes = maxFrameBytes;
 
-        public async Task<string?> ReadLineAsync(Stream pipe, CancellationToken cancellationToken)
+        public async Task<DecodedLine?> ReadLineAsync(Stream pipe, CancellationToken cancellationToken)
         {
             var buffer = new byte[1024];
             while (_ready.Count == 0)
@@ -153,7 +199,7 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                     {
                         _current.Clear();
                         _discardingOversized = false;
-                        return string.Empty;
+                        return new DecodedLine(string.Empty, IsComplete: false);
                     }
                     return null;
                 }
@@ -171,7 +217,7 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                 {
                     if (_discardingOversized)
                     {
-                        _ready.Enqueue(new string('x', _maxFrameBytes + 1));
+                        _ready.Enqueue(new DecodedLine(new string('x', _maxFrameBytes + 1), IsComplete: true));
                         _discardingOversized = false;
                         _current.Clear();
                     }
@@ -179,14 +225,14 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
                     {
                         try
                         {
-                            _ready.Enqueue(StrictUtf8.GetString(_current.ToArray()).TrimEnd('\r'));
+                            _ready.Enqueue(new DecodedLine(StrictUtf8.GetString(_current.ToArray()).TrimEnd('\r'), IsComplete: true));
                         }
                         catch (DecoderFallbackException)
                         {
                             // An invalid frame is rejected at the frame boundary.
                             // The decoder has consumed through its newline, so the
                             // next JSONL record remains independently processable.
-                            _ready.Enqueue(string.Empty);
+                            _ready.Enqueue(new DecodedLine(string.Empty, IsComplete: true));
                         }
                         _current.Clear();
                     }
@@ -205,6 +251,15 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
         }
 
         private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+        public sealed record DecodedLine(string Value, bool IsComplete);
+    }
+
+    private void RecordIoFailure(bool remoteClose)
+    {
+        Interlocked.Increment(ref _ioFailures);
+        if (remoteClose) Interlocked.Increment(ref _ioRemoteCloseFailures);
+        else Interlocked.Increment(ref _ioUnavailableFailures);
     }
 
     public async ValueTask DisposeAsync()
@@ -223,3 +278,14 @@ public sealed class NativeAuthorityIngressServer : IAsyncDisposable
         _stop.Dispose();
     }
 }
+
+public sealed record NativeAuthorityIngressHealth(
+    long AcceptedProducers,
+    long DisconnectsBeforeFirstFrame,
+    long DecodedFrames,
+    long QueueAccepted,
+    long QueueRejected,
+    long IoFailures,
+    long IoUnavailableFailures,
+    long IoRemoteCloseFailures,
+    long IoUnknownFailures);

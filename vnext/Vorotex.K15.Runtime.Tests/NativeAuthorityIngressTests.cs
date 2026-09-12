@@ -85,6 +85,12 @@ internal static class NativeAuthorityIngressTests
         TestAssert.Equal("C:\\frame", framedThread.WorkingDirectory, "oversized frame recovery lost the following valid record");
         TestAssert.False(host.Snapshot.Threads.Any(t => t.ThreadId == "invalid"), "invalid UTF-8 frame mutated thread state");
         TestAssert.True(host.Snapshot.Health.IsHealthy, $"valid status did not restore health; detail={host.Snapshot.Health.Detail}");
+        var ingressHealth = ingress.Health;
+        TestAssert.Equal(1L, ingressHealth.AcceptedProducers, "accepted producer diagnostic drifted");
+        TestAssert.True(ingressHealth.DecodedFrames >= 5, "decoded frame diagnostic missed complete records");
+        TestAssert.True(ingressHealth.QueueAccepted >= 3, "queue acceptance diagnostic missed valid records");
+        TestAssert.True(ingressHealth.QueueRejected >= 2, "queue rejection diagnostic missed bounded invalid records");
+        TestAssert.Equal(0L, ingressHealth.IoFailures, "ordinary framing produced an I/O failure");
     }
 
     public static async Task IngressIsAllowlistedBoundedAndSupportsCompetingProducers()

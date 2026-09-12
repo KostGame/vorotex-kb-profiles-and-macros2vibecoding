@@ -38,7 +38,8 @@ function sanitizeStatus(event) {
     throw new Error('non-active status has flags');
   }
   return { schemaVersion: event.schemaVersion, source: event.source, event: event.event,
-    threadId: event.threadId, status: event.status, activeFlags: event.activeFlags ?? [],
+    threadId: event.threadId, status: event.status,
+    ...(event.status === 'active' ? { activeFlags: event.activeFlags ?? [] } : {}),
     timestampUtc: event.timestampUtc, ...(event.classification === undefined ? {} : { classification: event.classification }) };
 }
 
@@ -131,8 +132,30 @@ export function createNamedPipeAuthoritySink({
       try {
         const target = await connect();
         await new Promise((resolve, reject) => {
-          try { target.write(item.line, 'utf8', error => error ? reject(error) : resolve()); }
-          catch (error) { reject(error); }
+          diagnostics?.recordPipe('frameWriteAttempts');
+          let settled = false;
+          const onClose = () => finish(new Error('authority pipe closed before frame write completed'), 'remote_close');
+          const finish = (error, reason = 'unknown') => {
+            if (settled) return;
+            settled = true;
+            target.removeListener?.('close', onClose);
+            if (error) {
+              diagnostics?.recordPipe('frameWriteFailures', reason);
+              reject(error);
+            } else {
+              diagnostics?.recordPipe('frameWriteSuccesses');
+              resolve();
+            }
+          };
+          target.once?.('close', onClose);
+          try {
+            target.write(item.line, 'utf8', error => {
+              finish(error, target.destroyed ? 'remote_close' : 'unknown');
+            });
+          }
+          catch (error) {
+            finish(error, target.destroyed ? 'remote_close' : 'unknown');
+          }
         });
         queue.shift(); item.resolve();
       } catch (error) {
