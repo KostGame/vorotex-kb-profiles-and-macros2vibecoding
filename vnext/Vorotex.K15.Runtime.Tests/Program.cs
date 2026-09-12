@@ -2,8 +2,11 @@ namespace Vorotex.K15.Runtime.Tests;
 
 internal static class Program
 {
-    public static async Task<int> Main()
+    public static async Task<int> Main(string[]? args = null)
     {
+        if (args is ["--node-net-pipe-harness"])
+            return await NodeNetPipeInteropHarness.RunAsync().ConfigureAwait(false);
+
         var tests = new (string Name, Func<Task> Run)[]
         {
             ("initial snapshot is deterministic and healthy", ContractTests.InitialSnapshotIsDeterministicAndHealthy),

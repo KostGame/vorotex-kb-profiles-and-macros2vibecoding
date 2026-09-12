@@ -86,3 +86,41 @@ test('diagnostics remain fail-open on sink errors and named-pipe failures use fi
   assert.equal(snapshot.namedPipe.failureReasons.unavailable, 1);
   assert.deepEqual(Object.keys(snapshot.namedPipe.failureReasons).sort(), ['busy', 'timeout', 'unavailable', 'unknown'].sort());
 });
+
+test('post-connect write failures are bounded and classify remote close without payloads', async () => {
+  const diagnostics = new BridgeDiagnostics();
+  const connector = () => {
+    const socket = {
+      destroyed: false,
+      connecting: true,
+      readyState: 'opening',
+      once(event, handler) {
+        if (event === 'connect') process.nextTick(() => {
+          socket.connecting = false;
+          socket.readyState = 'open';
+          handler();
+        });
+        return socket;
+      },
+      write(_line, _encoding, callback) {
+        socket.destroyed = true;
+        callback(Object.assign(new Error('private write detail'), { code: 'EPIPE' }));
+      },
+      destroy() { socket.destroyed = true; }
+    };
+    return socket;
+  };
+  const boundary = createNamedPipeAuthoritySink({ diagnostics, connectPipe: connector });
+  const observer = new NativeThreadStatusObserver({ diagnostics, authoritySink: boundary.sink });
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/status/changed', params: {
+    threadId: 'write-failure-thread', status: { type: 'active', activeFlags: [] }
+  }}) + '\n'));
+  await new Promise(resolve => setImmediate(resolve));
+  await boundary.close();
+  const snapshot = diagnostics.snapshot();
+  assert.equal(snapshot.namedPipe.frameWriteAttempts, 1);
+  assert.equal(snapshot.namedPipe.frameWriteSuccesses, 0);
+  assert.equal(snapshot.namedPipe.frameWriteFailures, 1);
+  assert.deepEqual(snapshot.namedPipe.writeFailureReasons, { unavailable: 0, remote_close: 1, unknown: 0 });
+  assert.doesNotMatch(JSON.stringify(snapshot), /private|write-failure-thread/);
+});
