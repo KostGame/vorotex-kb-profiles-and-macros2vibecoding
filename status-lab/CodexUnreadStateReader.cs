@@ -66,7 +66,7 @@ internal sealed class CodexUnreadStateReader(string? path, string host) : ICodex
                 return missing
                     ? ParseLegacy(doc.RootElement, host, startedUtc, finishedUtc)
                     : Failed(CodexUnreadState.Unknown);
-            return ParseCanonical(canonical, doc.RootElement, host, startedUtc, finishedUtc);
+            return ParseCanonical(canonical, host, startedUtc, finishedUtc);
         }
         catch (JsonException) { return Failed(CodexUnreadState.Unknown); }
     }
@@ -82,7 +82,7 @@ internal sealed class CodexUnreadStateReader(string? path, string host) : ICodex
         return ParseHostPartitions(hosts, host, startedUtc, finishedUtc, Failed);
     }
 
-    private static CodexUnreadSnapshot ParseCanonical(JsonElement canonical, JsonElement root, string host,
+    private static CodexUnreadSnapshot ParseCanonical(JsonElement canonical, string host,
         DateTimeOffset startedUtc, DateTimeOffset finishedUtc)
     {
         CodexUnreadSnapshot Failed(CodexUnreadState state) => new(host, startedUtc, finishedUtc, null, state);
@@ -114,7 +114,7 @@ internal sealed class CodexUnreadStateReader(string? path, string host) : ICodex
         if (hostPartitions.Length == 0 || hostPartitions.Length > MaxHosts)
             return Failed(CodexUnreadState.Unknown);
         var selectedHost = hostPartitions.Length == 1 ? hostPartitions[0].Name :
-            AdoptedLocalHost(root, hostPartitions.Select(item => item.Name).ToArray());
+            AdoptedLocalHost(canonical, hostPartitions.Select(item => item.Name).ToArray());
         if (selectedHost is null)
             return Failed(CodexUnreadState.Unknown);
         var partition = hostPartitions.SingleOrDefault(item => item.Name == selectedHost);
@@ -123,9 +123,9 @@ internal sealed class CodexUnreadStateReader(string? path, string host) : ICodex
             : ParseIds(partition.Value, host, startedUtc, finishedUtc, Failed);
     }
 
-    private static string? AdoptedLocalHost(JsonElement root, string[] hosts)
+    private static string? AdoptedLocalHost(JsonElement canonical, string[] hosts)
     {
-        if (!UniqueProperty(root, "legacyMigration", out var migration, out _) || migration.ValueKind != JsonValueKind.Object ||
+        if (!UniqueProperty(canonical, "legacyMigration", out var migration, out _) || migration.ValueKind != JsonValueKind.Object ||
             !UniqueProperty(migration, "adoptedHostIds", out var adopted, out _) || adopted.ValueKind != JsonValueKind.Object ||
             !UniqueProperty(adopted, "local", out var local, out _) || local.ValueKind != JsonValueKind.String)
             return null;

@@ -12,10 +12,17 @@ internal sealed record CodexPetVisualSnapshot(
 // state; unread evidence is supplied by the caller and is never inferred.
 internal static class CodexPetAdapter
 {
+    internal static bool ShouldPollUnread(IReadOnlyList<CodexSessionSnapshot> sessions)
+    {
+        var relevant = sessions.Where(session => session.IsAlive ||
+            session.State == K15NormalizedState.DonePendingAttention).ToArray();
+        return relevant.Length == 1 && relevant[0].State == K15NormalizedState.DonePendingAttention;
+    }
+
     internal static CodexPetVisualSnapshot Map(
         IReadOnlyList<CodexSessionSnapshot> sessions,
         string? targetSessionId,
-        Func<string, CodexUnreadState> unreadForThread)
+        CodexUnreadState unreadStateForTargetThread)
     {
         var relevant = sessions.Where(session => session.IsAlive ||
             session.State == K15NormalizedState.DonePendingAttention).ToArray();
@@ -33,9 +40,9 @@ internal static class CodexPetAdapter
                 !string.Equals(targetSessionId, session.SessionId, StringComparison.Ordinal) =>
                 new(CodexPetVisualState.Idle, "target_session_mismatch", null, null),
             K15NormalizedState.DonePendingAttention when !string.IsNullOrWhiteSpace(session.ThreadId) &&
-                unreadForThread(session.ThreadId) == CodexUnreadState.HasUnread =>
+                unreadStateForTargetThread == CodexUnreadState.HasUnread =>
                 new(CodexPetVisualState.Review, "exact_thread_unread", session.SessionId, session.ThreadId),
-            K15NormalizedState.DonePendingAttention when unreadForThread(session.ThreadId) is CodexUnreadState.Unknown or CodexUnreadState.Unavailable =>
+            K15NormalizedState.DonePendingAttention when unreadStateForTargetThread is CodexUnreadState.Unknown or CodexUnreadState.Unavailable =>
                 new(CodexPetVisualState.Idle, "unread_unavailable", session.SessionId, session.ThreadId),
             K15NormalizedState.DonePendingAttention => new(CodexPetVisualState.Idle, "no_unread", session.SessionId, session.ThreadId),
             _ => new(CodexPetVisualState.Idle, "normal", session.SessionId, session.ThreadId)

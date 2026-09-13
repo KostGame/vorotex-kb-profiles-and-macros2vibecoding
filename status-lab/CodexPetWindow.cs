@@ -113,12 +113,19 @@ internal sealed class CodexPetController : IDisposable
     {
         if (_window.IsDisposed) return;
         var sessions = _normalizer.SessionSnapshots;
-        var target = sessions.Count == 1 ? sessions[0].SessionId : null;
-        var snapshot = CodexPetAdapter.Map(sessions, target, thread =>
-            _reader.Read(DateTimeOffset.UtcNow).ForThread(thread));
+        var relevant = sessions.Where(session => session.IsAlive ||
+            session.State == K15NormalizedState.DonePendingAttention).ToArray();
+        var doneCandidates = relevant.Where(session =>
+            session.State == K15NormalizedState.DonePendingAttention).ToArray();
+        var canPollUnread = CodexPetAdapter.ShouldPollUnread(sessions);
+        if (canPollUnread && !_refresh.Enabled) _refresh.Start();
+        if (!canPollUnread && _refresh.Enabled) _refresh.Stop();
+        var target = relevant.Length == 1 ? relevant[0].SessionId : null;
+        var unreadState = canPollUnread && !string.IsNullOrWhiteSpace(doneCandidates[0].ThreadId)
+            ? _reader.Read(DateTimeOffset.UtcNow).ForThread(doneCandidates[0].ThreadId)
+            : CodexUnreadState.Unknown;
+        var snapshot = CodexPetAdapter.Map(sessions, target, unreadState);
         _window.SetState(snapshot.State);
-        if (snapshot.State == CodexPetVisualState.Review && !_refresh.Enabled) _refresh.Start();
-        if (snapshot.State != CodexPetVisualState.Review && _refresh.Enabled) _refresh.Stop();
     }
 
     public void Dispose()
