@@ -35,13 +35,13 @@ if ($manifest.defaults.bridgeEnabled -or $manifest.defaults.physicalHidEnabled -
 if (@($manifest.executables | Where-Object { $_ -notin $allow }).Count -or @($manifest.executables).Count -ne 4) { throw 'executable allowlist mismatch' }
 foreach ($entry in $manifest.contentSha256.psobject.Properties) {
   $file = Join-Path $sourcePayload ($entry.Name -replace '/','\')
-  if (-not (Test-Path $file) -or (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) { throw "source payload hash mismatch: $($entry.Name)" }
+  if (-not (Test-Path $file) -or (Get-VNextFileSha256 -LiteralPath $file) -ne $entry.Value) { throw "source payload hash mismatch: $($entry.Name)" }
 }
 New-Item -ItemType Directory -Path $root, (Join-Path $root 'versions'), (Join-Path $root 'integration'), (Join-Path $root 'data') -Force | Out-Null
 $targetVersion = Join-Path $root "versions\$version"; $targetManifest = Join-Path $targetVersion 'manifest.json'
 if (Test-Path $targetVersion) {
   $installedManifest = Test-VNextVersionIntegrity $targetVersion
-  if (-not (Test-Path $targetManifest) -or (Get-FileHash $targetManifest -Algorithm SHA256).Hash -ne (Get-FileHash $sourceManifestPath -Algorithm SHA256).Hash) { throw 'existing version differs; refusing overwrite' }
+  if (-not (Test-Path $targetManifest) -or (Get-VNextFileSha256 -LiteralPath $targetManifest) -ne (Get-VNextFileSha256 -LiteralPath $sourceManifestPath)) { throw 'existing version differs; refusing overwrite' }
 } else {
   $tempVersion = Join-Path $root "versions\.$version.$([guid]::NewGuid().ToString('N')).tmp"
   try { Copy-Item $sourceVersion $tempVersion -Recurse; Move-Item $tempVersion $targetVersion } finally { if (Test-Path $tempVersion) { Remove-Item $tempVersion -Recurse -Force } }

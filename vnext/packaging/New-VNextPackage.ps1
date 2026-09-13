@@ -7,6 +7,7 @@ param(
   [string]$SourceRef
 )
 $ErrorActionPreference = 'Stop'
+$hashHelper = Join-Path $PSScriptRoot 'VNextPackageHash.ps1'; . $hashHelper
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $checkedOutCommit = (& git -C $repo rev-parse HEAD).Trim()
 if (-not $SourceCommit) { $SourceCommit = $checkedOutCommit }
@@ -52,7 +53,7 @@ foreach ($name in $expected) { if (-not (Test-Path (Join-Path $payload $name))) 
 $hashes = [ordered]@{}
 Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForEach-Object {
   $relative = $_.FullName.Substring($payload.Length + 1).Replace('\','/')
-  $hashes[$relative] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+  $hashes[$relative] = Get-VNextFileSha256 -LiteralPath $_.FullName
 }
 $versionManifest | Add-Member -NotePropertyName contentSha256 -NotePropertyValue $hashes
 $versionManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $out "versions\$Version\manifest.json")
