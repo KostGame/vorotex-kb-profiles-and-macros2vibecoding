@@ -393,6 +393,16 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             var packageFamilyName = GetString(root, "packageFamilyName");
             var errorHint = root.TryGetProperty("errorHint", out var errorNode) &&
                 errorNode.ValueKind is JsonValueKind.True;
+            var sessionId = GetString(root, "sessionId");
+            var threadId = GetString(root, "threadId");
+            // For an ordinary root Codex chat, upstream defines the hook
+            // session_id as the root thread identity. Keep this derivation
+            // scoped to the root Stop event; descendant sessions must not be
+            // treated as root threads, and invalid IDs remain uncorrelated.
+            if (source == "codex_hook" && eventName == "Stop" &&
+                string.IsNullOrWhiteSpace(threadId) &&
+                CodexUnreadStateReader.Bounded(sessionId) && sessionId != "__legacy__")
+                threadId = sessionId;
 
             return new StatusInputEvent(
                 timestampUtc.ToUniversalTime(),
@@ -401,10 +411,10 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 notificationId,
                 packageFamilyName,
                 errorHint,
-                GetString(root, "sessionId"),
+                sessionId,
                 GetString(root, "turnId"),
                 GetString(root, "cwd"),
-                ThreadId: GetString(root, "threadId"));
+                ThreadId: threadId);
         }
         catch (JsonException)
         {
