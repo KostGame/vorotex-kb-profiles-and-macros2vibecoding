@@ -1,8 +1,25 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$PackageDirectory)
+param([Parameter(Mandatory=$true)][string]$PackageDirectory, [switch]$NestedValidation)
 $ErrorActionPreference = 'Stop'
+$hashHelper = Join-Path $PSScriptRoot 'VNextPackageHash.ps1'; . $hashHelper
 $package = (Resolve-Path $PackageDirectory).Path
 $integrity = Join-Path $PSScriptRoot 'VNextPackageIntegrity.ps1'; . $integrity
+$forbiddenHashCommand = 'Get-' + 'FileHash'
+foreach ($script in (Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File)) {
+  if ((Get-Content -LiteralPath $script.FullName -Raw).Contains($forbiddenHashCommand)) { throw "packaging runtime depends on forbidden hash command: $($script.Name)" }
+}
+$hashProbe = Join-Path ([IO.Path]::GetTempPath()) ('k15-hash-probe-' + [guid]::NewGuid().ToString('N') + '.txt')
+try {
+  Set-Content -LiteralPath $hashProbe -Value 'NoProfile SHA-256 probe' -NoNewline
+  $expectedProbe = Get-VNextFileSha256 -LiteralPath $hashProbe
+  $childProbe = & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '$hashHelper'; Get-VNextFileSha256 -LiteralPath '$hashProbe'" 2>&1
+  if ($LASTEXITCODE -ne 0 -or ($childProbe | Select-Object -Last 1).ToString().Trim() -ne $expectedProbe) { throw 'fresh NoProfile hash helper probe failed' }
+} finally { if (Test-Path -LiteralPath $hashProbe) { Remove-Item -LiteralPath $hashProbe -Force } }
+if (-not $NestedValidation) {
+  $nestedOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path -PackageDirectory $package -NestedValidation 2>&1
+  if ($LASTEXITCODE -ne 0 -or ($nestedOutput -notcontains 'PACKAGE_MANIFEST=PASS') -or ($nestedOutput -notcontains 'PACKAGE_HASHES=PASS')) { throw 'fresh NoProfile nested validation child failed' }
+  Write-Output 'PACKAGE_NOPROFILE_NESTED_VALIDATION=PASS'
+}
 $selected = (Get-Content (Join-Path $package 'current-version.txt') -Raw).Trim()
 $manifestPath = Join-Path $package "versions\$selected\manifest.json"
 $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
@@ -46,7 +63,7 @@ try {
   Move-Item (Join-Path $sourceB "versions\$selected") (Join-Path $sourceB 'versions\B'); Set-Content (Join-Path $sourceB 'current-version.txt') 'B' -NoNewline
   $bManifestPath = Join-Path $sourceB 'versions\B\manifest.json'; $bManifest = Get-Content $bManifestPath -Raw | ConvertFrom-Json; $bManifest.version = 'B'
   $mutated = Join-Path $sourceB 'versions\B\payload\Vorotex.K15.Runtime.exe'; Add-Content $mutated 'B' -NoNewline
-  $hashes = [ordered]@{}; $bPayload = Join-Path $sourceB 'versions\B\payload'; Get-ChildItem $bPayload -File -Recurse | ForEach-Object { $hashes[$_.FullName.Substring($bPayload.Length + 1).Replace('\','/')] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }; $bManifest.contentSha256 = $hashes; $bManifest | ConvertTo-Json -Depth 8 | Set-Content $bManifestPath
+  $hashes = [ordered]@{}; $bPayload = Join-Path $sourceB 'versions\B\payload'; Get-ChildItem $bPayload -File -Recurse | ForEach-Object { $hashes[$_.FullName.Substring($bPayload.Length + 1).Replace('\','/')] = Get-VNextFileSha256 -LiteralPath $_.FullName }; $bManifest.contentSha256 = $hashes; $bManifest | ConvertTo-Json -Depth 8 | Set-Content $bManifestPath
   Test-VNextVersionIntegrity (Join-Path $sourceB 'versions\B') | Out-Null
   $legacy = Join-Path $temp 'legacy-sentinel.txt'; Set-Content $legacy 'legacy'
   Invoke-Apply $package $install $manifest.source.buildCommit
@@ -55,15 +72,15 @@ try {
   try { Invoke-Apply $package $install $manifest.source.buildCommit; throw 'corrupted installed payload accepted' } catch { if ($_.Exception.Message -eq 'corrupted installed payload accepted') { throw } }
   if ((Get-Content (Join-Path $install 'current-version.txt') -Raw).Trim() -ne $selected) { throw 'selector changed after corrupted reapply' }
   Copy-Item (Join-Path $payload 'Vorotex.K15.Runtime.exe') $installedA -Force
-  $aHash = (Get-FileHash (Join-Path $install "versions\$selected\payload\Vorotex.K15.Runtime.exe")).Hash; $integrationHash = (Get-FileHash (Join-Path $install 'integration\default-config.json')).Hash; $data = Join-Path $install 'data\state.txt'; Set-Content $data 'persistent'; $dataHash = (Get-FileHash $data).Hash
+  $aHash = Get-VNextFileSha256 -LiteralPath (Join-Path $install "versions\$selected\payload\Vorotex.K15.Runtime.exe"); $integrationHash = Get-VNextFileSha256 -LiteralPath (Join-Path $install 'integration\default-config.json'); $data = Join-Path $install 'data\state.txt'; Set-Content $data 'persistent'; $dataHash = Get-VNextFileSha256 -LiteralPath $data
   Invoke-Apply $sourceB $install $manifest.source.buildCommit
   Test-VNextVersionIntegrity (Join-Path $install "versions\$selected") | Out-Null; Test-VNextVersionIntegrity (Join-Path $install 'versions\B') | Out-Null
-  $sourceBHash = (Get-FileHash (Join-Path $sourceB 'versions\B\manifest.json') -Algorithm SHA256).Hash; $installedBHash = (Get-FileHash (Join-Path $install 'versions\B\manifest.json') -Algorithm SHA256).Hash; if ($sourceBHash -ne $installedBHash) { throw "B manifest changed during install: source=$sourceBHash installed=$installedBHash" }
+  $sourceBHash = Get-VNextFileSha256 -LiteralPath (Join-Path $sourceB 'versions\B\manifest.json'); $installedBHash = Get-VNextFileSha256 -LiteralPath (Join-Path $install 'versions\B\manifest.json'); if ($sourceBHash -ne $installedBHash) { throw "B manifest changed during install: source=$sourceBHash installed=$installedBHash" }
   $conflict = Join-Path $temp 'source-conflict'; New-Item -ItemType Directory -Path $conflict -Force | Out-Null; Copy-Item (Join-Path $package '*') $conflict -Recurse
   $conflictExe = Join-Path $conflict "versions\$selected\payload\Vorotex.K15.Runtime.exe"; Add-Content $conflictExe 'CONFLICT' -NoNewline
-  $conflictManifestPath = Join-Path $conflict "versions\$selected\manifest.json"; $conflictManifest = Get-Content $conflictManifestPath -Raw | ConvertFrom-Json; $conflictName = Split-Path $conflictExe -Leaf; $conflictManifest.contentSha256 | Add-Member -Force -NotePropertyName $conflictName -NotePropertyValue (Get-FileHash $conflictExe -Algorithm SHA256).Hash.ToLowerInvariant(); $conflictManifest | ConvertTo-Json -Depth 8 | Set-Content $conflictManifestPath
+  $conflictManifestPath = Join-Path $conflict "versions\$selected\manifest.json"; $conflictManifest = Get-Content $conflictManifestPath -Raw | ConvertFrom-Json; $conflictName = Split-Path $conflictExe -Leaf; $conflictManifest.contentSha256 | Add-Member -Force -NotePropertyName $conflictName -NotePropertyValue (Get-VNextFileSha256 -LiteralPath $conflictExe); $conflictManifest | ConvertTo-Json -Depth 8 | Set-Content $conflictManifestPath
   try { Invoke-Apply $conflict $install $manifest.source.buildCommit; throw 'different existing version accepted' } catch { if ($_.Exception.Message -eq 'different existing version accepted') { throw } }
-  if ((Get-Content (Join-Path $install 'current-version.txt') -Raw).Trim() -ne 'B' -or (Get-FileHash (Join-Path $install 'integration\default-config.json')).Hash -ne $integrationHash -or (Get-FileHash $data).Hash -ne $dataHash -or (Get-FileHash (Join-Path $install "versions\$selected\payload\Vorotex.K15.Runtime.exe")).Hash -ne $aHash -or (Get-Content $legacy -Raw).Trim() -ne 'legacy') { throw 'A to B changed stable, A payload or legacy state' }
+  if ((Get-Content (Join-Path $install 'current-version.txt') -Raw).Trim() -ne 'B' -or (Get-VNextFileSha256 -LiteralPath (Join-Path $install 'integration\default-config.json')) -ne $integrationHash -or (Get-VNextFileSha256 -LiteralPath $data) -ne $dataHash -or (Get-VNextFileSha256 -LiteralPath (Join-Path $install "versions\$selected\payload\Vorotex.K15.Runtime.exe")) -ne $aHash -or (Get-Content $legacy -Raw).Trim() -ne 'legacy') { throw 'A to B changed stable, A payload or legacy state' }
   Invoke-Apply $sourceB $install $manifest.source.buildCommit
   try { Invoke-Apply $sourceB $install ('0' * 40); throw 'provenance mismatch accepted' } catch { if ($_.Exception.Message -eq 'provenance mismatch accepted') { throw } }
   try { Invoke-Apply $sourceB $install $manifest.source.buildCommit -fail; throw 'selector failure accepted' } catch { if ($_.Exception.Message -eq 'selector failure accepted') { throw } }

@@ -1,3 +1,7 @@
+if (-not (Get-Command Get-VNextFileSha256 -ErrorAction SilentlyContinue)) {
+  $hashHelper = Join-Path $PSScriptRoot 'VNextPackageHash.ps1'; . $hashHelper
+}
+
 function Test-VNextVersionIntegrity {
   param([Parameter(Mandatory=$true)][string]$VersionDirectory)
   $manifestPath = Join-Path $VersionDirectory 'manifest.json'; $payload = Join-Path $VersionDirectory 'payload'
@@ -19,7 +23,7 @@ function Test-VNextVersionIntegrity {
   foreach ($file in $physical) { if (-not $keySet.ContainsKey($file)) { throw "unmanifested payload file: $file" } }
   foreach ($key in $keys) {
     $file = Join-Path -Path $payload -ChildPath ($key -replace '/','\\')
-    if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $values[$key]) { throw "payload hash mismatch: $key" }
+    if ((Get-VNextFileSha256 -LiteralPath $file) -ne $values[$key]) { throw "payload hash mismatch: $key" }
   }
   $required = @('Vorotex.K15.Runtime.exe','Vorotex.K15.StatusTray.exe','Vorotex.K15.ControlCenter.exe','Vorotex.K15.LiveDashboard.exe')
   foreach ($name in $required) { if (-not $keySet.ContainsKey($name)) { throw "required executable is not hashed: $name" } }
