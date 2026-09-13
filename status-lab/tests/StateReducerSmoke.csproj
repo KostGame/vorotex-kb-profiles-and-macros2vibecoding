@@ -18,5 +18,6 @@
     <Compile Include="..\ConfigToml.cs" Link="ConfigToml.cs" />
     <Compile Include="..\EventJournal.cs" Link="EventJournal.cs" />
     <Compile Include="..\JournalStateNormalizer.cs" Link="JournalStateNormalizer.cs" />
+    <Compile Include="..\CodexPetAdapter.cs" Link="CodexPetAdapter.cs" />
   </ItemGroup>
 </Project>

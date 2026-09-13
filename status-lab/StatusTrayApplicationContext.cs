@@ -9,6 +9,8 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private readonly StatusLabConfig _config;
     private readonly WindowsNotificationPoller _notificationPoller = new();
     private readonly JournalStateNormalizer _stateNormalizer;
+    private readonly CodexUnreadStateReader _unreadReader;
+    private readonly CodexPetController _codexPet;
     private readonly K15DeviceManager _deviceManager;
     private readonly K15RgbCanary _rgbCanary;
     private readonly NotifyIcon _trayIcon;
@@ -36,8 +38,10 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
         var unreadStatePath = CodexUnreadStateReader.ResolveStatePath(Environment.GetEnvironmentVariable("CODEX_HOME"));
+        _unreadReader = new CodexUnreadStateReader(unreadStatePath, "local");
         _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds,
-            new CodexUnreadStateReader(unreadStatePath, "local"));
+            _unreadReader);
+        _codexPet = new CodexPetController(_stateNormalizer, _unreadReader);
         _deviceManager = new K15DeviceManager(Path.Combine(EventJournal.DirectoryPath, "preferred-device.json"));
         _rgbCanary = new K15RgbCanary(_config, _deviceManager);
         _trackingOnIcon = TrayIconFactory.Create(trackingEnabled: true);
@@ -118,6 +122,9 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         menu.Items.Add(_stateStatusItem);
         menu.Items.Add(_trackingStatusItem);
         menu.Items.Add(_notificationStatusItem);
+        var petToggle = new ToolStripMenuItem("Codex Pet: показать / скрыть") { Name = "CodexPetToggle" };
+        petToggle.Click += (_, _) => _codexPet.Toggle();
+        menu.Items.Add(petToggle);
         menu.Items.Add(_deviceStatusItem);
         menu.Items.Add(_rgbStatusItem);
         menu.Items.Add("✓ Сбросить WAITING / DONE", null, (_, _) => ManualResetAttention());
@@ -729,6 +736,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _ipcCancellation.Cancel();
         await _notificationPoller.DisposeAsync();
         await _stateNormalizer.DisposeAsync();
+        _codexPet.Dispose();
         await _rgbCanary.DisposeAsync();
         _deviceManager.Dispose();
         ExitThread();

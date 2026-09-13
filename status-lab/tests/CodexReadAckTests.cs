@@ -40,9 +40,31 @@ internal static class CodexReadAckTests
     private static CodexUnreadState Parse(string json, string thread = "T") =>
         CodexUnreadStateReader.Parse(Encoding.UTF8.GetBytes(json), "local", T, T).ForThread(thread);
     private static string Store(string atom) => "{\"electron-persisted-atom-state\":{\"unread-thread-ids-by-host-v1\":" + atom + "},\"private\":\"must not escape\"}";
+    private static string Canonical(string identities, string migration = "") =>
+        "{\"electron-thread-read-state-v1\":{\"version\":1,\"unreadByIdentity\":" + identities + "}" + migration + "}";
+    private static CodexSessionSnapshot Session(K15NormalizedState state, string id = "S", string thread = "T") =>
+        new(id, state, true, true, "C:\\synthetic", thread, "U", T);
 
     public static void Run()
     {
+        Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[\"T\"]}}")) == CodexUnreadState.HasUnread, "CANONICAL_SINGLE_IDENTITY_HAS_UNREAD");
+        Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[]}}")) == CodexUnreadState.NoUnread, "CANONICAL_SINGLE_IDENTITY_NO_UNREAD");
+        Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[\"T\"]},\"identity-b\":{\"host-a\":[]}}")) == CodexUnreadState.Unknown, "CANONICAL_MULTIPLE_IDENTITIES_UNKNOWN");
+        Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[],\"host-b\":[]}}")) == CodexUnreadState.Unknown, "CANONICAL_MULTIPLE_HOSTS_UNKNOWN");
+        Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[],\"host-b\":[\"T\"]}}", ",\"legacyMigration\":{\"adoptedHostIds\":{\"local\":\"host-b\"}}")) == CodexUnreadState.HasUnread, "CANONICAL_ADOPTED_HOST");
+        Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[],\"host-b\":[]}}", ",\"legacyMigration\":{\"adoptedHostIds\":{\"local\":\"host-missing\"}}")) == CodexUnreadState.Unknown, "CANONICAL_ADOPTED_HOST_MISSING");
+        Check(Parse("{\"electron-thread-read-state-v1\":{\"version\":2},\"electron-persisted-atom-state\":{\"unread-thread-ids-by-host-v1\":{\"local\":[\"T\"]}}}") == CodexUnreadState.Unknown, "CANONICAL_NO_LEGACY_FALLBACK");
+        Check(Parse("{\"electron-thread-read-state-v1\":{\"version\":1,\"unreadByIdentity\":null}}") == CodexUnreadState.Unknown, "CANONICAL_MALFORMED_UNKNOWN");
+        Check(Parse(Store("{\"local\":[]}")) == CodexUnreadState.NoUnread, "ABSENT_CANONICAL_USES_LEGACY");
+        Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[\"T\",\"T\"]}}")) == CodexUnreadState.Unknown, "CANONICAL_DUPLICATE_THREAD_REJECTED");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.Normal)], "S", _ => CodexUnreadState.Unknown).State == CodexPetVisualState.Idle, "PET_NORMAL_IDLE");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.Running)], "S", _ => CodexUnreadState.Unknown).State == CodexPetVisualState.Running, "PET_RUNNING");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.Waiting)], "S", _ => CodexUnreadState.Unknown).State == CodexPetVisualState.Waiting, "PET_WAITING");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", _ => CodexUnreadState.HasUnread).State == CodexPetVisualState.Review, "PET_REVIEW_EXACT_THREAD");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", _ => CodexUnreadState.NoUnread).State == CodexPetVisualState.Idle, "PET_NO_UNREAD_IDLE");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", _ => CodexUnreadState.Unknown).State == CodexPetVisualState.Idle, "PET_UNKNOWN_IDLE");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", thread => thread == "other" ? CodexUnreadState.HasUnread : CodexUnreadState.NoUnread).State == CodexPetVisualState.Idle, "PET_DIFFERENT_THREAD_IDLE");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.Running, "A"), Session(K15NormalizedState.Waiting, "B")], null, _ => CodexUnreadState.HasUnread).Reason == "ambiguous_multiple_sessions", "PET_MULTI_SESSION_AMBIGUOUS");
         Check(Parse(Store("{\"local\":[\"T\"],\"remote\":[\"R\"]}")) == CodexUnreadState.HasUnread, "EXACT_HOST_THREAD");
         Check(Parse(Store("{\"local\":[],\"remote\":[\"T\"]}")) == CodexUnreadState.NoUnread, "HOST_ISOLATION");
         Check(Parse(Store("{\"remote\":[]}")) == CodexUnreadState.Unknown, "MISSING_HOST_UNKNOWN");
