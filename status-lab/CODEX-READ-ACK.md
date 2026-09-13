@@ -7,9 +7,13 @@ navigation, toasts and Dashboard activity are not read receipts.
 ## Causal contract
 
 An eligible completion has an exact, unique session/thread/turn binding, a completion
-generation and a runtime epoch. The existing sanitized `turn_completed` bridge route
-supplies thread/turn correlation. The unread reader never joins an unread ID directly
-to a hook session ID.
+generation and a runtime epoch. For an ordinary root Codex chat, upstream defines the
+hook `session_id` as the root thread identity, so the minimal root Pet path can derive
+the thread binding from a valid `Stop` hook. The unread reader therefore compares the
+canonical unread ID with that exact root identity; it does not use a heuristic join.
+The existing sanitized `turn_completed` bridge route remains available for separately
+correlated, legacy, and other cases. This root identity rule does not apply to
+subagent sessions.
 
 After completion, a fresh HasUnread observation arms that binding. Two later valid
 NoUnread snapshots produce ready evidence. The reducer checks that the same completion
@@ -18,11 +22,11 @@ applied or the exact completion stops being eligible. Unrelated reorder-pending 
 do not discard or block its delivery; a pending event affecting the same completion
 does block delivery until the event is reduced.
 
-If Stop arrives before the bridge completion, the later exact unique bridge event can
+If Stop arrives without a root-derived binding, the later exact unique bridge event can
 enrich that same DONE generation without another state transition or aggregate change.
 Conflicting correlation disables read ACK for that generation. Replaying the raw
-sanitized bridge event restores the binding, including when the earlier Stop diagnostic
-had no thread ID.
+sanitized bridge event restores the binding. Bridge completion correlation remains
+backwards-compatible and is not required for the ordinary root Pet READY path.
 
 | Situation | Result |
 | --- | --- |

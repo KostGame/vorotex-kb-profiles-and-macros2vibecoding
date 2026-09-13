@@ -16,6 +16,16 @@ static StatusInputEvent Approval(DateTimeOffset t, string decision, string rpcId
 static StatusInputEvent Completion(DateTimeOffset t, string threadId, string turnId, string status = "completed") =>
     new(t, "codex_stdio_bridge", "turn_completed", SchemaVersion: "k15-codex-completion/v1",
         CompletionStatus: status, ThreadId: threadId, TurnId: turnId);
+static string HookJson(DateTimeOffset timestamp, string eventName, string? sessionId, string? turnId) =>
+    JsonSerializer.Serialize(new
+    {
+        timestampUtc = timestamp,
+        source = "codex_hook",
+        @event = eventName,
+        sessionId,
+        turnId,
+        cwd = @"C:\work\main"
+    });
 
 var t = DateTimeOffset.Parse("2026-08-25T00:00:00Z");
 var reducer = new StateReducer();
@@ -37,6 +47,33 @@ var completionDuplicate = noStop.Apply(Completion(t.AddSeconds(2.5), "thread-don
 Require(completionDuplicate is null && noStop.LastSessionTransitions.Count == 0 &&
         noStop.State == K15NormalizedState.DonePendingAttention,
     "Duplicate completion after DONE must be idempotent.");
+
+var parsedRootPrompt = JournalStateNormalizer.ParseInput(HookJson(t, "UserPromptSubmit", "root-thread", "root-turn"));
+var parsedRootStop = JournalStateNormalizer.ParseInput(HookJson(t.AddSeconds(1), "Stop", "root-thread", "root-turn"));
+Require(parsedRootPrompt is not null && parsedRootStop?.ThreadId == "root-thread" &&
+        parsedRootStop.TurnId == "root-turn", "Root Stop must derive its thread identity from session_id.");
+var rootReducer = new StateReducer();
+rootReducer.Rehydrate([parsedRootPrompt!, parsedRootStop!]);
+var rootSnapshot = rootReducer.SessionSnapshots.Single();
+Require(rootSnapshot.ThreadId == "root-thread" && rootSnapshot.State == K15NormalizedState.DonePendingAttention &&
+        rootReducer.ReadAckCandidates.Single().ThreadId == "root-thread",
+    "Startup replay must preserve the derived root Stop completion correlation.");
+Require(CodexPetAdapter.Map(rootReducer.SessionSnapshots, "root-thread", CodexUnreadState.HasUnread).State == CodexPetVisualState.Review,
+    "A canonical unread root thread must map completion to REVIEW.");
+Require(CodexPetAdapter.Map(rootReducer.SessionSnapshots, "root-thread", CodexUnreadState.NoUnread).State == CodexPetVisualState.Idle,
+    "A root thread without unread state must remain IDLE.");
+var otherUnread = CodexPetAdapter.Map(rootReducer.SessionSnapshots, "root-thread", CodexUnreadState.NoUnread);
+Require(otherUnread.State != CodexPetVisualState.Review, "Unread state for another thread must not create REVIEW for root.");
+var invalidRootStop = JournalStateNormalizer.ParseInput(HookJson(t, "Stop", null, "root-turn"));
+Require(invalidRootStop?.ThreadId is null or "", "Missing root session_id must fail closed.");
+var missingTurnRootStop = JournalStateNormalizer.ParseInput(HookJson(t, "Stop", "root-thread", null));
+var missingTurnReducer = new StateReducer();
+missingTurnReducer.Apply(JournalStateNormalizer.ParseInput(HookJson(t, "UserPromptSubmit", "root-thread", "root-turn"))!);
+missingTurnReducer.Apply(missingTurnRootStop!);
+Require(missingTurnReducer.ReadAckCandidates.Count == 0, "Missing root turn_id must fail closed.");
+var subagentStop = JournalStateNormalizer.ParseInput(HookJson(t, "SubagentStop", "subagent-session", "subagent-turn"));
+Require(subagentStop?.ThreadId is null or "", "SubagentStop must not receive root session/thread derivation.");
+Console.WriteLine("ROOT_STOP_CORRELATION_AND_GUARDS=PASS");
 
 var fallback = new StateReducer();
 fallback.Apply(Hook(t, "UserPromptSubmit", "fallback-session", turn: "fallback-turn"));

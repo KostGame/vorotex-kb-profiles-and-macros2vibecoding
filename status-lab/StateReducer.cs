@@ -582,7 +582,11 @@ internal sealed class StateReducer
             session.CompletionCorrelationRejected = false;
             session.CompletionGeneration++;
             session.ReadAcknowledgedCompletion = null;
-            session.Completion = ValidCorrelation(session.Id, threadId, turnId)
+            // A Stop must carry the turn that it terminates. Do not reuse a
+            // previous session turn when the hook omitted turn_id.
+            var stopHasExactTurn = input is null || input.EventName != "Stop" ||
+                CodexUnreadStateReader.Bounded(input.TurnId);
+            session.Completion = stopHasExactTurn && ValidCorrelation(session.Id, threadId, turnId)
                 ? new(session.Id, threadId, turnId, session.CompletionGeneration, _runtimeEpoch, timestampUtc) : null;
         }
         var transition = new SessionStateTransition(
