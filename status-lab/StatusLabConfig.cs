@@ -27,6 +27,16 @@ internal enum PaletteSource
     ProfilePair
 }
 
+internal enum RgbEnablePresentation
+{
+    Baseline,
+    Running,
+    Waiting,
+    Done,
+    Error,
+    Activation
+}
+
 internal sealed class LightingEffectConfig
 {
     public bool Enabled { get; set; } = true;
@@ -77,7 +87,7 @@ internal sealed class ProfileSetConfig
 
 internal sealed class StatusLabConfig
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
     public const int MaxNotifierColors = 2;
     public static string FilePath { get; } = Path.Combine(EventJournal.DirectoryPath, "config.toml");
 
@@ -116,8 +126,9 @@ internal sealed class StatusLabConfig
         // Physical K15 already has a native A/B transition flash. RC1 leaves it alone.
         ProfileSwitch = Effect(K15LightingMode.FlowingWater, PaletteSource.Profile, 5, 5, 0, 0, enabled: false),
         StopSignal = Effect(K15LightingMode.CycleBreathing, PaletteSource.ProfilePair, 6, 7, 0, 3),
-        // Cycle breathing visibly alternates both profile colors within the short activation window.
-        ActivationSignal = Effect(K15LightingMode.CycleBreathing, PaletteSource.ProfilePair, 6, 7, 0, 3),
+        // RGB enablement is not a Codex state and must not flash by default.
+        // Keep the former signal parameters so users can opt into it explicitly.
+        ActivationSignal = Effect(K15LightingMode.CycleBreathing, PaletteSource.ProfilePair, 6, 7, 0, 3, enabled: false),
         EffectLabDurationSeconds = 4
     };
 
@@ -190,6 +201,19 @@ internal sealed class StatusLabConfig
         _ => throw new ArgumentOutOfRangeException(nameof(state), "NORMAL restores the managed profile baseline or exact snapshot.")
     };
 
+    internal RgbEnablePresentation SelectEnablePresentation(K15NormalizedState state) =>
+        ActivationSignal.Enabled && ActivationSignal.DurationSeconds > 0
+            ? RgbEnablePresentation.Activation
+            : state switch
+            {
+                K15NormalizedState.Normal => RgbEnablePresentation.Baseline,
+                K15NormalizedState.Running => RgbEnablePresentation.Running,
+                K15NormalizedState.Waiting => RgbEnablePresentation.Waiting,
+                K15NormalizedState.DonePendingAttention => RgbEnablePresentation.Done,
+                K15NormalizedState.Error => RgbEnablePresentation.Error,
+                _ => throw new ArgumentOutOfRangeException(nameof(state))
+            };
+
     public LightingEffectConfig RenderForProfile(byte onboardSlot, LightingEffectConfig source)
     {
         var rendered = source.Clone();
@@ -248,13 +272,17 @@ internal sealed class StatusLabConfig
 
         if (LooksLikeLegacyActivationDefault(ActivationSignal))
         {
-            ActivationSignal.Enabled = true;
             ActivationSignal.Mode = K15LightingMode.CycleBreathing;
             ActivationSignal.Palette = PaletteSource.ProfilePair;
             ActivationSignal.Brightness = 6;
             ActivationSignal.Speed = 7;
             ActivationSignal.Direction = 0;
             ActivationSignal.DurationSeconds = 3;
+            ActivationSignal.Enabled = false;
+        }
+        else if (LooksLikeFormerV5ActivationDefault(ActivationSignal))
+        {
+            ActivationSignal.Enabled = false;
         }
 
         SchemaVersion = CurrentSchemaVersion;
@@ -275,6 +303,15 @@ internal sealed class StatusLabConfig
         effect.Palette == PaletteSource.ProfilePair &&
         effect.Brightness == 5 &&
         effect.Speed == 5 &&
+        effect.Direction == 0 &&
+        Math.Abs(effect.DurationSeconds - 3) < 0.001;
+
+    private static bool LooksLikeFormerV5ActivationDefault(LightingEffectConfig effect) =>
+        effect.Enabled &&
+        effect.Mode == K15LightingMode.CycleBreathing &&
+        effect.Palette == PaletteSource.ProfilePair &&
+        effect.Brightness == 6 &&
+        effect.Speed == 7 &&
         effect.Direction == 0 &&
         Math.Abs(effect.DurationSeconds - 3) < 0.001;
 

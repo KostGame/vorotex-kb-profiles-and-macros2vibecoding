@@ -78,7 +78,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             StatusChanged?.Invoke($"RGB: ON · profile {ProfileName(_snapshot.OnboardSlot)}");
             StartMonitorLocked();
 
-            if (_config.ActivationSignal.Enabled && _config.ActivationSignal.DurationSeconds > 0)
+            if (_config.SelectEnablePresentation(currentState) == RgbEnablePresentation.Activation)
             {
                 BeginOverlayLocked(_config.ActivationSignal, "ACTIVATION",
                     _config.ActivationSignal.DurationSeconds, "rgb_activation_signal_started");

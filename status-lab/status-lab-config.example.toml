@@ -11,7 +11,7 @@
 # Horse race / native 0x83, Tetris, Neon и Ambilight остаются в K15 Lighting Lab.
 # Status Lab НИКОГДА программно не переключает hardware Profile A/B.
 
-schema_version = 5
+schema_version = 6
 
 [device]
 wire_color_order = "rgb"
@@ -97,8 +97,8 @@ direction = 0
 duration_seconds = 3
 
 [activation]
-# Включение RGB-индикации: быстрый Cycle breathing RED <-> BLUE.
-enabled = true
+# Опциональный activation signal; RGB ON по умолчанию сохраняет baseline.
+enabled = false
 effect = "cycle_breathing"
 palette = "profile_pair"
 brightness = 6
