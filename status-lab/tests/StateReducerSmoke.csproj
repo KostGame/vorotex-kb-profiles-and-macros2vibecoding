@@ -20,5 +20,6 @@
     <Compile Include="..\JournalStateNormalizer.cs" Link="JournalStateNormalizer.cs" />
     <Compile Include="..\CodexPetAdapter.cs" Link="CodexPetAdapter.cs" />
     <Compile Include="..\VisualEffectIntent.cs" Link="VisualEffectIntent.cs" />
+    <Compile Include="..\MiniK15ControlLayout.cs" Link="MiniK15ControlLayout.cs" />
   </ItemGroup>
 </Project>

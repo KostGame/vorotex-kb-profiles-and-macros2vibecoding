@@ -639,6 +639,20 @@ Require(VisualEffectIntentFactory.ForPet(CodexPetVisualState.Waiting, config).Fa
     "PET_VISUAL_WAITING_CONFIG_BREATHING");
 Require(VisualEffectIntentFactory.ForPet(CodexPetVisualState.Review, config).Family == VisualEffectFamily.Breathing,
     "PET_VISUAL_REVIEW_CONFIG_DONE");
+var k15Controls = MiniK15ControlLayout.Controls;
+Require(k15Controls.Count == 17, "K15_CONTROL_LAYOUT_COUNT");
+Require(k15Controls.Count(control => control.Band == MiniK15ControlBand.Top) == 7, "TOP_ROW_CONTROL_COUNT");
+Require(k15Controls.Count(control => control.Band == MiniK15ControlBand.Middle) == 6, "MIDDLE_ROW_CONTROL_COUNT");
+Require(k15Controls.Count(control => control.Band == MiniK15ControlBand.Bottom) == 4, "BOTTOM_CONTROL_COUNT");
+Require(k15Controls.Any(control => control.Kind == MiniK15ControlKind.Rotary), "HAS_ROTARY_CONTROL");
+Require(k15Controls.Any(control => control.Kind == MiniK15ControlKind.Joystick), "HAS_JOYSTICK_CONTROL");
+Require(k15Controls.Single(control => control.Kind == MiniK15ControlKind.WideEnter).Width >
+        k15Controls.Where(control => control.Band == MiniK15ControlBand.Middle && control.Kind == MiniK15ControlKind.Key).Max(control => control.Width),
+    "HAS_WIDE_ENTER");
+Require(k15Controls.Single(control => control.Kind == MiniK15ControlKind.LongBottomKey).Width >
+        k15Controls.Where(control => control.Band == MiniK15ControlBand.Bottom && control.Kind == MiniK15ControlKind.Key).Max(control => control.Width),
+    "HAS_LONG_BOTTOM_KEY");
+Console.WriteLine("MINI_K15_REFERENCE_LAYOUT_SMOKE=PASS");
 var customPetConfig = StatusLabConfig.CreateDefault();
 customPetConfig.States.Running = new LightingEffectConfig { Mode = K15LightingMode.CycleBreathing, Enabled = true, Brightness = 3, Speed = 2, Direction = 1 };
 customPetConfig.States.Waiting = new LightingEffectConfig { Mode = K15LightingMode.Constant, Enabled = true, Brightness = 4, Speed = 4, Direction = 0 };
@@ -661,8 +675,8 @@ Require(VisualEffectIntentFactory.FromLighting(CodexPetVisualState.Running,
     "PET_VISUAL_DISABLED_EFFECT_OFF");
 var flowIntent = VisualEffectIntentFactory.FromLighting(CodexPetVisualState.Running,
     new LightingEffectConfig { Enabled = true, Mode = K15LightingMode.FlowingWater, Brightness = 6, Speed = 7, Direction = 0 });
-Require(VisualEffectAnimator.Sample(flowIntent, 0, 0, 12).Intensity > VisualEffectAnimator.Sample(flowIntent, 0, 11, 12).Intensity &&
-        VisualEffectAnimator.Sample(flowIntent, 1.5, 11, 12).Intensity > VisualEffectAnimator.Sample(flowIntent, 1.5, 0, 12).Intensity,
+Require(VisualEffectAnimator.Sample(flowIntent, 0, 0, k15Controls.Count).Intensity > VisualEffectAnimator.Sample(flowIntent, 0, k15Controls.Count - 1, k15Controls.Count).Intensity &&
+        VisualEffectAnimator.Sample(flowIntent, 1.5, k15Controls.Count - 1, k15Controls.Count).Intensity > VisualEffectAnimator.Sample(flowIntent, 1.5, 0, k15Controls.Count).Intensity,
     "PET_VISUAL_FLOW_TRAVELS_ACROSS_KEYS");
 var breathingIntent = VisualEffectIntentFactory.FromLighting(CodexPetVisualState.Waiting,
     new LightingEffectConfig { Enabled = true, Mode = K15LightingMode.SingleColorBreathing, Brightness = 6, Speed = 2 });

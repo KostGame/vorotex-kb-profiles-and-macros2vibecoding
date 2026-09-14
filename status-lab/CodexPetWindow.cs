@@ -99,37 +99,70 @@ internal sealed class CodexPetWindow : Form
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var bob = _state == CodexPetVisualState.Idle ? (_phase % 4 == 0 ? 1 : 0) : (_phase % 2);
-        var body = new Rectangle(13, 32 + bob, 102, 62);
+        var body = new Rectangle(11, 20 + bob, 106, 88);
         using var shadow = new SolidBrush(Color.FromArgb(70, 0, 0, 0));
         FillRounded(g, new Rectangle(body.X + 3, body.Y + 5, body.Width, body.Height), 11, shadow);
         using var chassis = new SolidBrush(Color.FromArgb(40, 45, 54));
         using var outline = new Pen(Color.FromArgb(112, 125, 140), 2);
         FillRounded(g, body, 11, chassis);
         DrawRounded(g, body, 11, outline);
+        using var bandDivider = new Pen(Color.FromArgb(92, 112, 126, 136), 1);
+        g.DrawLine(bandDivider, body.Left + 6, body.Top + body.Height * 35 / 100, body.Right - 6, body.Top + body.Height * 35 / 100);
+        g.DrawLine(bandDivider, body.Left + 6, body.Top + body.Height * 60 / 100, body.Right - 6, body.Top + body.Height * 60 / 100);
 
         var intent = VisualEffectIntentFactory.ForPet(_state, _config);
-        var keys = KeyLayout(body);
-        for (var index = 0; index < keys.Count; index++)
+        var controls = MiniK15ControlLayout.Controls;
+        for (var index = 0; index < controls.Count; index++)
         {
-            var sample = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, index, keys.Count);
-            using var keyFill = new SolidBrush(KeyColor(sample));
-            using var keyOutline = new Pen(Color.FromArgb(24, 28, 35), 1);
-            FillRounded(g, keys[index], 3, keyFill);
-            DrawRounded(g, keys[index], 3, keyOutline);
+            var control = controls[index];
+            var bounds = ControlBounds(body, control);
+            var sample = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, index, controls.Count);
+            DrawControl(g, control, bounds, sample);
         }
 
-        var indicator = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, 0, keys.Count);
+        var indicator = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, 0, controls.Count);
         using var indicatorFill = new SolidBrush(KeyColor(indicator));
         g.FillEllipse(indicatorFill, body.Right - 15, body.Y + 7, 5, 5);
     }
 
-    private static IReadOnlyList<Rectangle> KeyLayout(Rectangle body)
+    private static Rectangle ControlBounds(Rectangle body, MiniK15Control control) => new(
+        body.X + control.X * body.Width / 100,
+        body.Y + control.Y * body.Height / 100,
+        Math.Max(4, control.Width * body.Width / 100),
+        Math.Max(4, control.Height * body.Height / 100));
+
+    private static void DrawControl(Graphics graphics, MiniK15Control control, Rectangle bounds, VisualEffectSample sample)
     {
-        var keys = new List<Rectangle>();
-        foreach (var y in new[] { body.Y + 12, body.Y + 25, body.Y + 38 })
-            foreach (var x in new[] { body.X + 11, body.X + 25, body.X + 39, body.X + 53, body.X + 67, body.X + 81 })
-                keys.Add(new Rectangle(x, y, 11, 9));
-        return keys;
+        using var controlFill = new SolidBrush(KeyColor(sample));
+        using var controlOutline = new Pen(Color.FromArgb(24, 28, 35), 1);
+        if (control.Kind is MiniK15ControlKind.Rotary or MiniK15ControlKind.Joystick)
+        {
+            var size = Math.Min(bounds.Width, bounds.Height);
+            bounds = new Rectangle(bounds.X + (bounds.Width - size) / 2, bounds.Y + (bounds.Height - size) / 2, size, size);
+            graphics.FillEllipse(controlFill, bounds);
+            graphics.DrawEllipse(controlOutline, bounds);
+            var inset = control.Kind == MiniK15ControlKind.Rotary ? 4 : 3;
+            using var detail = new Pen(Color.FromArgb(145, 180, 190, 198), 1);
+            graphics.DrawEllipse(detail, Rectangle.Inflate(bounds, -inset, -inset));
+            if (control.Kind == MiniK15ControlKind.Joystick)
+            {
+                var center = new Point(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
+                graphics.DrawLine(detail, center.X - 3, center.Y, center.X + 3, center.Y);
+                graphics.DrawLine(detail, center.X, center.Y - 3, center.X, center.Y + 3);
+            }
+            return;
+        }
+
+        var radius = control.Kind == MiniK15ControlKind.LongBottomKey ? 4 : 3;
+        FillRounded(graphics, bounds, radius, controlFill);
+        DrawRounded(graphics, bounds, radius, controlOutline);
+        if (!string.IsNullOrWhiteSpace(control.Label))
+        {
+            using var label = new SolidBrush(Color.FromArgb(215, 235, 240, 244));
+            using var font = new Font("Segoe UI", 6f, FontStyle.Bold, GraphicsUnit.Pixel);
+            using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            graphics.DrawString(control.Label, font, label, bounds, format);
+        }
     }
 
     private static Color KeyColor(VisualEffectSample sample)
