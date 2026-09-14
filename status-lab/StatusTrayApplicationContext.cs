@@ -41,7 +41,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _unreadReader = new CodexUnreadStateReader(unreadStatePath, "local");
         _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds,
             _unreadReader);
-        _codexPet = new CodexPetController(_stateNormalizer, _unreadReader);
+        _codexPet = new CodexPetController(_stateNormalizer, _unreadReader, _config);
         _deviceManager = new K15DeviceManager(Path.Combine(EventJournal.DirectoryPath, "preferred-device.json"));
         _rgbCanary = new K15RgbCanary(_config, _deviceManager);
         _trackingOnIcon = TrayIconFactory.Create(trackingEnabled: true);

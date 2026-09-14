@@ -19,5 +19,6 @@
     <Compile Include="..\EventJournal.cs" Link="EventJournal.cs" />
     <Compile Include="..\JournalStateNormalizer.cs" Link="JournalStateNormalizer.cs" />
     <Compile Include="..\CodexPetAdapter.cs" Link="CodexPetAdapter.cs" />
+    <Compile Include="..\VisualEffectIntent.cs" Link="VisualEffectIntent.cs" />
   </ItemGroup>
 </Project>

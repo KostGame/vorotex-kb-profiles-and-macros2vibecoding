@@ -1,9 +1,14 @@
+using System.Diagnostics;
+using System.Drawing.Drawing2D;
+
 namespace Vorotex.K15.StatusLab;
 
 internal sealed class CodexPetWindow : Form
 {
-    private readonly System.Windows.Forms.Timer _animation = new() { Interval = 180 };
+    private readonly System.Windows.Forms.Timer _animation = new() { Interval = 80 };
     private readonly CodexPetPositionStore _positionStore;
+    private readonly StatusLabConfig _config;
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
     private CodexPetVisualState _state;
     private int _phase;
     private bool _dragging;
@@ -13,8 +18,9 @@ internal sealed class CodexPetWindow : Form
 
     internal event Action? CloseRequested;
 
-    public CodexPetWindow(CodexPetPositionStore? positionStore = null)
+    public CodexPetWindow(StatusLabConfig config, CodexPetPositionStore? positionStore = null)
     {
+        _config = config;
         _positionStore = positionStore ?? new CodexPetPositionStore();
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -91,31 +97,73 @@ internal sealed class CodexPetWindow : Form
     {
         base.OnPaint(e);
         var g = e.Graphics;
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
         var bob = _state == CodexPetVisualState.Idle ? (_phase % 4 == 0 ? 1 : 0) : (_phase % 2);
-        var body = new Rectangle(18, 20 + bob, 92, 88);
-        var color = _state switch
+        var body = new Rectangle(13, 32 + bob, 102, 62);
+        using var shadow = new SolidBrush(Color.FromArgb(70, 0, 0, 0));
+        FillRounded(g, new Rectangle(body.X + 3, body.Y + 5, body.Width, body.Height), 11, shadow);
+        using var chassis = new SolidBrush(Color.FromArgb(40, 45, 54));
+        using var outline = new Pen(Color.FromArgb(112, 125, 140), 2);
+        FillRounded(g, body, 11, chassis);
+        DrawRounded(g, body, 11, outline);
+
+        var intent = VisualEffectIntentFactory.ForPet(_state, _config);
+        var keys = KeyLayout(body);
+        for (var index = 0; index < keys.Count; index++)
         {
-            CodexPetVisualState.Running => Color.FromArgb(90, 190, 255),
-            CodexPetVisualState.Waiting => Color.FromArgb(255, 196, 80),
-            CodexPetVisualState.Review => Color.FromArgb(190, 130, 255),
-            _ => Color.FromArgb(100, 220, 170)
-        };
-        using var fill = new SolidBrush(color);
-        using var outline = new Pen(Color.FromArgb(35, 35, 45), 4);
-        g.FillEllipse(fill, body);
-        g.DrawEllipse(outline, body);
-        using var eye = new SolidBrush(Color.FromArgb(30, 35, 45));
-        g.FillEllipse(eye, 42, 52 + bob, 12, 16);
-        g.FillEllipse(eye, 74, 52 + bob, 12, 16);
-        using var mouth = new Pen(Color.FromArgb(30, 35, 45), 4);
-        var smile = _state == CodexPetVisualState.Waiting ? new Point[] { new(52, 82 + bob), new(64, 76 + bob), new(76, 82 + bob) } :
-            new Point[] { new(52, 78 + bob), new(64, 86 + bob), new(76, 78 + bob) };
-        g.DrawLines(mouth, smile);
-        if (_state == CodexPetVisualState.Running)
-            g.DrawArc(new Pen(Color.FromArgb(90, 190, 255), 3), 8, 36, 112, 72, 20, 140);
-        if (_state == CodexPetVisualState.Review)
-            g.DrawArc(new Pen(Color.FromArgb(255, 230, 120), 4), 42, 8, 44, 28, 190, 160);
+            var sample = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, index, keys.Count);
+            using var keyFill = new SolidBrush(KeyColor(sample));
+            using var keyOutline = new Pen(Color.FromArgb(24, 28, 35), 1);
+            FillRounded(g, keys[index], 3, keyFill);
+            DrawRounded(g, keys[index], 3, keyOutline);
+        }
+
+        var indicator = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, 0, keys.Count);
+        using var indicatorFill = new SolidBrush(KeyColor(indicator));
+        g.FillEllipse(indicatorFill, body.Right - 15, body.Y + 7, 5, 5);
+    }
+
+    private static IReadOnlyList<Rectangle> KeyLayout(Rectangle body)
+    {
+        var keys = new List<Rectangle>();
+        foreach (var y in new[] { body.Y + 12, body.Y + 25, body.Y + 38 })
+            foreach (var x in new[] { body.X + 11, body.X + 25, body.X + 39, body.X + 53, body.X + 67, body.X + 81 })
+                keys.Add(new Rectangle(x, y, 11, 9));
+        return keys;
+    }
+
+    private static Color KeyColor(VisualEffectSample sample)
+    {
+        var amount = (int)Math.Round(Math.Clamp(sample.Intensity, 0d, 1d) * 255d);
+        var tone = Math.Clamp(sample.Tone, 0d, 1d);
+        var red = (int)Math.Round(82 + 42 * tone);
+        var green = (int)Math.Round(115 + 48 * tone);
+        var blue = (int)Math.Round(128 + 45 * tone);
+        return Color.FromArgb(Math.Max(24, amount), red, green, blue);
+    }
+
+    private static void FillRounded(Graphics graphics, Rectangle rectangle, int radius, Brush brush)
+    {
+        using var path = RoundedPath(rectangle, radius);
+        graphics.FillPath(brush, path);
+    }
+
+    private static void DrawRounded(Graphics graphics, Rectangle rectangle, int radius, Pen pen)
+    {
+        using var path = RoundedPath(rectangle, radius);
+        graphics.DrawPath(pen, path);
+    }
+
+    private static GraphicsPath RoundedPath(Rectangle rectangle, int radius)
+    {
+        var diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(rectangle.X, rectangle.Y, diameter, diameter, 180, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Y, diameter, diameter, 270, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(rectangle.X, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     protected override void Dispose(bool disposing)
@@ -130,14 +178,15 @@ internal sealed class CodexPetController : IDisposable
 {
     private readonly JournalStateNormalizer _normalizer;
     private readonly ICodexUnreadStateReader _reader;
-    private readonly CodexPetWindow _window = new();
+    private readonly CodexPetWindow _window;
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 1000 };
     private bool _visible;
 
-    public CodexPetController(JournalStateNormalizer normalizer, ICodexUnreadStateReader reader)
+    public CodexPetController(JournalStateNormalizer normalizer, ICodexUnreadStateReader reader, StatusLabConfig config)
     {
         _normalizer = normalizer;
         _reader = reader;
+        _window = new CodexPetWindow(config);
         _window.CloseRequested += HidePet;
         _normalizer.StateChanged += OnStateChanged;
         _refresh.Tick += (_, _) => Refresh();
