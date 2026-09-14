@@ -463,10 +463,9 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         if (!_pendingRestores.TryGetValue(slot, out var pending))
             return;
 
-        // Remove only after Restore has completed successfully. RequireSameActiveSlot inside
-        // Restore keeps a physical profile transition from cleaning up the wrong obligation.
-        controller.Restore(pending);
-        _pendingRestores.Remove(slot);
+        // Remove only after Restore has completed successfully. K15HidLightingController.Restore
+        // retains the exact active-slot verification for physical race safety.
+        DeferredProfileRestore.TryRestore(_pendingRestores, slot, exactSlot: null, controller.Restore);
         Log("rgb_pending_baseline_restored", new
         {
             onboardSlot = slot,
