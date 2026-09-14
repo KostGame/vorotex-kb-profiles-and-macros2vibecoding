@@ -16,36 +16,68 @@ internal static class CodexPetAdapter
     {
         var relevant = sessions.Where(session => session.IsAlive ||
             session.State == K15NormalizedState.DonePendingAttention).ToArray();
-        return relevant.Length == 1 && relevant[0].State == K15NormalizedState.DonePendingAttention;
+        return relevant.Any(session => session.State == K15NormalizedState.DonePendingAttention &&
+            !string.IsNullOrWhiteSpace(session.ThreadId));
     }
 
     internal static CodexPetVisualSnapshot Map(
         IReadOnlyList<CodexSessionSnapshot> sessions,
-        string? targetSessionId,
-        CodexUnreadState unreadStateForTargetThread)
+        CodexUnreadSnapshot? unreadSnapshot)
+    {
+        var unreadByThread = sessions
+            .Where(session => session.State == K15NormalizedState.DonePendingAttention &&
+                !string.IsNullOrWhiteSpace(session.ThreadId))
+            .Select(session => session.ThreadId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(threadId => threadId,
+                threadId => unreadSnapshot?.ForThread(threadId) ?? CodexUnreadState.Unknown,
+                StringComparer.Ordinal);
+        return Map(sessions, unreadByThread);
+    }
+
+    internal static CodexPetVisualSnapshot Map(
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        IReadOnlyDictionary<string, CodexUnreadState> unreadByThread)
     {
         var relevant = sessions.Where(session => session.IsAlive ||
             session.State == K15NormalizedState.DonePendingAttention).ToArray();
-        if (relevant.Length == 0)
-            return new(CodexPetVisualState.Idle, "no_relevant_session", null, null);
-        if (relevant.Length > 1)
-            return new(CodexPetVisualState.Idle, "ambiguous_multiple_sessions", null, null);
+        if (relevant.Any(session => session.IsAlive && session.State == K15NormalizedState.Waiting))
+            return Aggregate(relevant, CodexPetVisualState.Waiting, "aggregate_waiting");
 
-        var session = relevant[0];
-        return session.State switch
-        {
-            K15NormalizedState.Running => new(CodexPetVisualState.Running, "running", session.SessionId, session.ThreadId),
-            K15NormalizedState.Waiting => new(CodexPetVisualState.Waiting, "waiting", session.SessionId, session.ThreadId),
-            K15NormalizedState.DonePendingAttention when !string.IsNullOrWhiteSpace(targetSessionId) &&
-                !string.Equals(targetSessionId, session.SessionId, StringComparison.Ordinal) =>
-                new(CodexPetVisualState.Idle, "target_session_mismatch", null, null),
-            K15NormalizedState.DonePendingAttention when !string.IsNullOrWhiteSpace(session.ThreadId) &&
-                unreadStateForTargetThread == CodexUnreadState.HasUnread =>
-                new(CodexPetVisualState.Review, "exact_thread_unread", session.SessionId, session.ThreadId),
-            K15NormalizedState.DonePendingAttention when unreadStateForTargetThread is CodexUnreadState.Unknown or CodexUnreadState.Unavailable =>
-                new(CodexPetVisualState.Idle, "unread_unavailable", session.SessionId, session.ThreadId),
-            K15NormalizedState.DonePendingAttention => new(CodexPetVisualState.Idle, "no_unread", session.SessionId, session.ThreadId),
-            _ => new(CodexPetVisualState.Idle, "normal", session.SessionId, session.ThreadId)
-        };
+        var hasUnread = relevant.Any(session =>
+            session.State == K15NormalizedState.DonePendingAttention &&
+            !string.IsNullOrWhiteSpace(session.ThreadId) &&
+            unreadByThread.TryGetValue(session.ThreadId!, out var unread) &&
+            unread == CodexUnreadState.HasUnread);
+        if (hasUnread)
+            return Aggregate(relevant, CodexPetVisualState.Review, "aggregate_exact_unread_review");
+
+        if (relevant.Any(session => session.IsAlive && session.State == K15NormalizedState.Running))
+            return Aggregate(relevant, CodexPetVisualState.Running, "aggregate_running");
+
+        return Aggregate(relevant, CodexPetVisualState.Idle, "aggregate_idle");
+    }
+
+    private static CodexPetVisualSnapshot Aggregate(
+        IReadOnlyList<CodexSessionSnapshot> relevant, CodexPetVisualState state, string reason)
+    {
+        var single = relevant.Count == 1 ? relevant[0] : null;
+        return new(state, reason, single?.SessionId, single?.ThreadId);
+    }
+
+    // Compatibility overload for existing single-session callers/tests. Global
+    // presentation never uses targetSessionId to choose among multiple chats.
+    internal static CodexPetVisualSnapshot Map(
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        string? _,
+        CodexUnreadState unreadStateForTargetThread)
+    {
+        var unreadByThread = sessions
+            .Where(session => session.State == K15NormalizedState.DonePendingAttention &&
+                !string.IsNullOrWhiteSpace(session.ThreadId))
+            .Select(session => session.ThreadId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(threadId => threadId, _ => unreadStateForTargetThread, StringComparer.Ordinal);
+        return Map(sessions, unreadByThread);
     }
 }

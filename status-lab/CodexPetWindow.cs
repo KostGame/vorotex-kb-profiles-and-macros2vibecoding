@@ -120,9 +120,6 @@ internal sealed class CodexPetWindow : Form
             DrawControl(g, control, bounds, sample);
         }
 
-        var indicator = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, 0, controls.Count);
-        using var indicatorFill = new SolidBrush(KeyColor(indicator));
-        g.FillEllipse(indicatorFill, body.Right - 15, body.Y + 7, 5, 5);
     }
 
     private static Rectangle ControlBounds(Rectangle body, MiniK15Control control) => new(
@@ -259,18 +256,12 @@ internal sealed class CodexPetController : IDisposable
     {
         if (_window.IsDisposed) return;
         var sessions = _normalizer.SessionSnapshots;
-        var relevant = sessions.Where(session => session.IsAlive ||
-            session.State == K15NormalizedState.DonePendingAttention).ToArray();
-        var doneCandidates = relevant.Where(session =>
-            session.State == K15NormalizedState.DonePendingAttention).ToArray();
         var canPollUnread = CodexPetAdapter.ShouldPollUnread(sessions);
         if (canPollUnread && !_refresh.Enabled) _refresh.Start();
         if (!canPollUnread && _refresh.Enabled) _refresh.Stop();
-        var target = relevant.Length == 1 ? relevant[0].SessionId : null;
-        var unreadState = canPollUnread && !string.IsNullOrWhiteSpace(doneCandidates[0].ThreadId)
-            ? _reader.Read(DateTimeOffset.UtcNow).ForThread(doneCandidates[0].ThreadId)
-            : CodexUnreadState.Unknown;
-        var snapshot = CodexPetAdapter.Map(sessions, target, unreadState);
+        // One canonical reader snapshot is shared by every eligible DONE thread.
+        var unreadSnapshot = canPollUnread ? _reader.Read(DateTimeOffset.UtcNow) : null;
+        var snapshot = CodexPetAdapter.Map(sessions, unreadSnapshot);
         _window.SetState(snapshot.State);
     }
 
