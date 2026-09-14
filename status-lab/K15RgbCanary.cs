@@ -57,7 +57,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             _controller = _deviceManager.Controller;
             var currentSlot = _controller.ReadActiveSlot();
             PublishActiveSlot(currentSlot, DateTimeOffset.UtcNow);
-            RestorePendingForSlotLocked(currentSlot, "rgb_enable");
+            RestorePendingForSlotLocked(_controller, currentSlot, "rgb_enable");
             _snapshot = _controller.PrepareProfileSnapshot(_config);
             _snapshots[_snapshot.OnboardSlot] = _snapshot;
             SetDesiredStateLocked(currentState);
@@ -321,7 +321,15 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 {
                     var currentSlot = observedController.ReadActiveSlot();
                     PublishActiveSlot(currentSlot, DateTimeOffset.UtcNow);
-                    if (!Enabled || _controller is null || _snapshot is null)
+                    if (!Enabled)
+                    {
+                        // RGB-OFF monitoring is passive except for fulfilling an exact deferred
+                        // restore obligation for the slot the owner has physically selected.
+                        RestorePendingForSlotLocked(observedController, currentSlot, "profile_observed_while_disabled");
+                        continue;
+                    }
+
+                    if (_controller is null || _snapshot is null)
                         continue;
                     if (currentSlot != _snapshot.OnboardSlot)
                     {
@@ -405,7 +413,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
         PublishActiveSlot(observedSlot, DateTimeOffset.UtcNow);
 
-        RestorePendingForSlotLocked(observedSlot, "profile_observed");
+        RestorePendingForSlotLocked(_controller, observedSlot, "profile_observed");
 
         var cachedSnapshot = _snapshots.TryGetValue(observedSlot, out var knownSnapshot);
         var baselineReapplied = false;
@@ -450,12 +458,14 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         ApplyDesiredLocked();
     }
 
-    private void RestorePendingForSlotLocked(byte slot, string trigger)
+    private void RestorePendingForSlotLocked(K15HidLightingController controller, byte slot, string trigger)
     {
-        if (_controller is null || !_pendingRestores.TryGetValue(slot, out var pending))
+        if (!_pendingRestores.TryGetValue(slot, out var pending))
             return;
 
-        _controller.Restore(pending);
+        // Remove only after Restore has completed successfully. RequireSameActiveSlot inside
+        // Restore keeps a physical profile transition from cleaning up the wrong obligation.
+        controller.Restore(pending);
         _pendingRestores.Remove(slot);
         Log("rgb_pending_baseline_restored", new
         {
