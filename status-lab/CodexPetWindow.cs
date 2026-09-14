@@ -9,6 +9,7 @@ internal sealed class CodexPetWindow : Form
     private readonly CodexPetPositionStore _positionStore;
     private readonly StatusLabConfig _config;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private ProfileColorHint _profileHint;
     private CodexPetVisualState _state;
     private int _phase;
     private bool _dragging;
@@ -21,6 +22,7 @@ internal sealed class CodexPetWindow : Form
     public CodexPetWindow(StatusLabConfig config, CodexPetPositionStore? positionStore = null)
     {
         _config = config;
+        _profileHint = ProfileColorHint.Unknown(DateTimeOffset.UtcNow);
         _positionStore = positionStore ?? new CodexPetPositionStore();
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -41,6 +43,12 @@ internal sealed class CodexPetWindow : Form
     public void SetState(CodexPetVisualState state)
     {
         _state = state;
+        Invalidate();
+    }
+
+    public void SetProfileHint(ProfileColorHint hint)
+    {
+        _profileHint = hint;
         Invalidate();
     }
 
@@ -111,13 +119,14 @@ internal sealed class CodexPetWindow : Form
         g.DrawLine(bandDivider, body.Left + 6, body.Top + body.Height * 60 / 100, body.Right - 6, body.Top + body.Height * 60 / 100);
 
         var intent = VisualEffectIntentFactory.ForPet(_state, _config);
+        var palette = PetPaletteResolver.Resolve(_config, _profileHint, DateTimeOffset.UtcNow);
         var controls = MiniK15ControlLayout.Controls;
         for (var index = 0; index < controls.Count; index++)
         {
             var control = controls[index];
             var bounds = ControlBounds(body, control);
             var sample = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, index, controls.Count);
-            DrawControl(g, control, bounds, sample);
+            DrawControl(g, control, bounds, sample, palette);
         }
 
     }
@@ -128,9 +137,10 @@ internal sealed class CodexPetWindow : Form
         Math.Max(4, control.Width * body.Width / 100),
         Math.Max(4, control.Height * body.Height / 100));
 
-    private static void DrawControl(Graphics graphics, MiniK15Control control, Rectangle bounds, VisualEffectSample sample)
+    private static void DrawControl(Graphics graphics, MiniK15Control control, Rectangle bounds, VisualEffectSample sample,
+        PetPalette palette)
     {
-        using var controlFill = new SolidBrush(KeyColor(sample));
+        using var controlFill = new SolidBrush(KeyColor(sample, palette));
         using var controlOutline = new Pen(Color.FromArgb(24, 28, 35), 1);
         if (control.Kind is MiniK15ControlKind.Rotary or MiniK15ControlKind.Joystick)
         {
@@ -162,15 +172,25 @@ internal sealed class CodexPetWindow : Form
         }
     }
 
-    private static Color KeyColor(VisualEffectSample sample)
+    private static Color KeyColor(VisualEffectSample sample, PetPalette palette)
     {
         var amount = (int)Math.Round(Math.Clamp(sample.Intensity, 0d, 1d) * 255d);
         var tone = Math.Clamp(sample.Tone, 0d, 1d);
+        if (!palette.IsNeutral)
+        {
+            var profile = palette.Primary;
+            var lift = 0.12d + tone * 0.18d;
+            return Color.FromArgb(Math.Max(24, amount),
+                Blend(profile.R, 255, lift), Blend(profile.G, 255, lift), Blend(profile.B, 255, lift));
+        }
         var red = (int)Math.Round(82 + 42 * tone);
         var green = (int)Math.Round(115 + 48 * tone);
         var blue = (int)Math.Round(128 + 45 * tone);
         return Color.FromArgb(Math.Max(24, amount), red, green, blue);
     }
+
+    private static int Blend(byte value, byte target, double amount) =>
+        (int)Math.Round(value + (target - value) * Math.Clamp(amount, 0d, 1d));
 
     private static void FillRounded(Graphics graphics, Rectangle rectangle, int radius, Brush brush)
     {
@@ -221,6 +241,17 @@ internal sealed class CodexPetController : IDisposable
         _normalizer.StateChanged += OnStateChanged;
         _refresh.Tick += (_, _) => Refresh();
         Refresh();
+    }
+
+    public void SetProfileHint(ProfileColorHint hint)
+    {
+        if (_window.IsDisposed) return;
+        if (_window.IsHandleCreated && _window.InvokeRequired)
+        {
+            try { _window.BeginInvoke(() => _window.SetProfileHint(hint)); } catch (InvalidOperationException) { }
+            return;
+        }
+        _window.SetProfileHint(hint);
     }
 
     public bool Visible => _visible;

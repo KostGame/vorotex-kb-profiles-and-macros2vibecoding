@@ -21,5 +21,6 @@
     <Compile Include="..\CodexPetAdapter.cs" Link="CodexPetAdapter.cs" />
     <Compile Include="..\VisualEffectIntent.cs" Link="VisualEffectIntent.cs" />
     <Compile Include="..\MiniK15ControlLayout.cs" Link="MiniK15ControlLayout.cs" />
+    <Compile Include="..\K15ProfileColorHint.cs" Link="K15ProfileColorHint.cs" />
   </ItemGroup>
 </Project>

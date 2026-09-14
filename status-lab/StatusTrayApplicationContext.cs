@@ -41,9 +41,10 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _unreadReader = new CodexUnreadStateReader(unreadStatePath, "local");
         _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds,
             _unreadReader);
-        _codexPet = new CodexPetController(_stateNormalizer, _unreadReader, _config);
         _deviceManager = new K15DeviceManager(Path.Combine(EventJournal.DirectoryPath, "preferred-device.json"));
         _rgbCanary = new K15RgbCanary(_config, _deviceManager);
+        _codexPet = new CodexPetController(_stateNormalizer, _unreadReader, _config);
+        _codexPet.SetProfileHint(_rgbCanary.CurrentProfileHint);
         _trackingOnIcon = TrayIconFactory.Create(trackingEnabled: true);
         _trackingOffIcon = TrayIconFactory.Create(trackingEnabled: false);
 
@@ -96,6 +97,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         };
         _rgbCanary.StatusChanged += UpdateRgbStatus;
         _deviceManager.StateChanged += UpdateDeviceStatus;
+        _rgbCanary.ProfileHintChanged += _codexPet.SetProfileHint;
         RefreshDeviceMenu();
 
         _stateNormalizer.Start();
@@ -738,6 +740,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         await _stateNormalizer.DisposeAsync();
         _codexPet.Dispose();
         await _rgbCanary.DisposeAsync();
+        _rgbCanary.ProfileHintChanged -= _codexPet.SetProfileHint;
         _deviceManager.Dispose();
         ExitThread();
     }
