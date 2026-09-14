@@ -3,11 +3,19 @@ namespace Vorotex.K15.StatusLab;
 internal sealed class CodexPetWindow : Form
 {
     private readonly System.Windows.Forms.Timer _animation = new() { Interval = 180 };
+    private readonly CodexPetPositionStore _positionStore;
     private CodexPetVisualState _state;
     private int _phase;
+    private bool _dragging;
+    private bool _dragMoved;
+    private Point _dragStartCursor;
+    private Point _dragStartLocation;
 
-    public CodexPetWindow()
+    internal event Action? CloseRequested;
+
+    public CodexPetWindow(CodexPetPositionStore? positionStore = null)
     {
+        _positionStore = positionStore ?? new CodexPetPositionStore();
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -16,6 +24,10 @@ internal sealed class CodexPetWindow : Form
         BackColor = Color.FromArgb(24, 24, 30);
         TransparencyKey = BackColor;
         DoubleBuffered = true;
+        ContextMenuStrip = BuildContextMenu();
+        MouseDown += HandleMouseDown;
+        MouseMove += HandleMouseMove;
+        MouseUp += HandleMouseUp;
         _animation.Tick += (_, _) => { _phase = (_phase + 1) % 8; Invalidate(); };
         _animation.Start();
     }
@@ -29,8 +41,50 @@ internal sealed class CodexPetWindow : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        SetWindowPos(Handle, -1, Screen.PrimaryScreen?.WorkingArea.Right - Width - 24 ?? 0,
-            Screen.PrimaryScreen?.WorkingArea.Bottom - Height - 24 ?? 0, Width, Height, 0x0010);
+        var areas = Screen.AllScreens.Select(screen => screen.WorkingArea).ToArray();
+        Location = CodexPetPositionPolicy.Resolve(_positionStore.Load(), Size, areas);
+    }
+
+    private ContextMenuStrip BuildContextMenu()
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Закрыть питомца", null, (_, _) => CloseRequested?.Invoke());
+        return menu;
+    }
+
+    private void HandleMouseDown(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        _dragging = true;
+        _dragMoved = false;
+        _dragStartCursor = Cursor.Position;
+        _dragStartLocation = Location;
+        Capture = true;
+    }
+
+    private void HandleMouseMove(object? sender, MouseEventArgs e)
+    {
+        if (!_dragging || !e.Button.HasFlag(MouseButtons.Left)) return;
+        var cursor = Cursor.Position;
+        var delta = new Size(cursor.X - _dragStartCursor.X, cursor.Y - _dragStartCursor.Y);
+        if (!_dragMoved && Math.Abs(delta.Width) < 2 && Math.Abs(delta.Height) < 2) return;
+        _dragMoved = true;
+        Location = new Point(_dragStartLocation.X + delta.Width, _dragStartLocation.Y + delta.Height);
+    }
+
+    private void HandleMouseUp(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left || !_dragging) return;
+        _dragging = false;
+        Capture = false;
+        if (_dragMoved)
+        {
+            try { _positionStore.Save(new CodexPetPosition(Location.X, Location.Y)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A transient per-user persistence failure must not break pet interaction.
+            }
+        }
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -70,8 +124,6 @@ internal sealed class CodexPetWindow : Form
         base.Dispose(disposing);
     }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool SetWindowPos(IntPtr hWnd, int hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 }
 
 internal sealed class CodexPetController : IDisposable
@@ -86,6 +138,7 @@ internal sealed class CodexPetController : IDisposable
     {
         _normalizer = normalizer;
         _reader = reader;
+        _window.CloseRequested += HidePet;
         _normalizer.StateChanged += OnStateChanged;
         _refresh.Tick += (_, _) => Refresh();
         Refresh();
@@ -94,8 +147,19 @@ internal sealed class CodexPetController : IDisposable
     public bool Visible => _visible;
     public void Toggle()
     {
-        _visible = !_visible;
-        if (_visible) _window.Show(); else _window.Hide();
+        if (_visible) HidePet(); else ShowPet();
+    }
+
+    private void ShowPet()
+    {
+        _visible = true;
+        _window.Show();
+    }
+
+    private void HidePet()
+    {
+        _visible = false;
+        _window.Hide();
     }
 
     private void OnStateChanged(K15NormalizedState _, StateTransition? __)
@@ -131,6 +195,7 @@ internal sealed class CodexPetController : IDisposable
     public void Dispose()
     {
         _normalizer.StateChanged -= OnStateChanged;
+        _window.CloseRequested -= HidePet;
         _refresh.Dispose();
         _window.Close();
         _window.Dispose();
