@@ -10,11 +10,11 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     private readonly Dictionary<byte, K15HidLightingController.LightingSnapshot> _snapshots = new();
     private readonly Dictionary<byte, K15HidLightingController.LightingSnapshot> _pendingRestores = new();
     private readonly ProfileColorHintTracker _profileHint = new();
+    private int _disposed;
 
     private K15HidLightingController? _controller;
     private K15HidLightingController.LightingSnapshot? _snapshot;
-    private CancellationTokenSource? _monitorCts;
-    private Task? _monitorTask;
+    private readonly K15ProfileMonitorLifecycle _monitorLifecycle = new();
     private K15NormalizedState _desiredState = K15NormalizedState.Normal;
     private K15NormalizedState _appliedState = K15NormalizedState.Normal;
     private DateTimeOffset _overlayUntilUtc = DateTimeOffset.MinValue;
@@ -30,6 +30,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         _deviceManager = deviceManager;
         _deviceManager.StateChanged += OnDeviceStateChanged;
         _deviceManager.ActiveSlotObserved += PublishActiveSlot;
+        StartMonitorLocked();
     }
 
     public K15RgbCanary(StatusLabConfig config)
@@ -297,11 +298,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
     private void StartMonitorLocked()
     {
-        _monitorCts?.Cancel();
-        _monitorCts?.Dispose();
-        _monitorCts = new CancellationTokenSource();
-        var token = _monitorCts.Token;
-        _monitorTask = Task.Run(() => MonitorLoopAsync(token), token);
+        _monitorLifecycle.Start(MonitorLoopAsync);
     }
 
     private async Task MonitorLoopAsync(CancellationToken token)
@@ -593,15 +590,6 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         if (state is not K15DeviceConnectionState.Connected)
         {
             InvalidateProfileHint();
-            _monitorCts?.Cancel();
-            return;
-        }
-
-        if (!Enabled && _deviceManager.Controller is not null)
-        {
-            _monitorCts?.Cancel();
-            _monitorCts?.Dispose();
-            StartMonitorLocked();
         }
     }
 
@@ -639,10 +627,6 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
     public async Task DisableAsync(string reason = "manual_disable")
     {
-        var monitorCts = _monitorCts;
-        var monitorTask = _monitorTask;
-        monitorCts?.Cancel();
-
         await _gate.WaitAsync();
         try
         {
@@ -723,18 +707,6 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             _gate.Release();
         }
 
-        if (monitorTask is not null)
-        {
-            try { await monitorTask; }
-            catch (OperationCanceledException) { }
-        }
-        monitorCts?.Dispose();
-        _monitorCts = null;
-        _monitorTask = null;
-        if (reason != "application_exit" &&
-            _deviceManager.ConnectionState == K15DeviceConnectionState.Connected &&
-            _deviceManager.Controller is not null)
-            StartMonitorLocked();
     }
 
     private static void Log(string eventName, object? details = null)
@@ -750,9 +722,12 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
         _deviceManager.StateChanged -= OnDeviceStateChanged;
         _deviceManager.ActiveSlotObserved -= PublishActiveSlot;
         await DisableAsync("application_exit");
+        await _monitorLifecycle.DisposeAsync();
         if (_pendingRestores.Count > 0)
         {
             Log("rgb_pending_restore_on_exit", new

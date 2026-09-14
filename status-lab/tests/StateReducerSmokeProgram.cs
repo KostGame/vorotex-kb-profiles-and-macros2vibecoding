@@ -719,6 +719,26 @@ Require(VisualEffectAnimator.Sample(VisualEffectIntentFactory.ForPet(CodexPetVis
         0.5, 1, 10).Intensity > 0, "UNKNOWN_RUNNING_REMAINS_ANIMATED");
 Console.WriteLine("PROFILE_COLOR_HINT_SMOKE=PASS");
 
+var lifecycle = new K15ProfileMonitorLifecycle();
+var activeMonitors = 0;
+var maxActiveMonitors = 0;
+lifecycle.Start(async token =>
+{
+    activeMonitors++;
+    maxActiveMonitors = Math.Max(maxActiveMonitors, activeMonitors);
+    try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+    finally { activeMonitors--; }
+});
+for (var attempt = 0; attempt < 10; attempt++)
+    lifecycle.Start(_ => Task.CompletedTask);
+Require(lifecycle.StartCount == 1 && lifecycle.ActiveMonitorCount <= 1,
+    "PROFILE_MONITOR_SINGLE_START");
+await lifecycle.DisposeAsync();
+await lifecycle.DisposeAsync();
+Require(maxActiveMonitors == 1 && lifecycle.ActiveMonitorCount == 0,
+    "PROFILE_MONITOR_SINGLE_ACTIVE_AND_IDEMPOTENT_DISPOSE");
+Console.WriteLine("PROFILE_MONITOR_LIFECYCLE_SMOKE=PASS");
+
 var runningA = config.RenderForProfile(0, config.States.Running);
 var runningB = config.RenderForProfile(1, config.States.Running);
 var stop = config.RenderForProfile(1, config.StopSignal);
