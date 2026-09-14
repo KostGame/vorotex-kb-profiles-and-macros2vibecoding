@@ -69,6 +69,7 @@ internal sealed class K15DeviceManager : IDisposable
     public K15HidLightingController? Controller => _controller;
     public string? PreferredFingerprint => _preferredFingerprint;
     public event Action<K15DeviceConnectionState>? StateChanged;
+    public event Action<byte, DateTimeOffset>? ActiveSlotObserved;
 
     public IReadOnlyList<K15DeviceCandidate> GetCandidates() => Candidates;
 
@@ -133,6 +134,7 @@ internal sealed class K15DeviceManager : IDisposable
             _preferredFingerprint = _selected.IdentityFingerprint;
             SavePreference();
             SetState(K15DeviceConnectionState.Connected);
+            ActiveSlotObserved?.Invoke(slot, DateTimeOffset.UtcNow);
             Log("device_connected", new { identity = _selected.IdentityFingerprint, protocolVerification = "PASS" });
             return true;
         }

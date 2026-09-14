@@ -694,6 +694,51 @@ Require(!intentProperties.Overlaps(new[] { "HidReportId", "PacketBytes", "Device
     "PET_VISUAL_INTENT_DEVICE_AND_PROFILE_INDEPENDENT");
 Console.WriteLine("VISUAL_EFFECT_INTENT_SMOKE=PASS");
 
+var hintTracker = new ProfileColorHintTracker();
+var observed = DateTimeOffset.UtcNow;
+var profileA = hintTracker.Observe(0, observed);
+var profileB = hintTracker.Observe(1, observed.AddMilliseconds(500));
+Require(profileA.Profile == K15Profile.A && profileA.IsExact, "PROFILE_HINT_SLOT_A_EXACT");
+Require(profileB.Profile == K15Profile.B && profileB.IsExact, "PROFILE_HINT_SLOT_B_EXACT");
+Require(PetPaletteResolver.Resolve(config, profileA, observed).Primary == new PetRgbColor(255, 0, 0),
+    "PROFILE_A_DEFAULT_PALETTE");
+Require(PetPaletteResolver.Resolve(config, profileB, observed.AddMilliseconds(500)).Primary == new PetRgbColor(0, 0, 255),
+    "PROFILE_B_DEFAULT_PALETTE");
+Require(PetPaletteResolver.Resolve(config, profileA, observed.AddMilliseconds(1801)).IsNeutral,
+    "PROFILE_HINT_TTL_FAILS_CLOSED");
+var custom = StatusLabConfig.CreateDefault();
+custom.Profiles.A.Color = "#123456";
+custom.Profiles.B.Color = "#ABCDEF";
+Require(PetPaletteResolver.Resolve(custom, profileA, observed).Primary == new PetRgbColor(0x12, 0x34, 0x56) &&
+        PetPaletteResolver.Resolve(custom, profileB, observed.AddMilliseconds(500)).Primary == new PetRgbColor(0xAB, 0xCD, 0xEF),
+    "PROFILE_CUSTOM_PALETTES");
+var invalidated = hintTracker.Invalidate(observed.AddMilliseconds(600));
+Require(!invalidated.IsExact && PetPaletteResolver.Resolve(config, invalidated, observed.AddMilliseconds(600)).IsNeutral,
+    "PROFILE_DISCONNECT_NEUTRAL");
+Require(VisualEffectAnimator.Sample(VisualEffectIntentFactory.ForPet(CodexPetVisualState.Running, config),
+        0.5, 1, 10).Intensity > 0, "UNKNOWN_RUNNING_REMAINS_ANIMATED");
+Console.WriteLine("PROFILE_COLOR_HINT_SMOKE=PASS");
+
+var lifecycle = new K15ProfileMonitorLifecycle();
+var activeMonitors = 0;
+var maxActiveMonitors = 0;
+lifecycle.Start(async token =>
+{
+    activeMonitors++;
+    maxActiveMonitors = Math.Max(maxActiveMonitors, activeMonitors);
+    try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+    finally { activeMonitors--; }
+});
+for (var attempt = 0; attempt < 10; attempt++)
+    lifecycle.Start(_ => Task.CompletedTask);
+Require(lifecycle.StartCount == 1 && lifecycle.ActiveMonitorCount <= 1,
+    "PROFILE_MONITOR_SINGLE_START");
+await lifecycle.DisposeAsync();
+await lifecycle.DisposeAsync();
+Require(maxActiveMonitors == 1 && lifecycle.ActiveMonitorCount == 0,
+    "PROFILE_MONITOR_SINGLE_ACTIVE_AND_IDEMPOTENT_DISPOSE");
+Console.WriteLine("PROFILE_MONITOR_LIFECYCLE_SMOKE=PASS");
+
 var runningA = config.RenderForProfile(0, config.States.Running);
 var runningB = config.RenderForProfile(1, config.States.Running);
 var stop = config.RenderForProfile(1, config.StopSignal);

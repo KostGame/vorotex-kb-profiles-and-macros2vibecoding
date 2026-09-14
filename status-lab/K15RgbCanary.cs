@@ -9,11 +9,12 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<byte, K15HidLightingController.LightingSnapshot> _snapshots = new();
     private readonly Dictionary<byte, K15HidLightingController.LightingSnapshot> _pendingRestores = new();
+    private readonly ProfileColorHintTracker _profileHint = new();
+    private int _disposed;
 
     private K15HidLightingController? _controller;
     private K15HidLightingController.LightingSnapshot? _snapshot;
-    private CancellationTokenSource? _monitorCts;
-    private Task? _monitorTask;
+    private readonly K15ProfileMonitorLifecycle _monitorLifecycle = new();
     private K15NormalizedState _desiredState = K15NormalizedState.Normal;
     private K15NormalizedState _appliedState = K15NormalizedState.Normal;
     private DateTimeOffset _overlayUntilUtc = DateTimeOffset.MinValue;
@@ -27,6 +28,9 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     {
         _config = config;
         _deviceManager = deviceManager;
+        _deviceManager.StateChanged += OnDeviceStateChanged;
+        _deviceManager.ActiveSlotObserved += PublishActiveSlot;
+        StartMonitorLocked();
     }
 
     public K15RgbCanary(StatusLabConfig config)
@@ -36,6 +40,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
     public bool Enabled { get; private set; }
     public event Action<string>? StatusChanged;
+    public event Action<ProfileColorHint>? ProfileHintChanged;
+    public ProfileColorHint CurrentProfileHint => _profileHint.Current(DateTimeOffset.UtcNow);
 
     public async Task EnableAsync(K15NormalizedState currentState)
     {
@@ -50,6 +56,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 throw new InvalidOperationException("Connect a verified K15 device before enabling RGB.");
             _controller = _deviceManager.Controller;
             var currentSlot = _controller.ReadActiveSlot();
+            PublishActiveSlot(currentSlot, DateTimeOffset.UtcNow);
             RestorePendingForSlotLocked(currentSlot, "rgb_enable");
             _snapshot = _controller.PrepareProfileSnapshot(_config);
             _snapshots[_snapshot.OnboardSlot] = _snapshot;
@@ -291,11 +298,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
     private void StartMonitorLocked()
     {
-        _monitorCts?.Cancel();
-        _monitorCts?.Dispose();
-        _monitorCts = new CancellationTokenSource();
-        var token = _monitorCts.Token;
-        _monitorTask = Task.Run(() => MonitorLoopAsync(token), token);
+        _monitorLifecycle.Start(MonitorLoopAsync);
     }
 
     private async Task MonitorLoopAsync(CancellationToken token)
@@ -310,12 +313,16 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
             try
             {
-                if (!Enabled || _controller is null || _snapshot is null)
+                var observedController = Enabled ? _controller : _deviceManager.Controller;
+                if (_deviceManager.ConnectionState != K15DeviceConnectionState.Connected || observedController is null)
                     continue;
 
                 try
                 {
-                    var currentSlot = _controller.ReadActiveSlot();
+                    var currentSlot = observedController.ReadActiveSlot();
+                    PublishActiveSlot(currentSlot, DateTimeOffset.UtcNow);
+                    if (!Enabled || _controller is null || _snapshot is null)
+                        continue;
                     if (currentSlot != _snapshot.OnboardSlot)
                     {
                         AdoptActiveProfileLocked(currentSlot, startProfileOverlay: true);
@@ -367,6 +374,9 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 }
                 catch (Exception ex) when (IsTransportFault(ex))
                 {
+                    InvalidateProfileHint();
+                    if (!Enabled)
+                        continue;
                     HandleTransportFaultLocked(ex);
                 }
             }
@@ -388,7 +398,12 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             observedSlot = stableSlot;
 
         if (_snapshot?.OnboardSlot == observedSlot)
+        {
+            PublishActiveSlot(observedSlot, DateTimeOffset.UtcNow);
             return;
+        }
+
+        PublishActiveSlot(observedSlot, DateTimeOffset.UtcNow);
 
         RestorePendingForSlotLocked(observedSlot, "profile_observed");
 
@@ -570,6 +585,26 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         }
     }
 
+    private void OnDeviceStateChanged(K15DeviceConnectionState state)
+    {
+        if (state is not K15DeviceConnectionState.Connected)
+        {
+            InvalidateProfileHint();
+        }
+    }
+
+    private void PublishActiveSlot(byte slot, DateTimeOffset observedUtc)
+    {
+        var hint = _profileHint.Observe(slot, observedUtc);
+        ProfileHintChanged?.Invoke(hint);
+    }
+
+    private void InvalidateProfileHint()
+    {
+        var hint = _profileHint.Invalidate(DateTimeOffset.UtcNow);
+        ProfileHintChanged?.Invoke(hint);
+    }
+
     private bool IsOverlayActive() =>
         _overlayUntilUtc != DateTimeOffset.MinValue && DateTimeOffset.UtcNow < _overlayUntilUtc;
 
@@ -592,10 +627,6 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
     public async Task DisableAsync(string reason = "manual_disable")
     {
-        var monitorCts = _monitorCts;
-        var monitorTask = _monitorTask;
-        monitorCts?.Cancel();
-
         await _gate.WaitAsync();
         try
         {
@@ -676,14 +707,6 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             _gate.Release();
         }
 
-        if (monitorTask is not null)
-        {
-            try { await monitorTask; }
-            catch (OperationCanceledException) { }
-        }
-        monitorCts?.Dispose();
-        _monitorCts = null;
-        _monitorTask = null;
     }
 
     private static void Log(string eventName, object? details = null)
@@ -699,7 +722,12 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        _deviceManager.StateChanged -= OnDeviceStateChanged;
+        _deviceManager.ActiveSlotObserved -= PublishActiveSlot;
         await DisableAsync("application_exit");
+        await _monitorLifecycle.DisposeAsync();
         if (_pendingRestores.Count > 0)
         {
             Log("rgb_pending_restore_on_exit", new
