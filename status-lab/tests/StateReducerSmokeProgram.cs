@@ -605,7 +605,7 @@ Require(replayLedger.Snapshot.RunningCount == 1 && replayLedger.Snapshot.DoneUnr
 
 var config = StatusLabConfig.CreateDefault();
 config.Validate();
-Require(config.SchemaVersion == 5, "Canonical TOML schema must be v5.");
+Require(config.SchemaVersion == 6, "Canonical TOML schema must be v6.");
 Require(config.WireColorOrder == WireColorOrder.RGB, "Physical K15 default must use RGB.");
 Require(config.DoneAttentionTimeoutSeconds == 30, "DONE fallback timeout default must be 30 seconds.");
 Require(config.StaleAttentionTimeoutSeconds == 18000, "Stale attention timeout default must be five hours.");
@@ -618,9 +618,17 @@ Require(config.States.Done.Mode == K15LightingMode.SingleColorBreathing && confi
     "DONE must use slower single-color breathing speed 5.");
 Require(config.StopSignal.Mode == K15LightingMode.CycleBreathing && config.StopSignal.Palette == PaletteSource.ProfilePair,
     "STOP signal must use two-color Cycle breathing.");
-Require(config.ActivationSignal.Enabled && config.ActivationSignal.Mode == K15LightingMode.CycleBreathing &&
+Require(!config.ActivationSignal.Enabled && config.ActivationSignal.Mode == K15LightingMode.CycleBreathing &&
         config.ActivationSignal.Palette == PaletteSource.ProfilePair && config.ActivationSignal.Speed == 7,
-    "RGB activation must use fast two-color Cycle breathing.");
+    "RGB activation must retain its optional two-color Cycle breathing parameters but be disabled by default.");
+Require(config.SelectEnablePresentation(K15NormalizedState.Normal) == RgbEnablePresentation.Baseline,
+    "NORMAL RGB enable must select the canonical profile baseline without activation flash.");
+Require(config.SelectEnablePresentation(K15NormalizedState.Running) == RgbEnablePresentation.Running,
+    "RUNNING RGB enable must select the real RUNNING presentation immediately.");
+Require(config.SelectEnablePresentation(K15NormalizedState.Waiting) == RgbEnablePresentation.Waiting,
+    "WAITING RGB enable must select the real WAITING presentation immediately.");
+Require(config.SelectEnablePresentation(K15NormalizedState.DonePendingAttention) == RgbEnablePresentation.Done,
+    "DONE RGB enable must select the real DONE presentation immediately.");
 Require(!config.ProfileSwitch.Enabled && config.ProfileSwitch.DurationSeconds == 0,
     "RC1 must not compete with the keyboard-native profile switch animation.");
 Require(StatusLabConfig.IsControlledPaletteMode(K15LightingMode.CycleBreathing),
@@ -755,7 +763,7 @@ Require(pairRecord[7] == 0 && pairRecord[8] == 0 && pairRecord[9] == 0xFF,
     "profile_pair slot 2 must encode profile B blue.");
 
 var toml = ConfigToml.Serialize(config);
-Require(toml.Contains("schema_version = 5", StringComparison.Ordinal), "Canonical TOML must use schema v5.");
+Require(toml.Contains("schema_version = 6", StringComparison.Ordinal), "Canonical TOML must use schema v6.");
 Require(toml.Contains("[behavior]", StringComparison.Ordinal) &&
         toml.Contains("stale_attention_timeout_seconds = 18000", StringComparison.Ordinal),
     "Canonical TOML must expose five-hour stale attention behavior.");
@@ -772,7 +780,7 @@ Require(roundTrip.StopSignal.Palette == PaletteSource.ProfilePair, "TOML round-t
 Require(roundTrip.StaleAttentionTimeoutSeconds == 18000, "TOML round-trip lost stale timeout.");
 
 var existingV3WithoutBehavior = ConfigToml.Parse("schema_version = 3\n[states.done]\neffect = \"single_color_breathing\"\npalette = \"profile\"\n");
-Require(existingV3WithoutBehavior.SchemaVersion == 5 && existingV3WithoutBehavior.StaleAttentionTimeoutSeconds == 18000,
+Require(existingV3WithoutBehavior.SchemaVersion == 6 && existingV3WithoutBehavior.StaleAttentionTimeoutSeconds == 18000,
     "Existing schema-v3 config without [behavior] must inherit the safe five-hour stale default.");
 
 var oldV3 = ConfigToml.Parse("""
@@ -796,12 +804,58 @@ speed = 5
 direction = 0
 duration_seconds = 3
 """);
-Require(oldV3.SchemaVersion == 5 && oldV3.StaleAttentionTimeoutSeconds == 18000,
+Require(oldV3.SchemaVersion == 6 && oldV3.StaleAttentionTimeoutSeconds == 18000,
     "Legacy DONE timeout must not be silently reinterpreted as stale attention.");
 Require(!oldV3.ProfileSwitch.Enabled && oldV3.ProfileSwitch.DurationSeconds == 0,
     "Exact beta profile-switch default must migrate to OFF in memory.");
 Require(oldV3.ActivationSignal.Mode == K15LightingMode.CycleBreathing && oldV3.ActivationSignal.Speed == 7,
     "Exact beta activation default must migrate to fast Cycle breathing.");
+Require(!oldV3.ActivationSignal.Enabled,
+    "Exact legacy activation default must migrate disabled after normalization.");
+
+var formerV5 = ConfigToml.Parse("""
+schema_version = 5
+[activation]
+enabled = true
+effect = "cycle_breathing"
+palette = "profile_pair"
+brightness = 6
+speed = 7
+direction = 0
+duration_seconds = 3
+""");
+Require(formerV5.SchemaVersion == 6 && !formerV5.ActivationSignal.Enabled &&
+        formerV5.ActivationSignal.DurationSeconds == 3,
+    "Exact former v5 activation default must migrate disabled while preserving parameters.");
+
+var customActivation = ConfigToml.Parse("""
+schema_version = 5
+[activation]
+enabled = true
+effect = "cycle_breathing"
+palette = "profile_pair"
+brightness = 6
+speed = 6
+direction = 0
+duration_seconds = 5
+""");
+Require(customActivation.ActivationSignal.Enabled && customActivation.ActivationSignal.Speed == 6 &&
+        customActivation.ActivationSignal.DurationSeconds == 5,
+    "Customized activation must remain enabled with its values preserved.");
+
+var explicitlyDisabled = ConfigToml.Parse("""
+schema_version = 5
+[activation]
+enabled = false
+effect = "cycle_breathing"
+palette = "profile_pair"
+brightness = 6
+speed = 7
+direction = 0
+duration_seconds = 3
+""");
+Require(!explicitlyDisabled.ActivationSignal.Enabled,
+    "Explicitly disabled activation must remain disabled.");
 
 var customV3 = ConfigToml.Parse("""
 schema_version = 3
@@ -821,7 +875,7 @@ Require(customV3.DoneAttentionTimeoutSeconds == 45 && customV3.StaleAttentionTim
     "Schema migration must preserve legacy data without reusing it as stale attention.");
 
 var legacyV2 = ConfigToml.Parse("schema_version = 2\n[states.running]\neffect = \"flowing_water\"\n");
-Require(legacyV2.SchemaVersion == 5, "Legacy schema v2 must migrate in memory without rewriting the file.");
+Require(legacyV2.SchemaVersion == 6, "Legacy schema v2 must migrate in memory without rewriting the file.");
 
 var unsafeRejected = false;
 try

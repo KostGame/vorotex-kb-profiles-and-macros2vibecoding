@@ -34,23 +34,24 @@ if ($html -match "\['mono_water'" -or $html -match "\['tetris_blocks'" -or $html
 if ($html -notmatch 'cycle_breathing' -or $html -notmatch 'profile_pair' -or $html -notmatch 'stop_signal') {
     throw 'Configurator must expose accepted Cycle breathing and profile-pair STOP/activation signals.'
 }
-if ($html -notmatch 'staleTimeout:18000' -or $html -notmatch 'schema_version = 5' -or $html -notmatch 'profile_switch:\{enabled:false') {
-    throw 'Configurator must expose schema v5, five-hour stale attention reset, and profile switch OFF.'
+if ($html -notmatch 'staleTimeout:18000' -or $html -notmatch 'schema_version = 6' -or $html -notmatch 'profile_switch:\{enabled:false') {
+    throw 'Configurator must expose schema v6, five-hour stale attention reset, and profile switch OFF.'
 }
-if ($html -notmatch "activation:\{enabled:true,effect:'cycle_breathing'" -or $html -notmatch 'migrateLoadedModel') {
-    throw 'Configurator must use Cycle breathing activation and migrate beta defaults in memory.'
+if ($html -notmatch "activation:\{enabled:false,effect:'cycle_breathing'" -or $html -notmatch 'migrateLoadedModel') {
+    throw 'Configurator must disable activation by default and migrate beta defaults in memory.'
 }
 
 $toml = Get-Content -LiteralPath $configExample -Raw -Encoding UTF8
-if ($toml -notmatch 'schema_version\s*=\s*5' -or $toml -notmatch '\[stop_signal\]' -or $toml -notmatch 'profile_pair') {
-    throw 'TOML example must use schema v5 and include profile-pair STOP signal.'
+if ($toml -notmatch 'schema_version\s*=\s*6' -or $toml -notmatch '\[stop_signal\]' -or $toml -notmatch 'profile_pair') {
+    throw 'TOML example must use schema v6 and include profile-pair STOP signal.'
 }
 if ($toml -notmatch '\[behavior\]' -or $toml -notmatch 'stale_attention_timeout_seconds\s*=\s*18000') {
     throw 'TOML example must expose five-hour stale attention reset.'
 }
 if ($toml -notmatch '\[profile_switch\][\s\S]*?enabled\s*=\s*false' -or
-    $toml -notmatch '\[activation\][\s\S]*?effect\s*=\s*"cycle_breathing"') {
-    throw 'RC1 TOML must disable profile-switch overlay and use Cycle breathing activation.'
+    $toml -notmatch '\[activation\][\s\S]*?effect\s*=\s*"cycle_breathing"' -or
+    $toml -notmatch '\[activation\][\s\S]*?enabled\s*=\s*false') {
+    throw 'RC1 TOML must disable profile-switch and activation overlays by default.'
 }
 if ($toml -notmatch '\[profiles\.A\]' -or $toml -notmatch '\[states\.running\]' -or $toml -notmatch '#') {
     throw 'TOML example must be annotated and include profile/state sections.'

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "wireColorOrder": "rgb",
   "activationSignal": {
-    "enabled": true,
+    "enabled": false,
     "mode": "flowingWater",
     "brightness": 4,
     "speed": 7,
