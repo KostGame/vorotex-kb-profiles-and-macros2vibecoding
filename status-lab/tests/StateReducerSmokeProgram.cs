@@ -239,6 +239,32 @@ Require(parsedCompletion?.CompletionStatus == "completed" && parsedCompletion.Th
         parsedCompletion.TurnId == "turn-parser", "Valid completion parser shape changed.");
 Require(JournalStateNormalizer.ParseInput("{\"schemaVersion\":\"k15-codex-completion/v1\",\"timestampUtc\":\"2026-08-25T00:00:00Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"turn_completed\",\"threadId\":\"thread-parser\",\"turnId\":\"turn-parser\",\"status\":\"inProgress\"}") is null,
     "Non-terminal inProgress completion must be rejected by the parser.");
+var richPermission = JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:00Z\",\"source\":\"codex_hook\",\"event\":\"PermissionRequest\",\"sessionId\":\"permission-session\",\"turnId\":\"permission-turn\",\"cwd\":\"C:\\\\work\",\"toolName\":\"Bash\",\"permissionMode\":\"default\",\"prompt\":\"MUST NOT PERSIST\",\"tool_input\":\"MUST NOT PERSIST\"}");
+Require(richPermission?.ToolName == "Bash" && richPermission.PermissionMode == "default" &&
+        richPermission.SessionId == "permission-session" && richPermission.TurnId == "permission-turn",
+    "Permission metadata parser must preserve only bounded structured fields.");
+var richPermissionReducer = new StateReducer();
+richPermissionReducer.Apply(richPermission!);
+var richPermissionTransition = richPermissionReducer.LastSessionTransitions.Single();
+Require(richPermissionReducer.State == K15NormalizedState.Waiting &&
+        richPermissionTransition.PermissionEvidence?.ToolName == "Bash" &&
+        richPermissionTransition.PermissionEvidence.PermissionMode == "default" &&
+        richPermissionTransition.PermissionEvidence.ToolNamePresent &&
+        richPermissionTransition.PermissionEvidence.PermissionModePresent,
+    "Rich PermissionRequest metadata must not change WAITING semantics.");
+var plainPermission = JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:00Z\",\"source\":\"codex_hook\",\"event\":\"PermissionRequest\",\"sessionId\":\"plain-session\",\"turnId\":\"plain-turn\"}");
+var plainPermissionReducer = new StateReducer();
+plainPermissionReducer.Apply(plainPermission!);
+Require(plainPermission?.ToolName == "" && plainPermission?.PermissionMode == "" &&
+        plainPermissionReducer.State == K15NormalizedState.Waiting &&
+        plainPermissionReducer.LastSessionTransitions.Single().PermissionEvidence is { ToolName: "", PermissionMode: "", ToolNamePresent: false, PermissionModePresent: false },
+    "Missing PermissionRequest metadata must remain explicit and preserve WAITING semantics.");
+var oversizedPermission = JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:00Z\",\"source\":\"codex_hook\",\"event\":\"PermissionRequest\",\"sessionId\":\"bounded-session\",\"turnId\":\"bounded-turn\",\"toolName\":\"" + new string('x', 129) + "\",\"permissionMode\":\"default\"}");
+var oversizedPermissionReducer = new StateReducer();
+oversizedPermissionReducer.Apply(oversizedPermission!);
+Require(oversizedPermission?.ToolName == "" &&
+        oversizedPermissionReducer.LastSessionTransitions.Single().PermissionEvidence is { ToolName: "", ToolNamePresent: true },
+    "Oversized PermissionRequest metadata must be bounded without changing WAITING semantics.");
 var journalFixture = Path.Combine(Path.GetTempPath(), "vorotex-k15-event-journal-" + Guid.NewGuid().ToString("N"));
 try
 {
@@ -283,6 +309,18 @@ try
     });
     Require(File.ReadAllLines(EventJournal.FilePath).Length == 2,
         "Schema-specific EventJournal filtering must reject cross-schema fields and retain valid approval.");
+    EventJournal.Append(new
+    {
+        timestampUtc = t, source = "state_normalizer", @event = "session_state_changed", plane = "per_session",
+        sessionId = "permission-session", previous = "RUNNING", current = "WAITING", reason = "codex_permission_request",
+        sourceTimestampUtc = t, isRehydrated = false,
+        correlation = new { threadId = "permission-session", turnId = "permission-turn", rpcIdType = "", rpcId = "" },
+        permissionEvidence = new PermissionRequestEvidence(ToolName: "Bash", PermissionMode: "default", ToolNamePresent: true, PermissionModePresent: true)
+    });
+    var journalText = File.ReadAllText(EventJournal.FilePath);
+    Require(journalText.Contains("\"toolName\":\"Bash\"", StringComparison.Ordinal) &&
+            !journalText.Contains("MUST NOT PERSIST", StringComparison.Ordinal),
+        "Permission diagnostic journal must retain safe metadata and reject raw payload content.");
 }
 finally
 {

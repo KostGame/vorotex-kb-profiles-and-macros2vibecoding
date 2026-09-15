@@ -39,7 +39,34 @@ internal sealed record StatusInputEvent(
     string RpcId = "",
     string ThreadId = "",
     string ItemId = "",
-    string CompletionStatus = "");
+    string CompletionStatus = "",
+    string ToolName = "",
+    string PermissionMode = "",
+    bool ToolNameProvided = false,
+    bool PermissionModeProvided = false);
+
+internal sealed record PermissionRequestEvidence(
+    string EventSubtype = "",
+    string RequestKind = "",
+    string RequestId = "",
+    string RpcIdType = "",
+    string RpcId = "",
+    string ToolName = "",
+    string PermissionMode = "",
+    string ItemId = "",
+    string ThreadId = "",
+    string TurnId = "",
+    string SessionId = "",
+    bool EventSubtypePresent = false,
+    bool RequestKindPresent = false,
+    bool RequestIdPresent = false,
+    bool RpcIdPresent = false,
+    bool ToolNamePresent = false,
+    bool PermissionModePresent = false,
+    bool ItemIdPresent = false,
+    bool ThreadIdPresent = false,
+    bool TurnIdPresent = false,
+    bool SessionIdPresent = false);
 
 internal sealed record StateTransition(
     K15NormalizedState Previous,
@@ -57,7 +84,8 @@ internal sealed record SessionStateTransition(
     string TurnId,
     string RpcIdType,
     string RpcId,
-    bool IsRehydrated);
+    bool IsRehydrated,
+    PermissionRequestEvidence? PermissionEvidence = null);
 
 internal sealed record CodexSessionSnapshot(
     string SessionId,
@@ -595,9 +623,27 @@ internal sealed class StateReducer
             turnId,
             input?.RpcIdType ?? string.Empty,
             input?.RpcId ?? string.Empty,
-            false);
+            false,
+            input?.EventName == "PermissionRequest"
+                ? new PermissionRequestEvidence(
+                    ToolName: BoundedDiagnostic(input.ToolName),
+                    PermissionMode: BoundedDiagnostic(input.PermissionMode),
+                    ItemId: BoundedDiagnostic(input.ItemId),
+                    ThreadId: BoundedDiagnostic(input.ThreadId),
+                    TurnId: BoundedDiagnostic(input.TurnId),
+                    SessionId: BoundedDiagnostic(input.SessionId),
+                    ToolNamePresent: input.ToolNameProvided || !string.IsNullOrWhiteSpace(input.ToolName),
+                    PermissionModePresent: input.PermissionModeProvided || !string.IsNullOrWhiteSpace(input.PermissionMode),
+                    ItemIdPresent: !string.IsNullOrWhiteSpace(input.ItemId),
+                    ThreadIdPresent: !string.IsNullOrWhiteSpace(input.ThreadId),
+                    TurnIdPresent: !string.IsNullOrWhiteSpace(input.TurnId),
+                    SessionIdPresent: !string.IsNullOrWhiteSpace(input.SessionId))
+                : null);
         LastSessionTransitions = LastSessionTransitions.Append(transition).ToArray();
     }
+
+    private static string BoundedDiagnostic(string value) =>
+        CodexUnreadStateReader.Bounded(value) ? value : string.Empty;
 
     internal static bool IsInternalCwd(string cwd)
     {
