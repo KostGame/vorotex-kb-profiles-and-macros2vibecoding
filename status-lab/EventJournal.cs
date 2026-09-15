@@ -146,7 +146,7 @@ internal static class EventJournal
         var allowed = name switch
         {
             "normalized_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "previous", "current", "reason", "sourceTimestampUtc", "focusedSessionId", "focusedCwd", "activeTaskSessions", "attention", "aggregatePrevious", "aggregateCurrent", "driverSessionId", "driverReason", "runningCount", "waitingCount", "doneUnreadCount" },
-            "session_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "sessionId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation" },
+            "session_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "sessionId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation", "permissionEvidence" },
             "state_rehydrated" => new[] { "timestampUtc", "source", "event", "current", "focusedSessionId", "focusedCwd", "activeTaskSessions", "attention", "replayWindowMinutes" },
             _ => new[] { "timestampUtc", "source", "event", "exception", "hresult" }
         };
@@ -164,10 +164,11 @@ internal static class EventJournal
         if (root.TryGetProperty("driverReason", out var driverReason) &&
             (driverReason.ValueKind != JsonValueKind.String || !IsSafeReason(driverReason.GetString()))) return false;
         if (root.TryGetProperty("correlation", out var correlation) && !IsSafeCorrelation(correlation)) return false;
+        if (root.TryGetProperty("permissionEvidence", out var permissionEvidence) && !IsSafePermissionEvidence(permissionEvidence)) return false;
         if (root.TryGetProperty("attention", out var attention) && !IsSafeAttention(attention)) return false;
         foreach (var property in root.EnumerateObject())
         {
-            if (property.Name is "timestampUtc" or "sourceTimestampUtc" or "correlation" or "attention") continue;
+            if (property.Name is "timestampUtc" or "sourceTimestampUtc" or "correlation" or "attention" or "permissionEvidence") continue;
             if (property.Value.ValueKind == JsonValueKind.String && Encoding.UTF8.GetByteCount(property.Value.GetString() ?? string.Empty) > 256) return false;
             if (property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array) return false;
         }
@@ -200,6 +201,23 @@ internal static class EventJournal
     {
         var allowed = new[] { "threadId", "turnId", "rpcIdType", "rpcId" };
         return value.ValueKind == JsonValueKind.Object && value.EnumerateObject().All(p => allowed.Contains(p.Name, StringComparer.Ordinal) && p.Value.ValueKind == JsonValueKind.String && Encoding.UTF8.GetByteCount(p.Value.GetString() ?? string.Empty) <= 128);
+    }
+    private static bool IsSafePermissionEvidence(JsonElement value)
+    {
+        var allowed = new[] { "eventSubtype", "requestKind", "requestId", "rpcIdType", "rpcId", "toolName", "permissionMode", "itemId", "threadId", "turnId", "sessionId", "eventSubtypePresent", "requestKindPresent", "requestIdPresent", "rpcIdPresent", "toolNamePresent", "permissionModePresent", "itemIdPresent", "threadIdPresent", "turnIdPresent", "sessionIdPresent" };
+        if (value.ValueKind != JsonValueKind.Object || value.EnumerateObject().Any(p => !allowed.Contains(p.Name, StringComparer.Ordinal))) return false;
+        foreach (var property in value.EnumerateObject())
+        {
+            if (property.Name.EndsWith("Present", StringComparison.Ordinal))
+            {
+                if (property.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return false;
+            }
+            else if (property.Value.ValueKind != JsonValueKind.String || Encoding.UTF8.GetByteCount(property.Value.GetString() ?? string.Empty) > 128)
+            {
+                return false;
+            }
+        }
+        return true;
     }
     private static bool IsSafeAttention(JsonElement value)
     {

@@ -320,7 +320,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 turnId = BoundOpaque(transition.TurnId),
                 rpcIdType = transition.RpcIdType,
                 rpcId = BoundOpaque(transition.RpcId)
-            }
+            },
+            permissionEvidence = transition.PermissionEvidence ?? new PermissionRequestEvidence()
         });
     }
 
@@ -414,7 +415,11 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 sessionId,
                 GetString(root, "turnId"),
                 GetString(root, "cwd"),
-                ThreadId: threadId);
+                ThreadId: threadId,
+                ToolName: GetDiagnosticString(root, "toolName"),
+                PermissionMode: GetDiagnosticString(root, "permissionMode"),
+                ToolNameProvided: HasStringProperty(root, "toolName"),
+                PermissionModeProvided: HasStringProperty(root, "permissionMode"));
         }
         catch (JsonException)
         {
@@ -549,6 +554,15 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         const int maxBytes = 1024;
         var value = GetString(root, name);
         return value.Length > 0 && Encoding.UTF8.GetByteCount(value) <= maxBytes ? value : string.Empty;
+    }
+
+    private static bool HasStringProperty(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var node) && node.ValueKind == JsonValueKind.String;
+
+    private static string GetDiagnosticString(JsonElement root, string name)
+    {
+        var value = GetString(root, name);
+        return value.Length > 0 && Encoding.UTF8.GetByteCount(value) <= 128 ? value : string.Empty;
     }
 
     internal static string ToWireName(K15NormalizedState state) => state switch
