@@ -914,5 +914,40 @@ Require(framed.Length == 41 && framed[0] == 0x06, "HID report framing changed.")
 Require(K15HidProtocol.IsSupportedDevice(0xB6A4, 0x4100), "Physical K15 VID/PID must be accepted.");
 Require(!K15HidProtocol.IsSupportedDevice(0x1234, 0x4100), "Unrelated VID must be rejected.");
 
+var motionIdleA = CodexPetMotion.Sample(CodexPetVisualState.Idle, 0.7);
+var motionIdleB = CodexPetMotion.Sample(CodexPetVisualState.Idle, 0.7);
+Require(motionIdleA == motionIdleB && Math.Abs(motionIdleA.OffsetX) <= 1.8 && Math.Abs(motionIdleA.OffsetY) <= 0.2,
+    "Idle motion must be deterministic and bounded.");
+var runningSamples = Enumerable.Range(0, 120).Select(i => CodexPetMotion.Sample(CodexPetVisualState.Running, i / 30d)).ToArray();
+Require(runningSamples.All(sample => Math.Abs(sample.OffsetX) <= 2.2 && Math.Abs(sample.OffsetY) <= 0.2),
+    "Running sway must stay bounded.");
+var waitingActive = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0.2);
+var waitingQuiet = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 1.2);
+Require(Math.Abs(waitingActive.OffsetY) > 0.1 && Math.Abs(waitingActive.OffsetX) > 0.1 &&
+        waitingQuiet == new PetMotionSample(0, 0), "Waiting must have a bounded burst and quiet interval.");
+Require(CodexPetMotion.Sample(CodexPetVisualState.Review, 0.2).OffsetY < -0.1 &&
+        Math.Abs(CodexPetMotion.Sample(CodexPetVisualState.Review, 1.2).OffsetY) <= 0.2,
+    "Review must bounce once and settle to sway.");
+
+var testTime = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+static CodexSessionSnapshot PetSession(string id, K15NormalizedState state, string cwd, DateTimeOffset time, string thread = "") =>
+    new(id, state, true, false, cwd, thread, "turn", time);
+var taskPresentation = CodexPetAdapter.MapPresentation(
+    [PetSession("run", K15NormalizedState.Running, @"D:\Projects\Run", testTime),
+     PetSession("wait", K15NormalizedState.Waiting, @"D:\Projects\Wait", testTime.AddMinutes(1)),
+     PetSession("review", K15NormalizedState.DonePendingAttention, @"D:\Projects\Review", testTime.AddMinutes(2), "thread-review")],
+    new Dictionary<string, CodexUnreadState> { ["thread-review"] = CodexUnreadState.HasUnread });
+Require(taskPresentation.RelevantTaskCount == 3 && taskPresentation.Global.State == CodexPetVisualState.Waiting &&
+        taskPresentation.Tasks.Select(task => task.VisualState).SequenceEqual([
+            CodexPetVisualState.Waiting, CodexPetVisualState.Review, CodexPetVisualState.Running]),
+    "Task presentation must classify and order Waiting, Review, Running.");
+Require(CodexPetAdapter.DeriveDisplayTitle(@"D:\Projects\Run") == "Run" &&
+        CodexPetAdapter.DeriveDisplayTitle("") == "Codex task" &&
+        CodexPetAdapter.FormatTaskCount(100) == "99+", "Task labels and count formatting must be bounded.");
+Require(CodexPetAdapter.MapPresentation(
+    [PetSession("unknown", K15NormalizedState.DonePendingAttention, @"D:\Unknown", testTime, "thread-unknown")],
+    new Dictionary<string, CodexUnreadState> { ["thread-unknown"] = CodexUnreadState.Unknown }).RelevantTaskCount == 0,
+    "Unknown unread DONE must be excluded.");
+
 CodexReadAckTests.Run();
 Console.WriteLine("RC1 approval + session-aware reducer + 30s DONE + RGB policy + HID tests: PASS");

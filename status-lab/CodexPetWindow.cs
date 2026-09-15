@@ -5,13 +5,16 @@ namespace Vorotex.K15.StatusLab;
 
 internal sealed class CodexPetWindow : Form
 {
-    private readonly System.Windows.Forms.Timer _animation = new() { Interval = 80 };
+    private readonly System.Windows.Forms.Timer _animation = new() { Interval = 33 };
     private readonly CodexPetPositionStore _positionStore;
     private readonly StatusLabConfig _config;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private ProfileColorHint _profileHint;
     private CodexPetVisualState _state;
-    private int _phase;
+    private double _stateEnteredSeconds;
+    private CodexPetPresentation _presentation = new(
+        new(CodexPetVisualState.Idle, "initial", null, null), Array.Empty<CodexPetTaskRow>());
+    private readonly CodexPetTaskPopup _popup;
     private bool _dragging;
     private bool _dragMoved;
     private Point _dragStartCursor;
@@ -33,18 +36,32 @@ internal sealed class CodexPetWindow : Form
         TransparencyKey = BackColor;
         DoubleBuffered = true;
         ContextMenuStrip = BuildContextMenu();
+        _popup = new CodexPetTaskPopup(this);
         MouseDown += HandleMouseDown;
         MouseMove += HandleMouseMove;
         MouseUp += HandleMouseUp;
-        _animation.Tick += (_, _) => { _phase = (_phase + 1) % 8; Invalidate(); };
+        _animation.Tick += (_, _) => Invalidate();
         _animation.Start();
     }
 
     public void SetState(CodexPetVisualState state)
     {
+        if (_state != state)
+        {
+            _stateEnteredSeconds = _clock.Elapsed.TotalSeconds;
+        }
         _state = state;
         Invalidate();
     }
+
+    public void SetPresentation(CodexPetPresentation presentation)
+    {
+        _presentation = presentation;
+        _popup.SetPresentation(presentation);
+        Invalidate();
+    }
+
+    internal void HidePopup() => _popup.Hide();
 
     public void SetProfileHint(ProfileColorHint hint)
     {
@@ -69,6 +86,12 @@ internal sealed class CodexPetWindow : Form
     private void HandleMouseDown(object? sender, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
+        if (BadgeBounds().Contains(e.Location))
+        {
+            _popup.Toggle(_presentation.RelevantTaskCount);
+            return;
+        }
+        if (_popup.Visible) _popup.Hide();
         _dragging = true;
         _dragMoved = false;
         _dragStartCursor = Cursor.Position;
@@ -106,8 +129,8 @@ internal sealed class CodexPetWindow : Form
         base.OnPaint(e);
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var bob = _state == CodexPetVisualState.Idle ? (_phase % 4 == 0 ? 1 : 0) : (_phase % 2);
-        var body = new Rectangle(11, 20 + bob, 106, 88);
+        var motion = CodexPetMotion.Sample(_state, _clock.Elapsed.TotalSeconds - _stateEnteredSeconds);
+        var body = new Rectangle(11 + (int)Math.Round(motion.OffsetX), 20 + (int)Math.Round(motion.OffsetY), 106, 88);
         using var shadow = new SolidBrush(Color.FromArgb(70, 0, 0, 0));
         FillRounded(g, new Rectangle(body.X + 3, body.Y + 5, body.Width, body.Height), 11, shadow);
         using var chassis = new SolidBrush(Color.FromArgb(40, 45, 54));
@@ -129,6 +152,25 @@ internal sealed class CodexPetWindow : Form
             DrawControl(g, control, bounds, sample, palette);
         }
 
+        DrawBadge(g, BadgeBounds(), _presentation.RelevantTaskCount, palette);
+
+    }
+
+    private Rectangle BadgeBounds() => new(92, 5, 30, 18);
+
+    private static void DrawBadge(Graphics graphics, Rectangle bounds, int count, PetPalette palette)
+    {
+        if (count == 0) return;
+        var accent = palette.IsNeutral ? Color.FromArgb(103, 139, 153) :
+            Color.FromArgb(palette.Primary.R, palette.Primary.G, palette.Primary.B);
+        using var fill = new SolidBrush(Color.FromArgb(238, 31, 36, 45));
+        using var outline = new Pen(Color.FromArgb(210, accent), 1);
+        FillRounded(graphics, bounds, 8, fill);
+        DrawRounded(graphics, bounds, 8, outline);
+        using var text = new SolidBrush(Color.FromArgb(235, accent));
+        using var font = new Font("Segoe UI", 8f, FontStyle.Bold, GraphicsUnit.Pixel);
+        using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        graphics.DrawString(CodexPetAdapter.FormatTaskCount(count), font, text, bounds, format);
     }
 
     private static Rectangle ControlBounds(Rectangle body, MiniK15Control control) => new(
@@ -218,7 +260,11 @@ internal sealed class CodexPetWindow : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _animation.Dispose();
+        if (disposing)
+        {
+            _popup.Dispose();
+            _animation.Dispose();
+        }
         base.Dispose(disposing);
     }
 
@@ -264,12 +310,15 @@ internal sealed class CodexPetController : IDisposable
     {
         _visible = true;
         _window.Show();
+        Refresh();
     }
 
     private void HidePet()
     {
         _visible = false;
+        _window.HidePopup();
         _window.Hide();
+        if (_refresh.Enabled && !CodexPetAdapter.ShouldPollUnread(_normalizer.SessionSnapshots)) _refresh.Stop();
     }
 
     private void OnStateChanged(K15NormalizedState _, StateTransition? __)
@@ -288,12 +337,15 @@ internal sealed class CodexPetController : IDisposable
         if (_window.IsDisposed) return;
         var sessions = _normalizer.SessionSnapshots;
         var canPollUnread = CodexPetAdapter.ShouldPollUnread(sessions);
-        if (canPollUnread && !_refresh.Enabled) _refresh.Start();
-        if (!canPollUnread && _refresh.Enabled) _refresh.Stop();
+        // The existing bounded refresh also catches per-session list changes
+        // while the pet is visible; it never performs animation work.
+        if ((canPollUnread || _visible) && !_refresh.Enabled) _refresh.Start();
+        if (!canPollUnread && !_visible && _refresh.Enabled) _refresh.Stop();
         // One canonical reader snapshot is shared by every eligible DONE thread.
         var unreadSnapshot = canPollUnread ? _reader.Read(DateTimeOffset.UtcNow) : null;
-        var snapshot = CodexPetAdapter.Map(sessions, unreadSnapshot);
-        _window.SetState(snapshot.State);
+        var presentation = CodexPetAdapter.MapPresentation(sessions, unreadSnapshot);
+        _window.SetPresentation(presentation);
+        _window.SetState(presentation.Global.State);
     }
 
     public void Dispose()
