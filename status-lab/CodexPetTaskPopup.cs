@@ -88,16 +88,11 @@ internal sealed class CodexPetTaskPopup : Form
         var y = 7;
         foreach (var row in _tasks.Take(5))
         {
-            var palette = PetPaletteResolver.Resolve(_config, _profileHint, DateTimeOffset.UtcNow);
-            var accent = CodexPetPopupPolicy.Accent(palette, row.VisualState);
-            using var dot = new SolidBrush(accent);
-            e.Graphics.FillEllipse(dot, 10, y + 9, 8, 8);
+            var glyph = CodexPetPopupPolicy.GlyphFor(row.VisualState);
+            DrawGlyph(e.Graphics, glyph, new Point(14, y + 14));
             using var title = new SolidBrush(Color.FromArgb(235, 235, 240, 244));
-            using var subtitle = new SolidBrush(Color.FromArgb(165, 190, 198, 205));
-            using var titleFont = new Font("Segoe UI", 9f, FontStyle.Bold, GraphicsUnit.Pixel);
-            using var subtitleFont = new Font("Segoe UI", 7f, FontStyle.Regular, GraphicsUnit.Pixel);
-            e.Graphics.DrawString(row.DisplayTitle, titleFont, title, 26, y + 3);
-            e.Graphics.DrawString(row.DisplaySubtitle ?? string.Empty, subtitleFont, subtitle, 26, y + 16);
+            using var titleFont = new Font("Segoe UI", 11f, FontStyle.Bold, GraphicsUnit.Pixel);
+            e.Graphics.DrawString(row.DisplayTitle, titleFont, title, 28, y + 7);
             y += 30;
         }
         if (_tasks.Count > 5)
@@ -105,6 +100,26 @@ internal sealed class CodexPetTaskPopup : Form
             using var overflow = new SolidBrush(Color.FromArgb(175, 190, 198, 205));
             using var font = new Font("Segoe UI", 8f, FontStyle.Regular, GraphicsUnit.Pixel);
             e.Graphics.DrawString("+ " + CodexPetPopupPolicy.OverflowCount(_tasks.Count) + " ещё", font, overflow, 10, y + 1);
+        }
+    }
+
+    private static void DrawGlyph(Graphics graphics, CodexPetPopupPolicy.TaskStatusGlyphStyle glyph, Point center)
+    {
+        using var brush = new SolidBrush(glyph.SemanticColor);
+        using var pen = new Pen(glyph.SemanticColor, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        switch (glyph.Shape)
+        {
+            case CodexPetPopupPolicy.TaskStatusGlyphShape.Dot:
+                graphics.FillEllipse(brush, center.X - 5, center.Y - 5, 10, 10);
+                break;
+            case CodexPetPopupPolicy.TaskStatusGlyphShape.AttentionCircle:
+                graphics.DrawEllipse(pen, center.X - 6, center.Y - 6, 12, 12);
+                graphics.DrawLine(pen, center.X, center.Y - 3, center.X, center.Y + 1);
+                graphics.FillEllipse(brush, center.X - 1, center.Y + 3, 2, 2);
+                break;
+            case CodexPetPopupPolicy.TaskStatusGlyphShape.Check:
+                graphics.DrawLines(pen, new Point[] { new Point(center.X - 6, center.Y), new Point(center.X - 2, center.Y + 4), new Point(center.X + 6, center.Y - 5) });
+                break;
         }
     }
 }

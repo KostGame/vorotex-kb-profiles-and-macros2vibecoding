@@ -6,6 +6,17 @@ namespace Vorotex.K15.StatusLab;
 // global input hooks or coupling tests to WinForms event ordering.
 internal static class CodexPetPopupPolicy
 {
+    internal enum TaskStatusGlyphShape { Dot, AttentionCircle, Check }
+
+    internal readonly record struct TaskStatusGlyphStyle(TaskStatusGlyphShape Shape, Color SemanticColor);
+
+    internal static TaskStatusGlyphStyle GlyphFor(CodexPetVisualState state) => state switch
+    {
+        CodexPetVisualState.Waiting => new(TaskStatusGlyphShape.AttentionCircle, Color.FromArgb(240, 166, 55)),
+        CodexPetVisualState.Review => new(TaskStatusGlyphShape.Check, Color.FromArgb(104, 196, 126)),
+        _ => new(TaskStatusGlyphShape.Dot, Color.FromArgb(86, 177, 224))
+    };
+
     internal static bool ToggleOpen(bool isOpen) => !isOpen;
     internal static int VisibleRows(int total) => Math.Min(5, Math.Max(0, total));
     internal static int OverflowCount(int total) => Math.Max(0, total - VisibleRows(total));

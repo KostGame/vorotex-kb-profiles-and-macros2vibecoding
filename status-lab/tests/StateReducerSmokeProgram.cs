@@ -921,10 +921,23 @@ Require(motionIdleA == motionIdleB && Math.Abs(motionIdleA.OffsetX) <= 1.8 && Ma
 var runningSamples = Enumerable.Range(0, 120).Select(i => CodexPetMotion.Sample(CodexPetVisualState.Running, i / 30d)).ToArray();
 Require(runningSamples.All(sample => Math.Abs(sample.OffsetX) <= 2.2 && Math.Abs(sample.OffsetY) <= 0.2),
     "Running sway must stay bounded.");
-var waitingActive = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0.2);
-var waitingQuiet = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 1.2);
-Require(Math.Abs(waitingActive.OffsetY) > 0.1 && Math.Abs(waitingActive.OffsetX) > 0.1 &&
-        waitingQuiet == new PetMotionSample(0, 0), "Waiting must have a bounded burst and quiet interval.");
+var waitingAtStart = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0);
+var waitingBeforeArm = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0.69);
+var waitingAfterArm = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0.85);
+var waitingQuiet = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 1.5);
+Require(Math.Abs(waitingAtStart.OffsetY) <= 0.2 && Math.Abs(waitingBeforeArm.OffsetY) <= 0.2 &&
+        Math.Abs(waitingAfterArm.OffsetY) > 0.1 && Math.Abs(waitingAfterArm.OffsetX) > 0.1 &&
+        waitingQuiet == new PetMotionSample(0, 0), "Waiting must arm after a calm delay and retain burst/quiet cadence.");
+Require(CodexPetMotion.WaitingAlarmArmDelaySeconds == 0.7d &&
+        CodexPetMotion.Sample(CodexPetVisualState.Running, 0.1).OffsetY > -0.2 &&
+        CodexPetMotion.Sample(CodexPetVisualState.Idle, 0.1).OffsetY > -0.2,
+    "Waiting exit must not leave residual alarm motion.");
+Require(CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0) == waitingAtStart,
+    "A later Waiting entry must restart the alarm arming phase.");
+Require(CodexPetPopupPolicy.GlyphFor(CodexPetVisualState.Running).Shape == CodexPetPopupPolicy.TaskStatusGlyphShape.Dot &&
+        CodexPetPopupPolicy.GlyphFor(CodexPetVisualState.Waiting).Shape == CodexPetPopupPolicy.TaskStatusGlyphShape.AttentionCircle &&
+        CodexPetPopupPolicy.GlyphFor(CodexPetVisualState.Review).Shape == CodexPetPopupPolicy.TaskStatusGlyphShape.Check,
+    "Task rows must use dot, attention, and check glyphs by state.");
 Require(CodexPetMotion.Sample(CodexPetVisualState.Review, 0.2).OffsetY < -0.1 &&
         Math.Abs(CodexPetMotion.Sample(CodexPetVisualState.Review, 1.2).OffsetY) <= 0.2,
     "Review must bounce once and settle to sway.");

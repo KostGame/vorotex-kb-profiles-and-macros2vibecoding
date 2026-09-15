@@ -5,6 +5,8 @@ internal readonly record struct PetMotionSample(double OffsetX, double OffsetY, 
 // Pure, monotonic-time presentation motion. It never changes Form.Location.
 internal static class CodexPetMotion
 {
+    internal const double WaitingAlarmArmDelaySeconds = 0.7d;
+
     internal static PetMotionSample Sample(CodexPetVisualState state, double elapsedSinceEntrySeconds)
     {
         var t = Math.Max(0d, elapsedSinceEntrySeconds);
@@ -35,6 +37,10 @@ internal static class CodexPetMotion
 
     private static PetMotionSample Waiting(double t)
     {
+        if (t < WaitingAlarmArmDelaySeconds)
+            return Sway(t, 1.8d, 3.4d);
+
+        t -= WaitingAlarmArmDelaySeconds;
         const double cycle = 2.25d;
         const double active = 0.56d;
         var phase = t % cycle;
