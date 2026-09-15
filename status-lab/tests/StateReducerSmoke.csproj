@@ -21,6 +21,7 @@
     <Compile Include="..\CodexPetAdapter.cs" Link="CodexPetAdapter.cs" />
     <Compile Include="..\VisualEffectIntent.cs" Link="VisualEffectIntent.cs" />
     <Compile Include="..\CodexPetMotion.cs" Link="CodexPetMotion.cs" />
+    <Compile Include="..\CodexPetPopupPolicy.cs" Link="CodexPetPopupPolicy.cs" />
     <Compile Include="..\MiniK15ControlLayout.cs" Link="MiniK15ControlLayout.cs" />
     <Compile Include="..\K15ProfileColorHint.cs" Link="K15ProfileColorHint.cs" />
     <Compile Include="..\K15ProfileMonitorLifecycle.cs" Link="K15ProfileMonitorLifecycle.cs" />

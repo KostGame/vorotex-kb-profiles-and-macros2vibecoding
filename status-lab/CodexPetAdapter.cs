@@ -80,13 +80,9 @@ internal static class CodexPetAdapter
             .ThenBy(row => row.SessionId, StringComparer.Ordinal)
             .ToArray();
 
-        var global = tasks.Any(row => row.VisualState == CodexPetVisualState.Waiting)
-            ? AggregateForPresentation(tasks, CodexPetVisualState.Waiting, "aggregate_waiting")
-            : tasks.Any(row => row.VisualState == CodexPetVisualState.Review)
-                ? AggregateForPresentation(tasks, CodexPetVisualState.Review, "aggregate_exact_unread_review")
-                : tasks.Any(row => row.VisualState == CodexPetVisualState.Running)
-                    ? AggregateForPresentation(tasks, CodexPetVisualState.Running, "aggregate_running")
-                    : new(CodexPetVisualState.Idle, "aggregate_idle", null, null);
+        // Keep aggregate precedence and identity semantics in the established
+        // compatibility mapper. Task rows are presentation-only.
+        var global = Map(sessions, unreadByThread);
         return new(global, tasks);
     }
 
@@ -132,14 +128,6 @@ internal static class CodexPetAdapter
         CodexPetVisualState.Running => 2,
         _ => 3
     };
-
-    private static CodexPetVisualSnapshot AggregateForPresentation(
-        IReadOnlyList<CodexPetTaskRow> tasks, CodexPetVisualState state, string reason)
-    {
-        var matching = tasks.Where(task => task.VisualState == state).ToArray();
-        var single = matching.Length == 1 ? matching[0] : null;
-        return new(state, reason, single?.SessionId, single?.ThreadId);
-    }
 
     private static string ShortId(string id) => id.Length <= 8 ? id : id[..8];
 

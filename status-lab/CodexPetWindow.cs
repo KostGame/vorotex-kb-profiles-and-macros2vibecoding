@@ -36,7 +36,7 @@ internal sealed class CodexPetWindow : Form
         TransparencyKey = BackColor;
         DoubleBuffered = true;
         ContextMenuStrip = BuildContextMenu();
-        _popup = new CodexPetTaskPopup(this);
+        _popup = new CodexPetTaskPopup(this, config);
         MouseDown += HandleMouseDown;
         MouseMove += HandleMouseMove;
         MouseUp += HandleMouseUp;
@@ -61,11 +61,12 @@ internal sealed class CodexPetWindow : Form
         Invalidate();
     }
 
-    internal void HidePopup() => _popup.Hide();
+    internal void HidePopup() => _popup.ClosePopup();
 
     public void SetProfileHint(ProfileColorHint hint)
     {
         _profileHint = hint;
+        _popup.SetProfileHint(hint);
         Invalidate();
     }
 
