@@ -914,5 +914,109 @@ Require(framed.Length == 41 && framed[0] == 0x06, "HID report framing changed.")
 Require(K15HidProtocol.IsSupportedDevice(0xB6A4, 0x4100), "Physical K15 VID/PID must be accepted.");
 Require(!K15HidProtocol.IsSupportedDevice(0x1234, 0x4100), "Unrelated VID must be rejected.");
 
+var motionIdleA = CodexPetMotion.Sample(CodexPetVisualState.Idle, 0.7);
+var motionIdleB = CodexPetMotion.Sample(CodexPetVisualState.Idle, 0.7);
+Require(motionIdleA == motionIdleB && Math.Abs(motionIdleA.OffsetX) <= 1.8 && Math.Abs(motionIdleA.OffsetY) <= 0.2,
+    "Idle motion must be deterministic and bounded.");
+var runningSamples = Enumerable.Range(0, 120).Select(i => CodexPetMotion.Sample(CodexPetVisualState.Running, i / 30d)).ToArray();
+Require(runningSamples.All(sample => Math.Abs(sample.OffsetX) <= 2.2 && Math.Abs(sample.OffsetY) <= 0.2),
+    "Running sway must stay bounded.");
+var waitingAtStart = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0);
+var waitingBeforeArm = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0.69);
+var waitingAfterArm = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0.85);
+var waitingQuiet = CodexPetMotion.Sample(CodexPetVisualState.Waiting, 1.5);
+Require(Math.Abs(waitingAtStart.OffsetY) <= 0.2 && Math.Abs(waitingBeforeArm.OffsetY) <= 0.2 &&
+        Math.Abs(waitingAfterArm.OffsetY) > 0.1 && Math.Abs(waitingAfterArm.OffsetX) > 0.1 &&
+        waitingQuiet == new PetMotionSample(0, 0), "Waiting must arm after a calm delay and retain burst/quiet cadence.");
+Require(CodexPetMotion.WaitingAlarmArmDelaySeconds == 0.7d &&
+        CodexPetMotion.Sample(CodexPetVisualState.Running, 0.1).OffsetY > -0.2 &&
+        CodexPetMotion.Sample(CodexPetVisualState.Idle, 0.1).OffsetY > -0.2,
+    "Waiting exit must not leave residual alarm motion.");
+Require(CodexPetMotion.Sample(CodexPetVisualState.Waiting, 0) == waitingAtStart,
+    "A later Waiting entry must restart the alarm arming phase.");
+Require(CodexPetPopupPolicy.GlyphFor(CodexPetVisualState.Running).Shape == CodexPetPopupPolicy.TaskStatusGlyphShape.Dot &&
+        CodexPetPopupPolicy.GlyphFor(CodexPetVisualState.Waiting).Shape == CodexPetPopupPolicy.TaskStatusGlyphShape.AttentionCircle &&
+        CodexPetPopupPolicy.GlyphFor(CodexPetVisualState.Review).Shape == CodexPetPopupPolicy.TaskStatusGlyphShape.Check,
+    "Task rows must use dot, attention, and check glyphs by state.");
+Require(CodexPetMotion.Sample(CodexPetVisualState.Review, 0.2).OffsetY < -0.1 &&
+        Math.Abs(CodexPetMotion.Sample(CodexPetVisualState.Review, 1.2).OffsetY) <= 0.2,
+    "Review must bounce once and settle to sway.");
+
+var testTime = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+static CodexSessionSnapshot PetSession(string id, K15NormalizedState state, string cwd, DateTimeOffset time, string thread = "") =>
+    new(id, state, true, false, cwd, thread, "turn", time);
+var taskPresentation = CodexPetAdapter.MapPresentation(
+    [PetSession("run", K15NormalizedState.Running, @"D:\Projects\Run", testTime),
+     PetSession("wait", K15NormalizedState.Waiting, @"D:\Projects\Wait", testTime.AddMinutes(1)),
+     PetSession("review", K15NormalizedState.DonePendingAttention, @"D:\Projects\Review", testTime.AddMinutes(2), "thread-review")],
+    new Dictionary<string, CodexUnreadState> { ["thread-review"] = CodexUnreadState.HasUnread });
+Require(taskPresentation.RelevantTaskCount == 3 && taskPresentation.Global.State == CodexPetVisualState.Waiting &&
+        taskPresentation.Tasks.Select(task => task.VisualState).SequenceEqual([
+            CodexPetVisualState.Waiting, CodexPetVisualState.Review, CodexPetVisualState.Running]),
+    "Task presentation must classify and order Waiting, Review, Running.");
+Require(CodexPetAdapter.DeriveDisplayTitle(@"D:\Projects\Run") == "Run" &&
+        CodexPetAdapter.DeriveDisplayTitle("") == "Codex task" &&
+        CodexPetAdapter.FormatTaskCount(100) == "99+", "Task labels and count formatting must be bounded.");
+Require(CodexPetAdapter.MapPresentation(
+    [PetSession("unknown", K15NormalizedState.DonePendingAttention, @"D:\Unknown", testTime, "thread-unknown")],
+    new Dictionary<string, CodexUnreadState> { ["thread-unknown"] = CodexUnreadState.Unknown }).RelevantTaskCount == 0,
+    "Unknown unread DONE must be excluded.");
+Require(CodexPetAdapter.MapPresentation(
+    [PetSession("blank", K15NormalizedState.DonePendingAttention, @"D:\Blank", testTime)],
+    new Dictionary<string, CodexUnreadState>()).RelevantTaskCount == 0,
+    "DONE without a thread must be excluded.");
+var sorted = CodexPetAdapter.MapPresentation(
+    [PetSession("z", K15NormalizedState.Running, @"D:\Z", testTime),
+     PetSession("a", K15NormalizedState.Running, @"D:\A", testTime),
+     PetSession("old", K15NormalizedState.Running, @"D:\Old", testTime.AddMinutes(-1))],
+    new Dictionary<string, CodexUnreadState>());
+Require(sorted.Tasks.Select(task => task.SessionId).SequenceEqual(["a", "z", "old"]),
+    "Same-priority tasks must sort by activity then ordinal session ID.");
+var waitingRunning = CodexPetAdapter.MapPresentation(
+    [PetSession("W", K15NormalizedState.Waiting, @"D:\W", testTime),
+     PetSession("R", K15NormalizedState.Running, @"D:\R", testTime)],
+    new Dictionary<string, CodexUnreadState>());
+Require(waitingRunning.Global.State == CodexPetVisualState.Waiting && waitingRunning.Global.SessionId is null &&
+        waitingRunning.Global.ThreadId is null, "Global Waiting identity must match legacy Map semantics.");
+var reviewRunning = CodexPetAdapter.MapPresentation(
+    [PetSession("D", K15NormalizedState.DonePendingAttention, @"D:\D", testTime, "thread-d"),
+     PetSession("R", K15NormalizedState.Running, @"D:\R", testTime)],
+    new Dictionary<string, CodexUnreadState> { ["thread-d"] = CodexUnreadState.HasUnread });
+Require(reviewRunning.Global.State == CodexPetVisualState.Review && reviewRunning.Global.SessionId is null &&
+        reviewRunning.Global.ThreadId is null, "Global Review identity must match legacy Map semantics.");
+var manyTasks = CodexPetAdapter.MapPresentation(
+    Enumerable.Range(1, 7).Select(i => PetSession("task-" + i, K15NormalizedState.Running, @"D:\Task" + i, testTime)).ToArray(),
+    new Dictionary<string, CodexUnreadState>());
+Require(manyTasks.RelevantTaskCount == 7 && CodexPetPopupPolicy.VisibleRows(manyTasks.RelevantTaskCount) == 5 &&
+        CodexPetPopupPolicy.OverflowCount(manyTasks.RelevantTaskCount) == 2, "Popup must cap visible rows and report overflow.");
+Require(CodexPetPopupPolicy.ToggleOpen(false) && !CodexPetPopupPolicy.ToggleOpen(true) &&
+        CodexPetPopupPolicy.VisibleRows(0) == 0 && CodexPetAdapter.FormatTaskCount(0) == "0" &&
+        CodexPetAdapter.FormatTaskCount(1) == "1" && CodexPetAdapter.FormatTaskCount(99) == "99" &&
+        CodexPetAdapter.FormatTaskCount(100) == "99+", "Badge toggle and count policy must be deterministic.");
+var area = new System.Drawing.Rectangle(-1920, 0, 1920, 1080);
+Require(CodexPetPopupPolicy.ClampToWorkingArea(new System.Drawing.Point(-500, 1000), new System.Drawing.Size(220, 200), area) ==
+        new System.Drawing.Point(-500, 880), "Popup placement must remain inside working area.");
+var configForPalette = StatusLabConfig.CreateDefault();
+var paletteTime = DateTimeOffset.UtcNow;
+var paletteA = PetPaletteResolver.Resolve(configForPalette,
+    new ProfileColorHint(K15Profile.A, ProfileColorConfidence.Exact, ProfileColorSource.DeviceReadback, paletteTime), paletteTime);
+var paletteB = PetPaletteResolver.Resolve(configForPalette,
+    new ProfileColorHint(K15Profile.B, ProfileColorConfidence.Exact, ProfileColorSource.DeviceReadback, paletteTime), paletteTime);
+var paletteNeutral = PetPaletteResolver.Resolve(configForPalette,
+    ProfileColorHint.Unknown(paletteTime), paletteTime);
+var accentA = CodexPetPopupPolicy.Accent(paletteA, CodexPetVisualState.Waiting);
+var accentB = CodexPetPopupPolicy.Accent(paletteB, CodexPetVisualState.Review);
+var accentNeutral = CodexPetPopupPolicy.Accent(paletteNeutral, CodexPetVisualState.Running);
+Require(CodexPetPopupPolicy.Accent(paletteA, CodexPetVisualState.Waiting).R >= 0 &&
+        accentA.R > accentA.G && accentA.R > accentA.B &&
+        accentB.B > accentB.R && accentB.B > accentB.G &&
+        accentNeutral == CodexPetPopupPolicy.Accent(PetPalette.Neutral, CodexPetVisualState.Running) &&
+        accentA != System.Drawing.Color.FromArgb(232, 194, 94) &&
+        accentB != System.Drawing.Color.FromArgb(130, 190, 202) &&
+        PetPaletteResolver.Resolve(configForPalette,
+            new ProfileColorHint(K15Profile.A, ProfileColorConfidence.Exact, ProfileColorSource.DeviceReadback,
+                paletteTime.AddMilliseconds(-1801)), paletteTime).IsNeutral,
+    "Popup accents must reuse profile families and the 1800ms TTL.");
+
 CodexReadAckTests.Run();
 Console.WriteLine("RC1 approval + session-aware reducer + 30s DONE + RGB policy + HID tests: PASS");
