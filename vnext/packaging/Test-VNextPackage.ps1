@@ -31,6 +31,15 @@ if (@($manifest.executables | Where-Object { $_ -notin $allow }).Count -or @($ma
 if ($manifest.defaults.bridgeEnabled -or $manifest.defaults.physicalHidEnabled -or $manifest.defaults.autostart) { throw 'unsafe default enabled' }
 Test-VNextVersionIntegrity (Join-Path $package "versions\$selected") | Out-Null
 Write-Output 'PACKAGE_MANIFEST=PASS'; Write-Output 'PACKAGE_EXECUTABLES=PASS'; Write-Output 'PACKAGE_HASHES=PASS'
+$statusProvenance = Get-Content (Join-Path $payload 'Vorotex.K15.StatusTray.provenance.json') -Raw | ConvertFrom-Json
+if ($statusProvenance.sourceProject -ne 'status-lab/Vorotex.K15.StatusLab.csproj' -or
+    $statusProvenance.sourceSha256 -ne $statusProvenance.packagedSha256 -or
+    $statusProvenance.sourceSize -ne $statusProvenance.packagedSize) { throw 'Status Tray artifact provenance manifest mismatch' }
+$statusVerify = Join-Path $PSScriptRoot 'Verify-StatusTrayArtifact.ps1'
+$statusProject = Join-Path (Split-Path -Parent $PSScriptRoot) '..\status-lab\Vorotex.K15.StatusLab.csproj'
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $statusVerify -ArtifactPath (Join-Path $payload 'Vorotex.K15.StatusTray.exe') -ExpectedProject $statusProject -ExpectedBuildCommit $manifest.source.buildCommit | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Status Tray package identity gate failed' }
+Write-Output 'STATUS_TRAY_PROVENANCE=PASS'
 $negative = Join-Path ([IO.Path]::GetTempPath()) ('k15-integrity-negative-' + [guid]::NewGuid().ToString('N'))
 try {
   New-Item -ItemType Directory -Path $negative -Force | Out-Null; Copy-Item (Join-Path $package '*') $negative -Recurse
