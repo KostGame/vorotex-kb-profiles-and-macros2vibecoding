@@ -14,7 +14,8 @@ internal sealed record CodexPetTaskRow(
     CodexPetVisualState VisualState,
     string DisplayTitle,
     string? DisplaySubtitle,
-    DateTimeOffset? LastActivityUtc);
+    DateTimeOffset? LastActivityUtc,
+    CodexActivityRow Activity);
 
 internal sealed record CodexPetPresentation(
     CodexPetVisualSnapshot Global,
@@ -69,10 +70,9 @@ internal static class CodexPetAdapter
         IReadOnlyList<CodexSessionSnapshot> sessions,
         IReadOnlyDictionary<string, CodexUnreadState> unreadByThread)
     {
-        var tasks = sessions
-            .Where(session => (session.IsAlive && (session.State is K15NormalizedState.Waiting or K15NormalizedState.Running)) ||
-                session.State == K15NormalizedState.DonePendingAttention)
-            .Select(session => ToTaskRow(session, unreadByThread))
+        var activityRows = CodexActivityNormalizer.Normalize(sessions, unreadByThread);
+        var tasks = activityRows
+            .Select(ToTaskRow)
             .Where(row => row is not null)
             .Select(row => row!)
             .OrderBy(row => Priority(row.VisualState))
@@ -86,37 +86,62 @@ internal static class CodexPetAdapter
         return new(global, tasks);
     }
 
-    private static CodexPetTaskRow? ToTaskRow(
-        CodexSessionSnapshot session, IReadOnlyDictionary<string, CodexUnreadState> unreadByThread)
+    internal static CodexPetPresentation MapPresentation(
+        IReadOnlyList<CodexSessionSnapshot> localSessions,
+        IReadOnlyDictionary<string, CodexUnreadState> localUnreadByThread,
+        CodexRemoteActivitySnapshot remote)
     {
-        var visualState = session.State switch
+        var activityRows = CodexActivityNormalizer.Normalize(localSessions, localUnreadByThread, remote);
+        var tasks = activityRows
+            .Select(ToTaskRow)
+            .Where(row => row is not null)
+            .Select(row => row!)
+            .OrderBy(row => Priority(row.VisualState))
+            .ThenByDescending(row => row.LastActivityUtc ?? DateTimeOffset.MinValue)
+            .ThenBy(row => row.SessionId, StringComparer.Ordinal)
+            .ToArray();
+        return new(MapUnified(activityRows), tasks);
+    }
+
+    private static CodexPetTaskRow? ToTaskRow(CodexActivityRow activity)
+    {
+        var visualState = activity.State switch
         {
-            K15NormalizedState.Waiting when session.IsAlive => CodexPetVisualState.Waiting,
-            K15NormalizedState.Running when session.IsAlive => CodexPetVisualState.Running,
-            K15NormalizedState.DonePendingAttention when !string.IsNullOrWhiteSpace(session.ThreadId) &&
-                unreadByThread.TryGetValue(session.ThreadId, out var unread) && unread == CodexUnreadState.HasUnread =>
+            CodexActivityState.Waiting => CodexPetVisualState.Waiting,
+            CodexActivityState.Running => CodexPetVisualState.Running,
+            CodexActivityState.DonePendingAttention when activity.Unread == CodexUnreadState.HasUnread =>
                 CodexPetVisualState.Review,
             _ => (CodexPetVisualState?)null
         };
         if (visualState is null) return null;
-        var title = DeriveDisplayTitle(session.Cwd);
-        var subtitle = visualState == CodexPetVisualState.Review && !string.IsNullOrWhiteSpace(session.ThreadId)
-            ? "Review · " + ShortId(session.ThreadId)
+        var context = activity.Project ?? activity.Repository;
+        if (activity.Project is not null && activity.Repository is not null)
+            context = activity.Project + " · " + activity.Repository;
+        var subtitle = visualState == CodexPetVisualState.Review && !string.IsNullOrWhiteSpace(activity.ThreadId)
+            ? "Review · " + ShortId(activity.ThreadId)
             : visualState == CodexPetVisualState.Waiting ? "Waiting" : "Running";
-        return new(session.SessionId, string.IsNullOrWhiteSpace(session.ThreadId) ? null : session.ThreadId,
-            visualState.Value, title, subtitle, session.LastActivityUtc);
+        if (context is not null) subtitle += " · " + context;
+        return new(activity.SessionId, activity.ThreadId, visualState.Value, activity.Title, subtitle,
+            activity.ObservedAt, activity);
     }
 
-    internal static string DeriveDisplayTitle(string cwd)
+    private static CodexPetVisualSnapshot MapUnified(IReadOnlyList<CodexActivityRow> rows)
     {
-        if (string.IsNullOrWhiteSpace(cwd)) return "Codex task";
-        try
-        {
-            var trimmed = cwd.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var name = Path.GetFileName(trimmed);
-            return string.IsNullOrWhiteSpace(name) ? "Codex task" : name;
-        }
-        catch (ArgumentException) { return "Codex task"; }
+        if (rows.Any(row => row.State == CodexActivityState.Waiting))
+            return Aggregate(rows, CodexPetVisualState.Waiting, "aggregate_waiting");
+        if (rows.Any(row => row.State == CodexActivityState.DonePendingAttention &&
+                            row.Unread == CodexUnreadState.HasUnread))
+            return Aggregate(rows, CodexPetVisualState.Review, "aggregate_exact_unread_review");
+        if (rows.Any(row => row.State == CodexActivityState.Running))
+            return Aggregate(rows, CodexPetVisualState.Running, "aggregate_running");
+        return Aggregate(rows, CodexPetVisualState.Idle, "aggregate_idle");
+    }
+
+    private static CodexPetVisualSnapshot Aggregate(
+        IReadOnlyList<CodexActivityRow> rows, CodexPetVisualState state, string reason)
+    {
+        var single = rows.Count == 1 ? rows[0] : null;
+        return new(state, reason, single?.SessionId, single?.ThreadId);
     }
 
     internal static string FormatTaskCount(int count) => count > 99 ? "99+" : count.ToString();
