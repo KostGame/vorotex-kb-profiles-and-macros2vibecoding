@@ -19,6 +19,7 @@
     <Compile Include="..\EventJournal.cs" Link="EventJournal.cs" />
     <Compile Include="..\JournalStateNormalizer.cs" Link="JournalStateNormalizer.cs" />
     <Compile Include="..\CodexPetAdapter.cs" Link="CodexPetAdapter.cs" />
+    <Compile Include="..\CodexActivityContract.cs" Link="CodexActivityContract.cs" />
     <Compile Include="..\VisualEffectIntent.cs" Link="VisualEffectIntent.cs" />
     <Compile Include="..\CodexPetMotion.cs" Link="CodexPetMotion.cs" />
     <Compile Include="..\CodexPetPopupPolicy.cs" Link="CodexPetPopupPolicy.cs" />

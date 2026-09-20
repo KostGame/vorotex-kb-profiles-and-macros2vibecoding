@@ -69,7 +69,7 @@ internal sealed class CodexPetTaskPopup : Form
     private void PositionNearPet()
     {
         var rows = CodexPetPopupPolicy.VisibleRows(_tasks.Count);
-        Height = 14 + rows * 30 + (_tasks.Count > rows ? 22 : 0);
+        Height = 14 + rows * 34 + (_tasks.Count > rows ? 22 : 0);
         Width = 220;
         var area = Screen.FromControl(_pet).WorkingArea;
         var desired = new Point(_pet.Right + 8, _pet.Top);
@@ -91,9 +91,15 @@ internal sealed class CodexPetTaskPopup : Form
             var glyph = CodexPetPopupPolicy.GlyphFor(row.VisualState);
             DrawGlyph(e.Graphics, glyph, new Point(14, y + 14));
             using var title = new SolidBrush(Color.FromArgb(235, 235, 240, 244));
-            using var titleFont = new Font("Segoe UI", 11f, FontStyle.Bold, GraphicsUnit.Pixel);
-            e.Graphics.DrawString(row.DisplayTitle, titleFont, title, 28, y + 7);
-            y += 30;
+            using var titleFont = new Font("Segoe UI", 10f, FontStyle.Bold, GraphicsUnit.Pixel);
+            e.Graphics.DrawString(row.DisplayTitle, titleFont, title, 28, y + 3);
+            if (!string.IsNullOrWhiteSpace(row.DisplaySubtitle))
+            {
+                using var subtitle = new SolidBrush(Color.FromArgb(170, 190, 198, 205));
+                using var subtitleFont = new Font("Segoe UI", 8f, FontStyle.Regular, GraphicsUnit.Pixel);
+                e.Graphics.DrawString(row.DisplaySubtitle, subtitleFont, subtitle, 28, y + 18);
+            }
+            y += 34;
         }
         if (_tasks.Count > 5)
         {

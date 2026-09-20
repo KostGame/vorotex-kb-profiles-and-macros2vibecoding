@@ -992,8 +992,13 @@ Require(taskPresentation.RelevantTaskCount == 3 && taskPresentation.Global.State
         taskPresentation.Tasks.Select(task => task.VisualState).SequenceEqual([
             CodexPetVisualState.Waiting, CodexPetVisualState.Review, CodexPetVisualState.Running]),
     "Task presentation must classify and order Waiting, Review, Running.");
-Require(CodexPetAdapter.DeriveDisplayTitle(@"D:\Projects\Run") == "Run" &&
-        CodexPetAdapter.DeriveDisplayTitle("") == "Codex task" &&
+Require(taskPresentation.Tasks.Single(task => task.SessionId == "run").DisplayTitle == "Codex task run" &&
+        taskPresentation.Tasks.Single(task => task.SessionId == "run").Activity.Source == CodexActivitySource.Local &&
+        taskPresentation.Tasks.Single(task => task.SessionId == "run").Activity.Cwd == @"D:\Projects\Run" &&
+        !taskPresentation.Tasks.Single(task => task.SessionId == "run").Activity.OpenTarget.CanFocus,
+    "Local unified rows must use stable fallback title, keep cwd secondary, and fail closed for focus.");
+Require(CodexActivityNormalizer.FallbackTitle("run") == "Codex task run" &&
+        CodexActivityNormalizer.FallbackTitle("") == "Codex task unknown" &&
         CodexPetAdapter.FormatTaskCount(100) == "99+", "Task labels and count formatting must be bounded.");
 Require(CodexPetAdapter.MapPresentation(
     [PetSession("unknown", K15NormalizedState.DonePendingAttention, @"D:\Unknown", testTime, "thread-unknown")],
@@ -1022,6 +1027,55 @@ var reviewRunning = CodexPetAdapter.MapPresentation(
     new Dictionary<string, CodexUnreadState> { ["thread-d"] = CodexUnreadState.HasUnread });
 Require(reviewRunning.Global.State == CodexPetVisualState.Review && reviewRunning.Global.SessionId is null &&
         reviewRunning.Global.ThreadId is null, "Global Review identity must match legacy Map semantics.");
+var remoteObserved = DateTimeOffset.Parse("2026-01-01T00:05:00Z");
+var remoteJson = "{" +
+    "\"schemaVersion\":\"codex-app-thread-index/v1\"," +
+    "\"source\":\"codex_app_thread_index\"," +
+    "\"threads\":[{" +
+    "\"id\":\"remote-thread-1\"," +
+    "\"hostId\":\"remote-ssh-discovered:test-host\"," +
+    "\"status\":\"active\"," +
+    "\"updatedAt\":1767225900," +
+    "\"title\":\"Remote review task\"," +
+    "\"projectId\":\"project-1\"," +
+    "\"cwd\":\"/srv/worktree\"," +
+    "\"summary\":\"MUST NOT BE USED\"}]}";
+var remoteSnapshot = CodexAppThreadIndexParser.Parse(remoteJson, remoteObserved);
+Require(remoteSnapshot.Status.Status == CodexActivitySourceHealth.Up && remoteSnapshot.Threads.Count == 1,
+    "Structured Codex App source must expose one remote thread.");
+var unsafeRemoteSnapshot = CodexAppThreadIndexParser.Parse(
+    remoteJson.Replace("\"summary\"", "\"prompt\"", StringComparison.Ordinal), remoteObserved);
+Require(unsafeRemoteSnapshot.Status.Status == CodexActivitySourceHealth.Degraded &&
+        unsafeRemoteSnapshot.Threads.Count == 0,
+    "Raw prompt fields must fail closed at the structured-source boundary.");
+var remotePresentation = CodexPetAdapter.MapPresentation(
+    Array.Empty<CodexSessionSnapshot>(), new Dictionary<string, CodexUnreadState>(), remoteSnapshot);
+var remoteRow = remotePresentation.Tasks.Single();
+Require(remoteRow.Activity.Source == CodexActivitySource.Remote &&
+        remoteRow.Activity.ExecutionHost == "remote-ssh-discovered:test-host" &&
+        remoteRow.Activity.ThreadId == "remote-thread-1" &&
+        remoteRow.DisplayTitle == "Remote review task" &&
+        remoteRow.Activity.Project == "project-1" &&
+        remoteRow.Activity.Cwd == "/srv/worktree" &&
+        remoteRow.Activity.Confidence == CodexActivityConfidence.Trusted &&
+        !remoteRow.Activity.OpenTarget.CanFocus &&
+        remoteRow.Activity.OpenTarget.UnavailableReason == CodexActivityNormalizer.ExactFocusUnavailable,
+    "Remote structured row must preserve safe metadata and fail closed for exact focus.");
+Require(!remoteRow.Activity.Evidence.EventKind.Contains("MUST NOT", StringComparison.Ordinal) &&
+        !remoteRow.Activity.Title.Contains("MUST NOT", StringComparison.Ordinal),
+    "Remote summary/content must not cross source normalization.");
+var duplicateRemote = new CodexRemoteActivitySnapshot(
+    remoteSnapshot.Threads.Concat(remoteSnapshot.Threads).ToArray(), remoteSnapshot.Status);
+Require(CodexActivityNormalizer.Normalize(Array.Empty<CodexSessionSnapshot>(),
+            new Dictionary<string, CodexUnreadState>(), duplicateRemote).Count == 1,
+    "Duplicate remote records must deduplicate by host and exact thread identity.");
+var disconnectedRemote = new CodexRemoteActivitySnapshot(
+    Array.Empty<CodexRemoteThreadObservation>(),
+    new(CodexActivitySource.Remote, CodexActivitySourceHealth.Down, "disconnected", remoteObserved,
+        CodexActivityNormalizer.RemoteSourceEvidence));
+Require(CodexActivityNormalizer.Normalize(Array.Empty<CodexSessionSnapshot>(),
+            new Dictionary<string, CodexUnreadState>(), disconnectedRemote).Count == 0,
+    "Remote disconnect must not leave stale trusted rows.");
 var manyTasks = CodexPetAdapter.MapPresentation(
     Enumerable.Range(1, 7).Select(i => PetSession("task-" + i, K15NormalizedState.Running, @"D:\Task" + i, testTime)).ToArray(),
     new Dictionary<string, CodexUnreadState>());
