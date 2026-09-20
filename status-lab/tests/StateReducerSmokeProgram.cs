@@ -1069,6 +1069,23 @@ var duplicateRemote = new CodexRemoteActivitySnapshot(
 Require(CodexActivityNormalizer.Normalize(Array.Empty<CodexSessionSnapshot>(),
             new Dictionary<string, CodexUnreadState>(), duplicateRemote).Count == 1,
     "Duplicate remote records must deduplicate by host and exact thread identity.");
+var degradedRemote = new CodexRemoteActivitySnapshot(
+    remoteSnapshot.Threads,
+    remoteSnapshot.Status with { Status = CodexActivitySourceHealth.Degraded, Reason = "source_degraded" });
+Require(CodexActivityNormalizer.Normalize(Array.Empty<CodexSessionSnapshot>(),
+            new Dictionary<string, CodexUnreadState>(), degradedRemote).Count == 0 &&
+        CodexPetAdapter.MapPresentation(Array.Empty<CodexSessionSnapshot>(),
+            new Dictionary<string, CodexUnreadState>(), degradedRemote).Tasks.Count == 0,
+    "Degraded remote source must not create trusted RUNNING presentation.");
+var unknownWaitingRemote = new CodexRemoteActivitySnapshot(
+    [remoteSnapshot.Threads[0] with { ActiveFlags = new HashSet<string>(["waitingOnApproval"]) }],
+    remoteSnapshot.Status with { Status = CodexActivitySourceHealth.Unknown, Reason = "source_unknown" });
+var unknownPresentation = CodexPetAdapter.MapPresentation(Array.Empty<CodexSessionSnapshot>(),
+    new Dictionary<string, CodexUnreadState>(), unknownWaitingRemote);
+Require(CodexActivityNormalizer.Normalize(Array.Empty<CodexSessionSnapshot>(),
+            new Dictionary<string, CodexUnreadState>(), unknownWaitingRemote).Count == 0 &&
+        unknownPresentation.Tasks.Count == 0 && unknownPresentation.Global.State == CodexPetVisualState.Idle,
+    "Unknown remote source must not create trusted RUNNING or WAITING presentation.");
 var disconnectedRemote = new CodexRemoteActivitySnapshot(
     Array.Empty<CodexRemoteThreadObservation>(),
     new(CodexActivitySource.Remote, CodexActivitySourceHealth.Down, "disconnected", remoteObserved,

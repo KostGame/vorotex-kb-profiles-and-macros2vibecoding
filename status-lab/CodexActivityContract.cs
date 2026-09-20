@@ -129,7 +129,10 @@ internal static class CodexActivityNormalizer
             if (row is not null) rows.Add(row);
         }
 
-        if (remote is not null && remote.Status.Status != CodexActivitySourceHealth.Down)
+        // Only a healthy structured source can authorize trusted remote task
+        // lifecycle. Any degraded, pending, contention, unknown, or down
+        // snapshot is a source failure, not task evidence.
+        if (remote is not null && remote.Status.Status == CodexActivitySourceHealth.Up)
         {
             foreach (var thread in remote.Threads)
             {
