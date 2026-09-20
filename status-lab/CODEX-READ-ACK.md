@@ -1,5 +1,28 @@
 # Codex read acknowledgment — Issue #123
 
+## Local multi-home source contract — Issue #190
+
+Each detected Codex home has an opaque `sourceInstanceId` in the form
+`local:<32 lowercase hex characters>`. The ID is the first 128 bits of
+SHA-256 over UTF-8 `codex-home/v1\0` plus the canonical home identity. Canonical
+identity expands environment variables, resolves the absolute path, preserves a
+filesystem root, trims trailing separators, converts `/` to `\\`, and uppercases
+using invariant rules. The same contract exists in the PowerShell installer and
+Status Lab health/reducer code.
+
+The installer writes the exact ID into each canonical logger command. The logger
+accepts only the strict bounded grammar, drops malformed or missing markers, and
+persists the marker without persisting the home path. A Codex-home `cwd` is also
+removed from the sanitized journal record. Hook health rejects missing, wrong,
+duplicate, stale, or path-drifted Status Lab handlers while retaining foreign
+handlers.
+
+StateReducer session and completion identities include `sourceInstanceId`. The
+unread registry keeps one exact state path and `local` host partition per source;
+it never falls back across homes. Legacy events without a marker route unread
+evidence only when exactly one source is discovered. With multiple homes they
+remain Unknown/Unavailable for unread and read-ACK.
+
 Status Tray observes the persisted `electron-persisted-atom-state/unread-thread-ids-by-host-v1`
 atom. StateReducer remains the only authority that clears DONE. Window focus,
 navigation, toasts and Dashboard activity are not read receipts.

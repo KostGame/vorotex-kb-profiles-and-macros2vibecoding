@@ -64,6 +64,9 @@ try {
             if ($matches.Count -ne 1) {
                 throw "Expected exactly one Status Lab handler for $eventName in $codexHomePath; found $($matches.Count)."
             }
+            if ([string]$matches[0].commandWindows -notmatch '-SourceInstanceId "local:[0-9a-f]{32}"') {
+                throw "Canonical sourceInstanceId missing from $eventName in $codexHomePath."
+            }
         }
         if ($null -ne $hooks.hooks.PSObject.Properties['SessionStart']) { throw "Stale SessionStart Status Lab hook survived: $codexHomePath" }
     }
@@ -74,8 +77,15 @@ try {
     if ($foreign.Count -ne 1) { throw 'Foreign PreToolUse handler was not preserved.' }
     $stableLogger = Join-Path $env:LOCALAPPDATA 'VorotexK15\app\hooks\codex-hook-logger.ps1'
     if (-not (Test-Path -LiteralPath $stableLogger -PathType Leaf)) { throw 'Stable deployed logger is missing.' }
+    $firstIds = @($result.installed | ForEach-Object { [string]$_.sourceInstanceId })
+    $invalidFirstIds = @($firstIds | Where-Object { $_ -notmatch '^local:[0-9a-f]{32}$' })
+    if ($firstIds.Count -ne 2 -or $firstIds[0] -eq $firstIds[1] -or $invalidFirstIds.Count -ne 0) {
+        throw 'Homes did not receive distinct bounded sourceInstanceId values.'
+    }
     $firstSemantic = $preTool | ConvertTo-Json -Depth 20 -Compress
-    & $installer | Out-Null
+    $secondResult = (& $installer | Out-String | ConvertFrom-Json)
+    $secondIds = @($secondResult.installed | ForEach-Object { [string]$_.sourceInstanceId })
+    if (($firstIds -join '|') -ne ($secondIds -join '|')) { throw 'SourceInstanceId generation was not deterministic.' }
     $backupCount = @(Get-ChildItem -LiteralPath $agentLoopHome -Filter 'hooks.json.vorotex-k15-status-lab.*.bak' -File).Count
     if ($backupCount -ne 1) { throw "Idempotent repair created an unnecessary backup chain: $backupCount" }
     $secondSemantic = (Get-Content -LiteralPath (Join-Path $agentLoopHome 'hooks.json') -Raw -Encoding UTF8 | ConvertFrom-Json | ConvertTo-Json -Depth 20 -Compress)

@@ -6,10 +6,15 @@ namespace Vorotex.K15.StatusLab;
 internal enum CodexUnreadState { Unknown, Unavailable, HasUnread, NoUnread }
 
 internal sealed record CodexUnreadSnapshot(string Host, DateTimeOffset StartedUtc,
-    DateTimeOffset FinishedUtc, IReadOnlySet<string>? ThreadIds, CodexUnreadState Failure)
+    DateTimeOffset FinishedUtc, IReadOnlySet<string>? ThreadIds, CodexUnreadState Failure,
+    string SourceInstanceId = "")
 {
     public CodexUnreadState ForThread(string threadId) => ThreadIds is null ? Failure :
         ThreadIds.Contains(threadId) ? CodexUnreadState.HasUnread : CodexUnreadState.NoUnread;
+
+    internal static CodexUnreadSnapshot Failed(string sourceInstanceId, string host,
+        DateTimeOffset startedUtc, CodexUnreadState failure) =>
+        new(host, startedUtc, DateTimeOffset.UtcNow, null, failure, sourceInstanceId);
 }
 
 internal interface ICodexUnreadStateReader
@@ -19,7 +24,7 @@ internal interface ICodexUnreadStateReader
 
 // The file is an observation source only. Never write it or interpret a missing
 // host as an empty unread list. No unrelated state atoms escape this reader.
-internal sealed class CodexUnreadStateReader(string? path, string host) : ICodexUnreadStateReader
+internal sealed class CodexUnreadStateReader(string? path, string host, string sourceInstanceId = "") : ICodexUnreadStateReader
 {
     internal const int MaxBytes = 16 * 1024 * 1024;
     internal const int MaxIds = 10000;
@@ -36,7 +41,7 @@ internal sealed class CodexUnreadStateReader(string? path, string host) : ICodex
 
     public CodexUnreadSnapshot Read(DateTimeOffset startedUtc)
     {
-        CodexUnreadSnapshot Failed(CodexUnreadState state) => new(host, startedUtc, DateTimeOffset.UtcNow, null, state);
+        CodexUnreadSnapshot Failed(CodexUnreadState state) => new(host, startedUtc, DateTimeOffset.UtcNow, null, state, sourceInstanceId);
         if (path is null || !Bounded(host, 256)) return Failed(CodexUnreadState.Unavailable);
         try
         {
@@ -48,7 +53,7 @@ internal sealed class CodexUnreadStateReader(string? path, string host) : ICodex
             stream.ReadExactly(bytes);
             if (stream.ReadByte() != -1 || stream.Length != length || File.GetLastWriteTimeUtc(path) != stamp)
                 return Failed(CodexUnreadState.Unknown);
-            return Parse(bytes, host, startedUtc, DateTimeOffset.UtcNow);
+            return Parse(bytes, host, startedUtc, DateTimeOffset.UtcNow) with { SourceInstanceId = sourceInstanceId };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         { return Failed(CodexUnreadState.Unavailable); }

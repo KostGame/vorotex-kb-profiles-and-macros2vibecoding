@@ -152,7 +152,7 @@ try {
     $env:LOCALAPPDATA = $localAppData
     $env:USERPROFILE = $userProfile
 
-    $synthetic = @{
+$synthetic = @{
         hook_event_name = 'UserPromptSubmit'
         session_id = 'session-1'
         turn_id = 'turn-1'
@@ -160,14 +160,15 @@ try {
         cwd = 'C:\work'
         permission_mode = 'default'
         prompt = 'THIS MUST NOT BE LOGGED'
-    } | ConvertTo-Json -Compress
+} | ConvertTo-Json -Compress
 
-    $synthetic | powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $logger
+$synthetic | powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $logger -SourceInstanceId 'local:0123456789abcdef0123456789abcdef'
 
     $journal = Join-Path $localAppData 'VOROTEX\K15 Status Lab\events.jsonl'
     if (-not (Test-Path -LiteralPath $journal)) { throw 'Hook logger did not create journal.' }
     $record = Get-Content -LiteralPath $journal -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($record.source -ne 'codex_hook' -or $record.event -ne 'UserPromptSubmit') { throw 'Hook logger emitted unexpected event.' }
+    if ($record.sourceInstanceId -ne 'local:0123456789abcdef0123456789abcdef') { throw 'Hook logger source identity missing.' }
     if ($record.sessionId -ne 'session-1' -or $record.cwd -ne 'C:\work') { throw 'Hook logger must preserve sessionId/cwd metadata for focus tracking.' }
     if ($null -ne $record.PSObject.Properties['prompt']) { throw 'Hook logger persisted prompt content.' }
 

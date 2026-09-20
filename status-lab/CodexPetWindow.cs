@@ -274,15 +274,15 @@ internal sealed class CodexPetWindow : Form
 internal sealed class CodexPetController : IDisposable
 {
     private readonly JournalStateNormalizer _normalizer;
-    private readonly ICodexUnreadStateReader _reader;
+    private readonly ICodexUnreadSourceRegistry _sources;
     private readonly CodexPetWindow _window;
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 1000 };
     private bool _visible;
 
-    public CodexPetController(JournalStateNormalizer normalizer, ICodexUnreadStateReader reader, StatusLabConfig config)
+    public CodexPetController(JournalStateNormalizer normalizer, ICodexUnreadSourceRegistry sources, StatusLabConfig config)
     {
         _normalizer = normalizer;
-        _reader = reader;
+        _sources = sources;
         _window = new CodexPetWindow(config);
         _window.CloseRequested += HidePet;
         _normalizer.StateChanged += OnStateChanged;
@@ -342,9 +342,9 @@ internal sealed class CodexPetController : IDisposable
         // while the pet is visible; it never performs animation work.
         if ((canPollUnread || _visible) && !_refresh.Enabled) _refresh.Start();
         if (!canPollUnread && !_visible && _refresh.Enabled) _refresh.Stop();
-        // One canonical reader snapshot is shared by every eligible DONE thread.
-        var unreadSnapshot = canPollUnread ? _reader.Read(DateTimeOffset.UtcNow) : null;
-        var presentation = CodexPetAdapter.MapPresentation(sessions, unreadSnapshot);
+        var presentation = canPollUnread
+            ? CodexPetAdapter.MapPresentation(sessions, _sources)
+            : CodexPetAdapter.MapPresentation(sessions, (CodexUnreadSnapshot?)null);
         _window.SetPresentation(presentation);
         _window.SetState(presentation.Global.State);
     }

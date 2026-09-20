@@ -38,7 +38,8 @@ public sealed record StatusTraySessionSnapshot(
     string Cwd = "",
     string ThreadId = "",
     string TurnId = "",
-    DateTimeOffset? LastActivityUtc = null);
+    DateTimeOffset? LastActivityUtc = null,
+    string SourceInstanceId = "");
 
 public sealed record StatusTrayDeviceCandidate(
     string CandidateId,

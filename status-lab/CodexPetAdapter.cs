@@ -68,6 +68,24 @@ internal static class CodexPetAdapter
 
     internal static CodexPetPresentation MapPresentation(
         IReadOnlyList<CodexSessionSnapshot> sessions,
+        ICodexUnreadSourceRegistry sources)
+    {
+        var unreadByIdentity = new Dictionary<string, CodexUnreadState>(StringComparer.Ordinal);
+        foreach (var sourceGroup in sessions
+            .Where(session => session.State == K15NormalizedState.DonePendingAttention &&
+                              !string.IsNullOrWhiteSpace(session.ThreadId))
+            .GroupBy(session => session.SourceInstanceId, StringComparer.Ordinal))
+        {
+            var snapshot = sources.Read(sourceGroup.Key, DateTimeOffset.UtcNow);
+            foreach (var session in sourceGroup)
+                unreadByIdentity[CodexSourceIdentity.CompositeKey(sourceGroup.Key, session.ThreadId!)] =
+                    snapshot.ForThread(session.ThreadId!);
+        }
+        return MapPresentation(sessions, unreadByIdentity);
+    }
+
+    internal static CodexPetPresentation MapPresentation(
+        IReadOnlyList<CodexSessionSnapshot> sessions,
         IReadOnlyDictionary<string, CodexUnreadState> unreadByThread)
     {
         var activityRows = CodexActivityNormalizer.Normalize(sessions, unreadByThread);
@@ -168,7 +186,7 @@ internal static class CodexPetAdapter
         var hasUnread = relevant.Any(session =>
             session.State == K15NormalizedState.DonePendingAttention &&
             !string.IsNullOrWhiteSpace(session.ThreadId) &&
-            unreadByThread.TryGetValue(session.ThreadId!, out var unread) &&
+            TryGetUnread(unreadByThread, session.SourceInstanceId, session.ThreadId!, out var unread) &&
             unread == CodexUnreadState.HasUnread);
         if (hasUnread)
             return Aggregate(relevant, CodexPetVisualState.Review, "aggregate_exact_unread_review");
@@ -184,6 +202,14 @@ internal static class CodexPetAdapter
     {
         var single = relevant.Count == 1 ? relevant[0] : null;
         return new(state, reason, single?.SessionId, single?.ThreadId);
+    }
+
+    private static bool TryGetUnread(IReadOnlyDictionary<string, CodexUnreadState> unreadByThread,
+        string sourceInstanceId, string threadId, out CodexUnreadState unread)
+    {
+        if (unreadByThread.TryGetValue(CodexSourceIdentity.CompositeKey(sourceInstanceId, threadId), out unread))
+            return true;
+        return string.IsNullOrWhiteSpace(sourceInstanceId) && unreadByThread.TryGetValue(threadId, out unread);
     }
 
     // Compatibility overload for existing single-session callers/tests. Global

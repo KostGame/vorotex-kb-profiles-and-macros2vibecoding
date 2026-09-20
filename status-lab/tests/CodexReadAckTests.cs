@@ -12,8 +12,9 @@ internal static class CodexReadAckTests
         _passed++;
         Console.WriteLine("READ_ACK_" + id + "=PASS");
     }
-    private static StatusInputEvent Hook(string name, int second, string session = "S", string thread = "T", string turn = "U") =>
-        new(T.AddSeconds(second), "codex_hook", name, SessionId: session, ThreadId: thread, TurnId: turn);
+    private static StatusInputEvent Hook(string name, int second, string session = "S", string thread = "T", string turn = "U", string sourceInstanceId = "") =>
+        new(T.AddSeconds(second), "codex_hook", name, SessionId: session, ThreadId: thread, TurnId: turn,
+            SourceInstanceId: sourceInstanceId);
     private static StateReducer Done(string session = "S", string thread = "T", string turn = "U")
     {
         var reducer = new StateReducer(0, T);
@@ -47,6 +48,7 @@ internal static class CodexReadAckTests
 
     public static void Run()
     {
+        SourceIdentityTests();
         Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[\"T\"]}}")) == CodexUnreadState.HasUnread, "CANONICAL_SINGLE_IDENTITY_HAS_UNREAD");
         Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[]}}")) == CodexUnreadState.NoUnread, "CANONICAL_SINGLE_IDENTITY_NO_UNREAD");
         Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[\"T\"]},\"identity-b\":{\"host-a\":[]}}")) == CodexUnreadState.Unknown, "CANONICAL_MULTIPLE_IDENTITIES_UNKNOWN");
@@ -228,6 +230,64 @@ internal static class CodexReadAckTests
         ArchitectRegressions();
         NormalizerTests();
         Console.WriteLine($"READ_ACK_SCENARIOS_PASSED={_passed}");
+    }
+
+    private static void SourceIdentityTests()
+    {
+        var homeA = Path.Combine(Path.GetTempPath(), "codex-source-a-" + Guid.NewGuid().ToString("N"));
+        var homeB = Path.Combine(Path.GetTempPath(), "codex-source-b-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(homeA);
+        Directory.CreateDirectory(homeB);
+        try
+        {
+            var sourceA = CodexSourceIdentity.ForHome(homeA)!;
+            var sourceB = CodexSourceIdentity.ForHome(homeB)!;
+            Check(CodexSourceIdentity.IsValid(sourceA) && CodexSourceIdentity.IsValid(sourceB) && sourceA != sourceB,
+                "SOURCE_IDS_DISTINCT_AND_BOUNDED");
+            Check(sourceA == CodexSourceIdentity.ForHome(homeA.ToLowerInvariant()) &&
+                  sourceA == CodexSourceIdentity.ForHome(homeA.Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
+                "SOURCE_ID_STABLE_NORMALIZATION");
+
+            File.WriteAllText(Path.Combine(homeA, ".codex-global-state.json"), Store("{\"local\":[\"T\"]}"));
+            File.WriteAllText(Path.Combine(homeB, ".codex-global-state.json"), Store("{\"local\":[]}"));
+            var registry = new CodexUnreadSourceRegistry(new[] { homeA, homeB });
+            Check(registry.SourceCount == 2 && registry.Read(sourceA, T).ForThread("T") == CodexUnreadState.HasUnread &&
+                  registry.Read(sourceB, T).ForThread("T") == CodexUnreadState.NoUnread,
+                "UNREAD_SOURCES_STAY_ISOLATED");
+            Check(registry.Read("", T).Failure == CodexUnreadState.Unknown,
+                "LEGACY_MULTI_HOME_SOURCE_FAILS_CLOSED");
+
+            var reducer = new StateReducer(0, T);
+            reducer.Apply(Hook("UserPromptSubmit", 1, sourceInstanceId: sourceA));
+            reducer.Apply(Hook("UserPromptSubmit", 1, sourceInstanceId: sourceB));
+            reducer.Apply(Hook("Stop", 2, sourceInstanceId: sourceA));
+            reducer.Apply(Hook("Stop", 2, sourceInstanceId: sourceB));
+            Check(reducer.SessionSnapshots.Count == 2 && reducer.SessionSnapshots.All(session => session.SessionId == "S") &&
+                  reducer.ReadAckCandidates.Count == 2 &&
+                  reducer.ReadAckCandidates.Select(key => key.SourceInstanceId).Distinct().Count() == 2,
+                "SESSION_AND_THREAD_IDENTITIES_PARTITION_BY_SOURCE");
+
+            var rows = CodexActivityNormalizer.Normalize(reducer.SessionSnapshots,
+                new Dictionary<string, CodexUnreadState>
+                {
+                    [CodexSourceIdentity.CompositeKey(sourceA, "T")] = CodexUnreadState.HasUnread,
+                    [CodexSourceIdentity.CompositeKey(sourceB, "T")] = CodexUnreadState.NoUnread
+                });
+            Check(rows.Count == 2 && rows.Select(row => row.IdentityKey).Distinct().Count() == 2 &&
+                  rows.Single(row => row.SourceInstanceId == sourceA).Unread == CodexUnreadState.HasUnread &&
+                  rows.Single(row => row.SourceInstanceId == sourceB).Unread == CodexUnreadState.NoUnread,
+                "ACTIVITY_ROWS_PARTITION_BY_SOURCE");
+
+            File.WriteAllText(Path.Combine(homeB, ".codex-global-state.json"), "{malformed");
+            Check(registry.Read(sourceA, T).ForThread("T") == CodexUnreadState.HasUnread &&
+                  registry.Read(sourceB, T).Failure == CodexUnreadState.Unknown,
+                "ONE_MALFORMED_SOURCE_DOES_NOT_BREAK_OTHER");
+        }
+        finally
+        {
+            if (Directory.Exists(homeA)) Directory.Delete(homeA, true);
+            if (Directory.Exists(homeB)) Directory.Delete(homeB, true);
+        }
     }
 
     private static void FileReaderTests()

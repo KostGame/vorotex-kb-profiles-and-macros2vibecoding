@@ -1,4 +1,14 @@
+param(
+    [string]$SourceInstanceId
+)
+
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($SourceInstanceId) -or
+    $SourceInstanceId -cnotmatch '^local:[0-9a-f]{32}$' -or
+    [Text.Encoding]::UTF8.GetByteCount($SourceInstanceId) -gt 64) {
+    exit 0
+}
 
 function Get-OptionalProperty {
     param(
@@ -12,6 +22,46 @@ function Get-OptionalProperty {
     }
 
     return [string]$property.Value
+}
+
+function Get-CanonicalPath {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    try {
+        $full = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Value))
+        $root = [IO.Path]::GetPathRoot($full)
+        $normalized = if ($null -ne $root -and [string]::Equals($full, $root, [StringComparison]::OrdinalIgnoreCase)) {
+            $root
+        } else {
+            $full.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        }
+        return $normalized.Replace('/', '\').ToUpperInvariant()
+    } catch {
+        return $null
+    }
+}
+
+function Get-DetectedCodexHomePaths {
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) { $candidates += $env:CODEX_HOME }
+    $candidates += (Join-Path $env:USERPROFILE '.codex-agentloop')
+    $candidates += (Join-Path $env:USERPROFILE '.codex')
+    foreach ($dir in @(Get-ChildItem -LiteralPath $env:USERPROFILE -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like '.codex-*' })) { $candidates += $dir.FullName }
+    return @($candidates | ForEach-Object { Get-CanonicalPath -Value $_ } | Where-Object { $_ })
+}
+
+function Get-SafeCwd {
+    param([string]$Value)
+
+    $canonical = Get-CanonicalPath -Value $Value
+    if ($null -ne $canonical) {
+        $leaf = [IO.Path]::GetFileName($canonical.TrimEnd('\'))
+        if ($leaf -eq '.CODEX' -or $leaf.StartsWith('.CODEX-', [StringComparison]::Ordinal)) { return $null }
+        if ((Get-DetectedCodexHomePaths) -contains $canonical) { return $null }
+    }
+    return $Value
 }
 
 function Rotate-JournalIfNeeded {
@@ -58,11 +108,12 @@ if ([string]::IsNullOrWhiteSpace($eventName)) {
 $record = [ordered]@{
     timestampUtc  = [DateTime]::UtcNow.ToString('o')
     source        = 'codex_hook'
+    sourceInstanceId = $SourceInstanceId
     event         = $eventName
     sessionId     = Get-OptionalProperty -Object $payload -Name 'session_id'
     turnId        = Get-OptionalProperty -Object $payload -Name 'turn_id'
     model         = Get-OptionalProperty -Object $payload -Name 'model'
-    cwd           = Get-OptionalProperty -Object $payload -Name 'cwd'
+    cwd           = Get-SafeCwd -Value (Get-OptionalProperty -Object $payload -Name 'cwd')
     toolName      = Get-OptionalProperty -Object $payload -Name 'tool_name'
     permissionMode = Get-OptionalProperty -Object $payload -Name 'permission_mode'
 }
