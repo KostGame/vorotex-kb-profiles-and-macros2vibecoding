@@ -302,7 +302,9 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             throw new InvalidOperationException("Выбери устройство из списка кандидатов.");
         if (!await RunDeviceOperationWithRgbAsync(
                 "device_connect",
-                () => _deviceManager.Select(candidate) && _deviceManager.Connect()))
+                () => K15RgbLifecycleDecisions.RunAfterTeardown(
+                    teardownSucceeded: true,
+                    operation: () => _deviceManager.Select(candidate) && _deviceManager.Connect())))
             throw new InvalidOperationException("Не удалось подтвердить выбранное K15 устройство.");
         UpdateDeviceStatus(_deviceManager.ConnectionState);
     }

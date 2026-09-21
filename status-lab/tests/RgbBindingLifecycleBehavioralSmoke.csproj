@@ -9,5 +9,6 @@
   <ItemGroup>
     <Compile Include="RgbBindingLifecycleBehavioralSmokeProgram.cs" />
     <Compile Include="..\K15RgbBindingGuard.cs" Link="K15RgbBindingGuard.cs" />
+    <Compile Include="..\K15RgbLifecycleDecisions.cs" Link="K15RgbLifecycleDecisions.cs" />
   </ItemGroup>
 </Project>

@@ -571,20 +571,26 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             return;
 
         var reconnectState = _desiredState;
-        foreach (var pair in _snapshots)
-            _pendingRestores[pair.Key] = pair.Value;
+        K15RgbLifecycleDecisions.ParkSnapshots(_snapshots, _pendingRestores);
         InvalidateBindingLocked("transport_reconnect");
         try
         {
-            if (!_deviceManager.Reconnect() || _deviceManager.Controller is null)
+            var reconnectSucceeded = _deviceManager.Reconnect();
+            if (!K15RgbLifecycleDecisions.IsReconnectUsable(
+                    reconnectSucceeded,
+                    _deviceManager.Controller is not null))
                 throw new IOException("Selected K15 device could not be reconnected.");
-            _controller = _deviceManager.Controller;
+            var reboundController = _deviceManager.Controller
+                ?? throw new IOException("Selected K15 device controller disappeared during reconnect.");
+            _controller = reboundController;
             _bindingGeneration = _deviceManager.ConnectionGeneration;
             if (!IsCurrentBindingLocked())
                 throw new IOException("Selected K15 device binding changed during reconnect.");
-            var currentSlot = _controller.ReadActiveSlot();
-            RestorePendingForSlotLocked(_controller, currentSlot, "transport_reconnect");
-            _snapshot = _controller.PrepareProfileSnapshot(_config);
+            var currentSlot = reboundController.ReadActiveSlot();
+            _snapshot = K15RgbLifecycleDecisions.RestoreBeforeCapture(
+                _pendingRestores.ContainsKey(currentSlot),
+                () => RestorePendingForSlotLocked(reboundController, currentSlot, "transport_reconnect"),
+                () => reboundController.PrepareProfileSnapshot(_config));
             _snapshots.Clear();
             _snapshots[_snapshot.OnboardSlot] = _snapshot;
             SetDesiredStateLocked(reconnectState);

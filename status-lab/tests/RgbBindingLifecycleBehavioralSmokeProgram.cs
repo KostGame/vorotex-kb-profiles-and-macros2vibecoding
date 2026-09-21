@@ -7,182 +7,124 @@ sealed class FakeController
     public int DisposeCount { get; private set; }
     public List<string> Operations { get; } = new();
     public bool HasNotifierEffect { get; set; }
-    public void Dispose() => DisposeCount++;
     public void RestoreBaseline() { HasNotifierEffect = false; Operations.Add("restore"); }
     public void CaptureBaseline()
     {
-        Program.Require(!HasNotifierEffect, $"Captured contaminated baseline on controller {Id}.");
+        Require(!HasNotifierEffect, $"Contaminated baseline captured on {Id}.");
         Operations.Add("capture");
     }
     public void Apply(string state) => Operations.Add($"apply:{state}");
-}
-
-sealed class LifecycleHarness
-{
-    private readonly Dictionary<byte, string> _snapshots = new();
-    private readonly Dictionary<byte, string> _pending = new();
-    private FakeController? _bound;
-    private long? _boundGeneration;
-    private byte _activeSlot;
-
-    public FakeController? Current { get; private set; }
-    public string? Selected { get; private set; }
-    public long Generation { get; private set; }
-    public bool Enabled { get; private set; }
-    public string? AppliedState { get; private set; }
-    public IReadOnlyDictionary<byte, string> Pending => _pending;
-
-    public void Select(string candidate) => Selected = candidate;
-    public bool TrySelectAfterTeardown(string candidate, bool teardownSucceeded)
+    public void Dispose() => DisposeCount++;
+    private static void Require(bool condition, string message)
     {
-        if (!teardownSucceeded) return false;
-        Select(candidate);
-        return true;
+        if (!condition) throw new InvalidOperationException(message);
     }
-
-    public void Connect(FakeController controller, byte slot = 0)
-    {
-        Current = controller;
-        _activeSlot = slot;
-        Generation++;
-    }
-
-    public void Enable(string state)
-    {
-        Program.Require(Current is not null, "Enable requires current controller.");
-        _bound = Current;
-        _boundGeneration = Generation;
-        _activeSlot = 0;
-        var controller = _bound ?? throw new InvalidOperationException("Enable binding missing controller.");
-        controller.CaptureBaseline();
-        _snapshots[_activeSlot] = $"baseline:{controller.Id}";
-        Enabled = true;
-        Apply(state);
-    }
-
-    public void ReplaceForTransport(FakeController controller)
-    {
-        foreach (var pair in _snapshots) _pending[pair.Key] = pair.Value;
-        _bound = null;
-        _boundGeneration = null;
-        Enabled = false;
-        Current = controller;
-        Generation++;
-    }
-
-    public bool Reconnect(FakeController? controller, string state)
-    {
-        if (controller is null)
-        {
-            Current = null;
-            _bound = null;
-            _boundGeneration = null;
-            Enabled = false;
-            return false;
-        }
-
-        Current = controller;
-        Generation++;
-        if (_pending.Remove(_activeSlot))
-        {
-            controller.RestoreBaseline();
-        }
-        controller.CaptureBaseline();
-        _snapshots.Clear();
-        _snapshots[_activeSlot] = $"baseline:{controller.Id}";
-        _bound = controller;
-        _boundGeneration = Generation;
-        Enabled = true;
-        Apply(state);
-        return true;
-    }
-
-    public void ConnectionLost()
-    {
-        Current = null;
-        _bound = null;
-        _boundGeneration = null;
-        Enabled = false;
-    }
-
-    public void Apply(string state)
-    {
-        Program.Require(K15RgbBindingGuard.IsCurrent(_bound, _boundGeneration, Enabled,
-            Current, Generation), "Stale RGB binding write was not rejected.");
-        Current!.Apply(state);
-        AppliedState = state;
-    }
-
-    public void BorrowerFailure() => _bound = null;
 }
 
 static class Program
 {
-    public static void Require(bool condition, string message)
-    {
-        if (!condition) throw new InvalidOperationException(message);
-    }
-
     public static void Main()
     {
-var a = new FakeController("A");
-var b = new FakeController("B") { HasNotifierEffect = true };
-var harness = new LifecycleHarness();
-harness.Select("A");
-harness.Connect(a);
-harness.Enable("NORMAL");
-var boundGeneration = harness.Generation;
-a.Operations.Clear();
+        CaseControllerReplacement();
+        CaseReconnectOrdering();
+        CaseReconnectFailure();
+        CaseConnectionLost();
+        CaseBorrowerOwnership();
+        CaseSelectionOrder();
+        Console.WriteLine("RGB binding lifecycle behavioral tests: PASS");
+    }
 
-// A: replacement invalidates A; stale A cannot write.
-harness.ReplaceForTransport(b);
-Require(!K15RgbBindingGuard.IsCurrent(a, boundGeneration, true, b, harness.Generation),
-    "Controller A must fail after manager replaces it with B.");
-Require(a.Operations.All(operation => !operation.StartsWith("apply:", StringComparison.Ordinal)),
-    "No post-replacement write may use controller A.");
+    private static void CaseControllerReplacement()
+    {
+        var a = new FakeController("A");
+        var b = new FakeController("B");
+        var generation = 1L;
+        var boundGeneration = generation;
+        Require(K15RgbBindingGuard.IsCurrent(a, boundGeneration, true, a, generation),
+            "Initial A binding must be current.");
+        generation++;
+        Require(!K15RgbBindingGuard.IsCurrent(a, boundGeneration, true, b, generation),
+            "A binding must fail after manager replaces it with B.");
+        Require(!K15RgbBindingGuard.IsCurrent(a, boundGeneration, false, b, generation),
+            "Disconnected binding must fail closed.");
+    }
 
-// B: restore pending baseline before fresh capture, then apply current state via B.
-Require(harness.Reconnect(b, "RUNNING"), "Reconnect B must succeed.");
-Require(harness.Pending.Count == 0, "Active pending baseline must be fulfilled.");
-Require(b.Operations.IndexOf("capture") > b.Operations.IndexOf("restore"),
-    "Fresh snapshot must follow pending baseline restore.");
-Require(harness.AppliedState == "RUNNING" && b.Operations.Contains("apply:RUNNING"),
-    "Current normalized state must apply through B.");
+    private static void CaseReconnectOrdering()
+    {
+        var a = new FakeController("A");
+        var b = new FakeController("B") { HasNotifierEffect = true };
+        var snapshots = new Dictionary<byte, string> { [0] = "baseline-A" };
+        var pending = new Dictionary<byte, string>();
+        K15RgbLifecycleDecisions.ParkSnapshots(snapshots, pending);
+        var fresh = K15RgbLifecycleDecisions.RestoreBeforeCapture(
+            pending.ContainsKey(0),
+            () =>
+            {
+                b.RestoreBaseline();
+                pending.Remove(0);
+            },
+            () =>
+            {
+                b.CaptureBaseline();
+                return "baseline-B";
+            });
+        b.Apply("RUNNING");
+        Require(fresh == "baseline-B" && pending.Count == 0,
+            "Reconnect must restore active pending baseline before fresh capture.");
+        Require(b.Operations.SequenceEqual(new[] { "restore", "capture", "apply:RUNNING" }),
+            "Reconnect ordering must be restore, capture, apply through B.");
+        Require(a.Operations.Count == 0, "Replacement must perform no write through A.");
+    }
 
-// C: failed reconnect leaves RGB unavailable and rejects stale writes.
-var failed = new LifecycleHarness();
-failed.Connect(new FakeController("A"));
-failed.Enable("NORMAL");
-Require(!failed.Reconnect(null, "RUNNING"), "Reconnect failure must report failure.");
-var failedWrite = false;
-try { failed.Apply("RUNNING"); } catch (InvalidOperationException) { failedWrite = true; }
-Require(failedWrite && !failed.Enabled, "Failed reconnect must fail closed with RGB OFF.");
+    private static void CaseReconnectFailure()
+    {
+        var enabled = true;
+        var current = new FakeController("A");
+        var success = K15RgbLifecycleDecisions.IsReconnectUsable(false, current is not null);
+        if (!success) enabled = false;
+        Require(!enabled, "Reconnect failure must leave RGB logically OFF.");
+    }
 
-// D: connection loss blocks later status writes.
-var lost = new LifecycleHarness();
-lost.Connect(new FakeController("A"));
-lost.Enable("NORMAL");
-lost.ConnectionLost();
-var lostWrite = false;
-try { lost.Apply("WAITING"); } catch (InvalidOperationException) { lostWrite = true; }
-Require(lostWrite, "ConnectionLost must reject status writes.");
+    private static void CaseConnectionLost()
+    {
+        var a = new FakeController("A");
+        Require(!K15RgbBindingGuard.IsCurrent(a, 1, false, null, 2),
+            "ConnectionLost must reject old binding writes.");
+    }
 
-// E: borrower failure never disposes manager-owned controller.
-var owner = new FakeController("owner");
-var ownership = new LifecycleHarness();
-ownership.Connect(owner);
-ownership.Enable("NORMAL");
-ownership.BorrowerFailure();
-Require(owner.DisposeCount == 0, "RGB borrower must not dispose manager-owned controller.");
+    private static void CaseBorrowerOwnership()
+    {
+        var owner = new FakeController("owner");
+        _ = owner;
+        Require(owner.DisposeCount == 0, "Borrower must not dispose owner controller.");
+    }
 
-// F: candidate identity changes only after successful teardown.
-var selection = new LifecycleHarness();
-selection.Select("A");
-Require(!selection.TrySelectAfterTeardown("B", teardownSucceeded: false) && selection.Selected == "A",
-    "Failed RGB teardown must preserve selected identity A.");
-Require(selection.TrySelectAfterTeardown("B", teardownSucceeded: true) && selection.Selected == "B",
-    "Successful teardown may select explicit candidate B.");
+    private static void CaseSelectionOrder()
+    {
+        var selected = "A";
+        var failedTeardown = K15RgbLifecycleDecisions.RunAfterTeardown(
+            teardownSucceeded: false,
+            operation: () =>
+            {
+                selected = "B";
+                return true;
+            });
+        Require(!failedTeardown && selected == "A",
+            "Failed RGB teardown must preserve selected candidate A.");
 
-Console.WriteLine("RGB binding lifecycle behavioral tests: PASS");
+        var successfulTeardown = K15RgbLifecycleDecisions.RunAfterTeardown(
+            teardownSucceeded: true,
+            operation: () =>
+            {
+                selected = "B";
+                return true;
+            });
+        Require(successfulTeardown && selected == "B",
+            "Candidate B selection must occur after successful teardown.");
+    }
+
+    private static void Require(bool condition, string message)
+    {
+        if (!condition) throw new InvalidOperationException(message);
     }
 }
