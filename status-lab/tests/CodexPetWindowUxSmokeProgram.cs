@@ -92,31 +92,81 @@ var oversized = TaskPanelPlacementPolicy.Place(new Rectangle(100, 100, 100, 100)
 Require(oversized.Bounds == new Rectangle(-50, -40, 400, 300),
     "PLACEMENT_OVERSIZED_PANEL_BOUNDED");
 
-Require(CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Collapsed\"}") ==
-        PetTaskSurfaceState.Collapsed &&
-        CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Expanded\"}") ==
-        PetTaskSurfaceState.Expanded,
-    "UI_PREFERENCE_ROUNDTRIP");
-Require(CodexPetUiPreferenceStore.Deserialize("not-json") == CodexPetUiPreferenceStore.SafeDefault &&
-        CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Unknown\"}") ==
-        CodexPetUiPreferenceStore.SafeDefault,
-    "CORRUPTED_UI_PREFERENCE_SAFE_DEFAULT");
-var preferenceJson = CodexPetUiPreferenceStore.Serialize(PetTaskSurfaceState.Stacked);
+Require(CodexPetSizePolicy.DefaultPreset == PetSizePreset.Medium &&
+        CodexPetSizePolicy.Geometry(PetSizePreset.Small).WindowSize == new Size(128, 128) &&
+        CodexPetSizePolicy.Geometry(PetSizePreset.Medium).WindowSize == new Size(160, 160) &&
+        CodexPetSizePolicy.Geometry(PetSizePreset.Large).WindowSize == new Size(192, 192),
+    "PET_SIZE_PRESETS_AND_DEFAULT");
+foreach (var preset in Enum.GetValues<PetSizePreset>())
+{
+    var geometry = CodexPetSizePolicy.Geometry(preset);
+    Require(new Rectangle(Point.Empty, geometry.WindowSize).Contains(geometry.KeyboardBodyBounds) &&
+            new Rectangle(Point.Empty, geometry.WindowSize).Contains(geometry.BadgeBounds) &&
+            MiniK15ControlLayout.Controls.All(control =>
+                new Rectangle(Point.Empty, geometry.WindowSize).Contains(
+                    CodexPetSizePolicy.ControlBounds(geometry.KeyboardBodyBounds, control))),
+        $"PET_SIZE_GEOMETRY_{preset}");
+}
+Require(CodexPetSizePolicy.Select((PetSizePreset)99) == PetSizePreset.Medium, "PET_SIZE_INVALID_DEFAULTS");
+
+var legacy = CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Collapsed\"}");
+Require(legacy.PresentationState == PetTaskSurfaceState.Collapsed && legacy.PetSize == PetSizePreset.Medium,
+    "LEGACY_STATE_ONLY_DEFAULTS_SIZE");
+foreach (var preset in Enum.GetValues<PetSizePreset>())
+{
+    var roundtrip = CodexPetUiPreferenceStore.Deserialize(
+        CodexPetUiPreferenceStore.Serialize(new CodexPetUiPreferences(PetTaskSurfaceState.Expanded, preset)));
+    Require(roundtrip == new CodexPetUiPreferences(PetTaskSurfaceState.Expanded, preset),
+        $"UI_PREFERENCE_SIZE_ROUNDTRIP_{preset}");
+}
+var invalidSize = CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Expanded\",\"petSize\":\"Huge\"}");
+Require(invalidSize == new CodexPetUiPreferences(PetTaskSurfaceState.Expanded, PetSizePreset.Medium),
+    "INVALID_SIZE_ONLY_DEFAULTS_SIZE");
+var invalidState = CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Unknown\",\"petSize\":\"Small\"}");
+Require(invalidState == new CodexPetUiPreferences(PetTaskSurfaceState.Stacked, PetSizePreset.Small),
+    "INVALID_STATE_ONLY_DEFAULTS_STATE");
+var preferenceJson = CodexPetUiPreferenceStore.Serialize(new CodexPetUiPreferences(PetTaskSurfaceState.Stacked, PetSizePreset.Medium));
 Require(preferenceJson.Contains("presentationState", StringComparison.Ordinal) &&
+        preferenceJson.Contains("petSize", StringComparison.Ordinal) &&
         !preferenceJson.Contains("session", StringComparison.OrdinalIgnoreCase) &&
         !preferenceJson.Contains("task", StringComparison.OrdinalIgnoreCase),
-    "UI_PREFERENCE_CONTAINS_STATE_ONLY");
+    "UI_PREFERENCE_PRESENTATION_FIELDS_ONLY");
 var preferencePath = Path.Combine(Path.GetTempPath(), "vorotex-k15-pet-ui-" + Guid.NewGuid().ToString("N") + ".json");
 try
 {
     var preferenceStore = new CodexPetUiPreferenceStore(preferencePath);
-    preferenceStore.Save(PetTaskSurfaceState.Expanded);
-    Require(preferenceStore.Load() == PetTaskSurfaceState.Expanded,
+    preferenceStore.Save(new CodexPetUiPreferences(PetTaskSurfaceState.Expanded, PetSizePreset.Large));
+    Require(preferenceStore.Load() == new CodexPetUiPreferences(PetTaskSurfaceState.Expanded, PetSizePreset.Large),
         "UI_PREFERENCE_FILE_ROUNDTRIP");
 }
 finally
 {
     if (File.Exists(preferencePath)) File.Delete(preferencePath);
+}
+
+var resolverRoot = Path.Combine(Path.GetTempPath(), "vorotex-k15-live-dashboard-" + Guid.NewGuid().ToString("N"));
+var trayDirectory = Path.Combine(resolverRoot, "status-tray");
+var dashboardDirectory = Path.Combine(resolverRoot, "live-dashboard");
+Directory.CreateDirectory(trayDirectory);
+Directory.CreateDirectory(dashboardDirectory);
+var dashboardName = LiveDashboardPathPolicy.DefaultExecutableName;
+var colocatedDashboard = Path.Combine(trayDirectory, dashboardName);
+var siblingDashboard = Path.Combine(dashboardDirectory, dashboardName);
+try
+{
+    File.WriteAllText(colocatedDashboard, "fake");
+    File.WriteAllText(siblingDashboard, "fake");
+    Require(LiveDashboardPathPolicy.Resolve(trayDirectory) == colocatedDashboard, "LIVE_DASHBOARD_COLOCATED_RESOLUTION");
+    File.Delete(colocatedDashboard);
+    Require(LiveDashboardPathPolicy.Resolve(trayDirectory) == siblingDashboard, "LIVE_DASHBOARD_SIBLING_RESOLUTION");
+    File.Delete(siblingDashboard);
+    Directory.CreateDirectory(Path.Combine(resolverRoot, "unrelated", "nested"));
+    File.WriteAllText(Path.Combine(resolverRoot, "unrelated", "nested", dashboardName), "fake");
+    Require(LiveDashboardPathPolicy.Resolve(trayDirectory) is null, "LIVE_DASHBOARD_MISSING_FAILS_CLOSED");
+}
+finally
+{
+    if (Directory.Exists(resolverRoot)) Directory.Delete(resolverRoot, true);
 }
 
 Console.WriteLine("CODEX_PET_WINDOW_UX_SMOKE_PASSED");

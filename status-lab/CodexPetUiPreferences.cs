@@ -7,6 +7,7 @@ internal sealed class CodexPetUiPreferenceStore
 {
     internal const int MaximumBytes = 4096;
     internal const PetTaskSurfaceState SafeDefault = PetTaskSurfaceState.Stacked;
+    internal static readonly CodexPetUiPreferences SafeDefaults = new(SafeDefault, CodexPetSizePolicy.DefaultPreset);
 
     internal string FilePath { get; }
 
@@ -17,21 +18,21 @@ internal sealed class CodexPetUiPreferenceStore
             "VOROTEX", "K15 Status Lab", "codex-pet-ui.json");
     }
 
-    internal PetTaskSurfaceState Load()
+    internal CodexPetUiPreferences Load()
     {
         try
         {
             if (!File.Exists(FilePath) || new FileInfo(FilePath).Length > MaximumBytes)
-                return SafeDefault;
+                return SafeDefaults;
             return Deserialize(File.ReadAllText(FilePath));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            return SafeDefault;
+            return SafeDefaults;
         }
     }
 
-    internal void Save(PetTaskSurfaceState state)
+    internal void Save(CodexPetUiPreferences preferences)
     {
         var directory = Path.GetDirectoryName(FilePath);
         if (string.IsNullOrWhiteSpace(directory))
@@ -39,31 +40,53 @@ internal sealed class CodexPetUiPreferenceStore
 
         Directory.CreateDirectory(directory);
         var temporaryPath = FilePath + ".tmp";
-        File.WriteAllText(temporaryPath, Serialize(state));
+        File.WriteAllText(temporaryPath, Serialize(preferences));
         File.Move(temporaryPath, FilePath, true);
     }
 
-    internal static string Serialize(PetTaskSurfaceState state) =>
+    internal static string Serialize(CodexPetUiPreferences preferences) =>
         JsonSerializer.Serialize(new
         {
-            presentationState = CodexPetTaskSurfacePolicy.Select(state).ToString()
+            presentationState = CodexPetTaskSurfacePolicy.Select(preferences.PresentationState).ToString(),
+            petSize = CodexPetSizePolicy.Select(preferences.PetSize).ToString()
         });
 
-    internal static PetTaskSurfaceState Deserialize(string json)
+    internal static CodexPetUiPreferences Deserialize(string json)
     {
         try
         {
             using var document = JsonDocument.Parse(json);
-            if (!document.RootElement.TryGetProperty("presentationState", out var value) ||
-                value.ValueKind != JsonValueKind.String ||
-                !Enum.TryParse<PetTaskSurfaceState>(value.GetString(), false, out var state) ||
-                !Enum.IsDefined(state))
-                return SafeDefault;
-            return state;
+            var state = ParseState(document.RootElement);
+            var size = ParseSize(document.RootElement);
+            return new(state, size);
         }
         catch (JsonException)
         {
-            return SafeDefault;
+            return SafeDefaults;
         }
     }
+
+    private static PetTaskSurfaceState ParseState(JsonElement root)
+    {
+        if (!root.TryGetProperty("presentationState", out var value) ||
+            value.ValueKind != JsonValueKind.String ||
+            !Enum.TryParse<PetTaskSurfaceState>(value.GetString(), false, out var state) ||
+            !Enum.IsDefined(state))
+            return SafeDefault;
+        return state;
+    }
+
+    private static PetSizePreset ParseSize(JsonElement root)
+    {
+        if (!root.TryGetProperty("petSize", out var value) ||
+            value.ValueKind != JsonValueKind.String ||
+            !Enum.TryParse<PetSizePreset>(value.GetString(), false, out var size) ||
+            !Enum.IsDefined(size))
+            return CodexPetSizePolicy.DefaultPreset;
+        return size;
+    }
 }
+
+internal readonly record struct CodexPetUiPreferences(
+    PetTaskSurfaceState PresentationState,
+    PetSizePreset PetSize);

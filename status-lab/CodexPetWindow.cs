@@ -17,7 +17,9 @@ internal sealed class CodexPetWindow : Form
         new(CodexPetVisualState.Idle, "initial", null, null), Array.Empty<CodexPetTaskRow>());
     private readonly CodexPetTaskPopup _popup;
     private PetTaskSurfaceState _surfaceState;
+    private PetSizePreset _sizePreset;
     private readonly Dictionary<PetTaskSurfaceState, ToolStripMenuItem> _surfaceMenuItems = new();
+    private readonly Dictionary<PetSizePreset, ToolStripMenuItem> _sizeMenuItems = new();
     private bool _dragging;
     private bool _dragMoved;
     private Point _dragStartCursor;
@@ -32,11 +34,13 @@ internal sealed class CodexPetWindow : Form
         _profileHint = ProfileColorHint.Unknown(DateTimeOffset.UtcNow);
         _positionStore = positionStore ?? new CodexPetPositionStore();
         _uiPreferenceStore = uiPreferenceStore ?? new CodexPetUiPreferenceStore();
-        _surfaceState = _uiPreferenceStore.Load();
+        var preferences = _uiPreferenceStore.Load();
+        _surfaceState = preferences.PresentationState;
+        _sizePreset = preferences.PetSize;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
-        Size = new Size(192, 192);
+        Size = CodexPetSizePolicy.Geometry(_sizePreset).WindowSize;
         TopMost = true;
         BackColor = Color.FromArgb(24, 24, 30);
         TransparencyKey = BackColor;
@@ -103,8 +107,29 @@ internal sealed class CodexPetWindow : Form
             tasks.DropDownItems.Add(item);
         }
         menu.Items.Add(tasks);
+        var sizes = new ToolStripMenuItem("Размер питомца");
+        foreach (var preset in Enum.GetValues<PetSizePreset>())
+        {
+            var item = new ToolStripMenuItem(PetSizeLabel(preset))
+            {
+                Tag = preset,
+                Checked = preset == _sizePreset,
+                CheckOnClick = false
+            };
+            item.Click += (_, _) => SetPetSizePreset((PetSizePreset)item.Tag!);
+            _sizeMenuItems[preset] = item;
+            sizes.DropDownItems.Add(item);
+        }
+        menu.Items.Add(sizes);
         return menu;
     }
+
+    private static string PetSizeLabel(PetSizePreset preset) => preset switch
+    {
+        PetSizePreset.Small => "Маленький",
+        PetSizePreset.Large => "Большой",
+        _ => "Средний"
+    };
 
     private static string TaskSurfaceLabel(PetTaskSurfaceState state) => state switch
     {
@@ -118,13 +143,30 @@ internal sealed class CodexPetWindow : Form
         _surfaceState = CodexPetTaskSurfacePolicy.Select(state);
         foreach (var item in _surfaceMenuItems)
             item.Value.Checked = item.Key == _surfaceState;
-        try { _uiPreferenceStore.Save(_surfaceState); }
+        SaveUiPreferences();
+        _popup.SetSurfaceState(_surfaceState, _presentation.RelevantTaskCount);
+        Invalidate();
+    }
+
+    private void SetPetSizePreset(PetSizePreset preset)
+    {
+        _sizePreset = CodexPetSizePolicy.Select(preset);
+        foreach (var item in _sizeMenuItems)
+            item.Value.Checked = item.Key == _sizePreset;
+        Size = CodexPetSizePolicy.Geometry(_sizePreset).WindowSize;
+        SaveUiPreferences();
+        _popup.SetSurfaceState(_surfaceState, _presentation.RelevantTaskCount);
+        _popup.Reanchor();
+        Invalidate();
+    }
+
+    private void SaveUiPreferences()
+    {
+        try { _uiPreferenceStore.Save(new CodexPetUiPreferences(_surfaceState, _sizePreset)); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // UI preference failure must not break task presentation.
         }
-        _popup.SetSurfaceState(_surfaceState, _presentation.RelevantTaskCount);
-        Invalidate();
     }
 
     private void HandleMouseDown(object? sender, MouseEventArgs e)
@@ -176,7 +218,9 @@ internal sealed class CodexPetWindow : Form
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var motion = CodexPetMotion.Sample(_state, _clock.Elapsed.TotalSeconds - _stateEnteredSeconds);
-        var body = new Rectangle(13 + (int)Math.Round(motion.OffsetX), 31 + (int)Math.Round(motion.OffsetY), 166, 146);
+        var geometry = CodexPetSizePolicy.Geometry(_sizePreset);
+        var baseBody = geometry.KeyboardBodyBounds;
+        var body = new Rectangle(baseBody.X + (int)Math.Round(motion.OffsetX), baseBody.Y + (int)Math.Round(motion.OffsetY), baseBody.Width, baseBody.Height);
         using var shadow = new SolidBrush(Color.FromArgb(70, 0, 0, 0));
         FillRounded(g, new Rectangle(body.X + 3, body.Y + 5, body.Width, body.Height), 11, shadow);
         using var chassis = new SolidBrush(Color.FromArgb(40, 45, 54));
@@ -193,7 +237,7 @@ internal sealed class CodexPetWindow : Form
         for (var index = 0; index < controls.Count; index++)
         {
             var control = controls[index];
-            var bounds = ControlBounds(body, control);
+            var bounds = CodexPetSizePolicy.ControlBounds(body, control);
             var sample = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, index, controls.Count);
             DrawControl(g, control, bounds, sample, palette);
         }
@@ -202,7 +246,7 @@ internal sealed class CodexPetWindow : Form
 
     }
 
-    internal Rectangle BadgeBounds() => new(145, 6, 40, 23);
+    internal Rectangle BadgeBounds() => CodexPetSizePolicy.Geometry(_sizePreset).BadgeBounds;
 
     private static void DrawBadge(Graphics graphics, Rectangle bounds, int count, PetPalette palette)
     {
@@ -218,12 +262,6 @@ internal sealed class CodexPetWindow : Form
         using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
         graphics.DrawString(CodexPetAdapter.FormatTaskCount(count), font, text, bounds, format);
     }
-
-    private static Rectangle ControlBounds(Rectangle body, MiniK15Control control) => new(
-        body.X + control.X * body.Width / 100,
-        body.Y + control.Y * body.Height / 100,
-        Math.Max(4, control.Width * body.Width / 100),
-        Math.Max(4, control.Height * body.Height / 100));
 
     private static void DrawControl(Graphics graphics, MiniK15Control control, Rectangle bounds, VisualEffectSample sample,
         PetPalette palette)

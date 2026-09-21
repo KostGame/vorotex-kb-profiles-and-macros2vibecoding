@@ -27,6 +27,7 @@
     <Compile Include="..\CodexPetPopupPolicy.cs" Link="CodexPetPopupPolicy.cs" />
     <Compile Include="..\CodexPetTaskSurface.cs" Link="CodexPetTaskSurface.cs" />
     <Compile Include="..\CodexPetUiPreferences.cs" Link="CodexPetUiPreferences.cs" />
+    <Compile Include="..\CodexPetSizePolicy.cs" Link="CodexPetSizePolicy.cs" />
     <Compile Include="..\MiniK15ControlLayout.cs" Link="MiniK15ControlLayout.cs" />
     <Compile Include="..\K15ProfileColorHint.cs" Link="K15ProfileColorHint.cs" />
     <Compile Include="..\K15ProfileMonitorLifecycle.cs" Link="K15ProfileMonitorLifecycle.cs" />

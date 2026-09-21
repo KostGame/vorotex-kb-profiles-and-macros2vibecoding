@@ -158,3 +158,10 @@ jobs:
           name: vorotex-k15-hid-research-lab-win-x64
           path: status-lab/hid-research-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.HidResearchLab.exe
           if-no-files-found: error
+
+      - name: Upload Live Dashboard
+        uses: actions/upload-artifact@v4
+        with:
+          name: vorotex-k15-live-dashboard-win-x64
+          path: status-lab/live-dashboard/bin/Release/net8.0/win-x64/publish/Vorotex.K15.LiveDashboard.exe
+          if-no-files-found: error

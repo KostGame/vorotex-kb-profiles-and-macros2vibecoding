@@ -442,11 +442,11 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private void OpenLiveDashboard()
     {
         const int port = 17815;
-        var path = Path.Combine(AppContext.BaseDirectory, "Vorotex.K15.LiveDashboard.exe");
-        if (!File.Exists(path))
+        var path = LiveDashboardPathPolicy.Resolve(AppContext.BaseDirectory);
+        if (path is null)
         {
             EventJournal.Append(new { timestampUtc = DateTimeOffset.UtcNow, source = "status_tray", @event = "live_dashboard_missing" });
-            ShowBalloon("Live Dashboard не найден рядом с Status Tray.");
+            ShowBalloon("Live Dashboard не найден. Поддерживаются только варианты рядом со Status Tray или в соседней папке live-dashboard.");
             return;
         }
 
