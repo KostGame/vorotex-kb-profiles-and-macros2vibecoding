@@ -13,6 +13,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     private int _disposed;
 
     private K15HidLightingController? _controller;
+    private long? _bindingGeneration;
     private K15HidLightingController.LightingSnapshot? _snapshot;
     private readonly K15ProfileMonitorLifecycle _monitorLifecycle = new();
     private K15NormalizedState _desiredState = K15NormalizedState.Normal;
@@ -55,6 +56,9 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 _deviceManager.Controller is null)
                 throw new InvalidOperationException("Connect a verified K15 device before enabling RGB.");
             _controller = _deviceManager.Controller;
+            _bindingGeneration = _deviceManager.ConnectionGeneration;
+            if (!IsCurrentBindingLocked())
+                throw new InvalidOperationException("K15 device binding changed while enabling RGB.");
             var currentSlot = _controller.ReadActiveSlot();
             PublishActiveSlot(currentSlot, DateTimeOffset.UtcNow);
             RestorePendingForSlotLocked(_controller, currentSlot, "rgb_enable");
@@ -90,8 +94,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         }
         catch
         {
-            _controller?.Dispose();
             _controller = null;
+            _bindingGeneration = null;
             _snapshot = null;
             _snapshots.Clear();
             Enabled = false;
@@ -109,7 +113,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         try
         {
             SetDesiredStateLocked(state);
-            if (!Enabled || _controller is null || _snapshot is null)
+            if (!Enabled || _controller is null || _snapshot is null || !IsCurrentBindingLocked())
                 return;
 
             try
@@ -161,7 +165,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         await _gate.WaitAsync();
         try
         {
-            if (!Enabled || _controller is null || _snapshot is null)
+            if (!Enabled || _controller is null || _snapshot is null || !IsCurrentBindingLocked())
                 throw new InvalidOperationException("Enable K15 RGB indication before running Effect Lab.");
 
             var currentSlot = _controller.ReadActiveSlot();
@@ -192,7 +196,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         await _gate.WaitAsync();
         try
         {
-            if (Enabled && _controller is not null && _snapshot is not null)
+            if (Enabled && _controller is not null && _snapshot is not null && IsCurrentBindingLocked())
             {
                 var currentSlot = _controller.ReadActiveSlot();
                 if (currentSlot != _snapshot.OnboardSlot)
@@ -316,6 +320,11 @@ internal sealed class K15RgbCanary : IAsyncDisposable
                 var observedController = Enabled ? _controller : _deviceManager.Controller;
                 if (_deviceManager.ConnectionState != K15DeviceConnectionState.Connected || observedController is null)
                     continue;
+                if (Enabled && !IsCurrentBindingLocked())
+                {
+                    InvalidateBindingLocked("monitor_stale_binding");
+                    continue;
+                }
 
                 try
                 {
@@ -397,7 +406,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
     private void AdoptActiveProfileLocked(byte observedSlot, bool startProfileOverlay)
     {
-        if (_controller is null)
+        if (_controller is null || !IsCurrentBindingLocked())
             return;
 
         Thread.Sleep(180);
@@ -479,7 +488,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     private void BeginOverlayLocked(LightingEffectConfig source, string kind,
         double durationSeconds, string eventName)
     {
-        if (_controller is null || _snapshot is null)
+        if (_controller is null || _snapshot is null || !IsCurrentBindingLocked())
             return;
 
         var rendered = _config.RenderForProfile(_snapshot.OnboardSlot, source);
@@ -508,7 +517,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
 
     private void ApplyDesiredLocked()
     {
-        if (_controller is null || _snapshot is null)
+        if (_controller is null || _snapshot is null || !IsCurrentBindingLocked())
             return;
 
         if (_desiredState == K15NormalizedState.Normal || _expiredState == _desiredState)
@@ -561,19 +570,24 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         if (_transportFailures < 2)
             return;
 
+        var reconnectState = _desiredState;
+        InvalidateBindingLocked("transport_reconnect");
         try
         {
             if (!_deviceManager.Reconnect() || _deviceManager.Controller is null)
                 throw new IOException("Selected K15 device could not be reconnected.");
             _controller = _deviceManager.Controller;
+            _bindingGeneration = _deviceManager.ConnectionGeneration;
+            if (!IsCurrentBindingLocked())
+                throw new IOException("Selected K15 device binding changed during reconnect.");
             var currentSlot = _controller.ReadActiveSlot();
+            _snapshot = _controller.PrepareProfileSnapshot(_config);
+            _snapshots.Clear();
+            _snapshots[_snapshot.OnboardSlot] = _snapshot;
+            SetDesiredStateLocked(reconnectState);
+            ResetVisualStateLocked();
+            Enabled = true;
             _transportFailures = 0;
-
-            if (_snapshot is null || currentSlot != _snapshot.OnboardSlot)
-            {
-                AdoptActiveProfileLocked(currentSlot, startProfileOverlay: true);
-                return;
-            }
 
             StatusChanged?.Invoke($"RGB: RECONNECTED · profile {ProfileName(currentSlot)}");
             Log("rgb_transport_reconnected", new { onboardSlot = currentSlot });
@@ -599,7 +613,36 @@ internal sealed class K15RgbCanary : IAsyncDisposable
         if (state is not K15DeviceConnectionState.Connected)
         {
             InvalidateProfileHint();
+            _controller = null;
+            _bindingGeneration = null;
+            _snapshot = null;
+            _snapshots.Clear();
+            if (Enabled)
+            {
+                Enabled = false;
+                StatusChanged?.Invoke("RGB: OFF · device unavailable");
+                Log("rgb_binding_invalidated", new { reason = "device_state_changed", state });
+            }
         }
+    }
+
+    private bool IsCurrentBindingLocked() =>
+        _deviceManager.ConnectionState == K15DeviceConnectionState.Connected &&
+        _bindingGeneration is long generation && generation == _deviceManager.ConnectionGeneration &&
+        _controller is not null && ReferenceEquals(_controller, _deviceManager.Controller);
+
+    private void InvalidateBindingLocked(string reason)
+    {
+        if (!Enabled && _controller is null)
+            return;
+        _controller = null;
+        _bindingGeneration = null;
+        _snapshot = null;
+        _snapshots.Clear();
+        Enabled = false;
+        InvalidateProfileHint();
+        StatusChanged?.Invoke("RGB: OFF · device unavailable");
+        Log("rgb_binding_invalidated", new { reason });
     }
 
     private void PublishActiveSlot(byte slot, DateTimeOffset observedUtc)
@@ -693,6 +736,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             finally
             {
                 _controller = null;
+                _bindingGeneration = null;
                 _snapshot = null;
                 _snapshots.Clear();
                 _desiredState = K15NormalizedState.Normal;
