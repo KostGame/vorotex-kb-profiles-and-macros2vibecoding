@@ -9,7 +9,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private readonly StatusLabConfig _config;
     private readonly WindowsNotificationPoller _notificationPoller = new();
     private readonly JournalStateNormalizer _stateNormalizer;
-    private readonly CodexUnreadStateReader _unreadReader;
+    private readonly CodexUnreadSourceRegistry _unreadSources;
     private readonly CodexPetController _codexPet;
     private readonly K15DeviceManager _deviceManager;
     private readonly K15RgbCanary _rgbCanary;
@@ -37,13 +37,12 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     {
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
-        var unreadStatePath = CodexUnreadStateReader.ResolveStatePath(Environment.GetEnvironmentVariable("CODEX_HOME"));
-        _unreadReader = new CodexUnreadStateReader(unreadStatePath, "local");
+        _unreadSources = CodexUnreadSourceRegistry.Detect();
         _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds,
-            _unreadReader);
+            _unreadSources);
         _deviceManager = new K15DeviceManager(Path.Combine(EventJournal.DirectoryPath, "preferred-device.json"));
         _rgbCanary = new K15RgbCanary(_config, _deviceManager);
-        _codexPet = new CodexPetController(_stateNormalizer, _unreadReader, _config);
+        _codexPet = new CodexPetController(_stateNormalizer, _unreadSources, _config);
         _codexPet.SetProfileHint(_rgbCanary.CurrentProfileHint);
         _trackingOnIcon = TrayIconFactory.Create(trackingEnabled: true);
         _trackingOffIcon = TrayIconFactory.Create(trackingEnabled: false);
@@ -261,7 +260,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             _stateNormalizer.SessionSnapshots.Select(session => new StatusTraySessionSnapshot(
                 session.SessionId, JournalStateNormalizer.ToWireName(session.State), session.IsAlive,
                 session.IsFocused, session.Cwd, session.ThreadId, session.TurnId,
-                session.LastActivityUtc)).ToArray(),
+                session.LastActivityUtc, session.SourceInstanceId)).ToArray(),
             _stateNormalizer.AttentionSnapshot.RunningCount,
             _stateNormalizer.AttentionSnapshot.ApprovalWaitingCount,
             _stateNormalizer.AttentionSnapshot.DoneUnreadCount,

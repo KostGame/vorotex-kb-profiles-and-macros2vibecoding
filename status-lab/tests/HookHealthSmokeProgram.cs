@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Vorotex.K15.StatusLab;
 
 static void Require(bool condition, string message)
@@ -40,7 +41,42 @@ try
     Require(mixed.Detail.Contains(driftedHome, StringComparison.Ordinal),
         "Health detail must identify the exact affected Codex home.");
 
-    Console.WriteLine("CodexHookHealth missing-target, transient-path, path-drift and mixed-home tests: PASS");
+    var correctHome = MakeHome(root, "correct", stable);
+    var correct = CodexHookHealth.InspectHomes(new[] { correctHome });
+    Require(correct.Healthy && correct.Detail.Contains("OK", StringComparison.Ordinal),
+        "Canonical sourceInstanceId must report healthy.");
+
+    var missingIdHome = MakeHome(root, "missing-id", stable, sourceId: "");
+    var missingId = CodexHookHealth.InspectHomes(new[] { missingIdHome });
+    Require(!missingId.Healthy && missingId.Detail.Contains("missing or malformed sourceInstanceId", StringComparison.Ordinal),
+        "Missing sourceInstanceId must be unhealthy.");
+
+    var wrongIdHome = MakeHome(root, "wrong-id", stable, sourceId: CodexSourceIdentity.ForHome(correctHome));
+    var wrongId = CodexHookHealth.InspectHomes(new[] { wrongIdHome });
+    Require(!wrongId.Healthy && wrongId.Detail.Contains("wrong sourceInstanceId", StringComparison.Ordinal),
+        "SourceInstanceId from another home must be unhealthy.");
+
+    var duplicateA = MakeHome(root, "duplicate-a", stable, sourceId: "local:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    var duplicateB = MakeHome(root, "duplicate-b", stable, sourceId: "local:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    var duplicate = CodexHookHealth.InspectHomes(new[] { duplicateA, duplicateB });
+    Require(!duplicate.Healthy && duplicate.Detail.Contains("duplicate sourceInstanceId", StringComparison.Ordinal),
+        "Duplicate sourceInstanceId must be unhealthy.");
+
+    var staleHome = MakeHome(root, "stale", stable);
+    var staleHooksPath = Path.Combine(staleHome, "hooks.json");
+    using (var staleDocument = JsonDocument.Parse(File.ReadAllText(staleHooksPath)))
+    {
+        var rootNode = JsonSerializer.Deserialize<Dictionary<string, object>>(staleDocument.RootElement.GetRawText())!;
+        var hooksNode = JsonSerializer.Deserialize<Dictionary<string, object>>(staleDocument.RootElement.GetProperty("hooks").GetRawText())!;
+        hooksNode["SessionStart"] = JsonSerializer.Deserialize<object>("[{\"hooks\":[{\"type\":\"command\",\"commandWindows\":\"powershell.exe -File \\\"" + stable.Replace("\\", "\\\\") + "\\\" -SourceInstanceId \\\"" + CodexSourceIdentity.ForHome(staleHome) + "\\\"\"}]}]")!;
+        rootNode["hooks"] = hooksNode;
+        File.WriteAllText(staleHooksPath, JsonSerializer.Serialize(rootNode));
+    }
+    var staleResult = CodexHookHealth.InspectHomes(new[] { staleHome });
+    Require(!staleResult.Healthy && staleResult.Detail.Contains("stale/unexpected Status Lab event SessionStart", StringComparison.Ordinal),
+        "Stale Status Lab event must be unhealthy.");
+
+    Console.WriteLine("CodexHookHealth source identity, missing-target, transient-path, path-drift and mixed-home tests: PASS");
 }
 finally
 {
@@ -48,13 +84,14 @@ finally
     if (Directory.Exists(root)) Directory.Delete(root, true);
 }
 
-static string MakeHome(string root, string name, string loggerPath)
+static string MakeHome(string root, string name, string loggerPath, string? sourceId = null)
 {
     var home = Path.Combine(root, name);
     Directory.CreateDirectory(home);
+    sourceId ??= CodexSourceIdentity.ForHome(home)!;
     var events = new[] { "UserPromptSubmit", "PermissionRequest", "PreToolUse", "PostToolUse", "Stop", "SessionEnd" };
     var entries = string.Join(",", events.Select(eventName =>
-        $"\"{eventName}\":[{{\"hooks\":[{{\"type\":\"command\",\"commandWindows\":\"powershell.exe -File \\\"{loggerPath.Replace("\\", "\\\\")}\\\"\"}}]}}]"));
+        $"\"{eventName}\":[{{\"hooks\":[{{\"type\":\"command\",\"commandWindows\":\"powershell.exe -File \\\"{loggerPath.Replace("\\", "\\\\")}\\\" -SourceInstanceId \\\"{sourceId}\\\"\"}}]}}]"));
     File.WriteAllText(Path.Combine(home, "hooks.json"), "{\"hooks\":{" + entries + "}}");
     return home;
 }

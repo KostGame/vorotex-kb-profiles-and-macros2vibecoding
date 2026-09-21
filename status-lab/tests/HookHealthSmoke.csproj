@@ -9,5 +9,6 @@
   <ItemGroup>
     <Compile Include="HookHealthSmokeProgram.cs" />
     <Compile Include="..\CodexHookHealth.cs" Link="CodexHookHealth.cs" />
+    <Compile Include="..\CodexSourceIdentity.cs" Link="CodexSourceIdentity.cs" />
   </ItemGroup>
 </Project>

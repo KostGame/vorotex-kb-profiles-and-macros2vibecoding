@@ -43,7 +43,8 @@ internal sealed record StatusInputEvent(
     string ToolName = "",
     string PermissionMode = "",
     bool ToolNameProvided = false,
-    bool PermissionModeProvided = false);
+    bool PermissionModeProvided = false,
+    string SourceInstanceId = "");
 
 internal sealed record PermissionRequestEvidence(
     string EventSubtype = "",
@@ -85,7 +86,8 @@ internal sealed record SessionStateTransition(
     string RpcIdType,
     string RpcId,
     bool IsRehydrated,
-    PermissionRequestEvidence? PermissionEvidence = null);
+    PermissionRequestEvidence? PermissionEvidence = null,
+    string SourceInstanceId = "");
 
 internal sealed record CodexSessionSnapshot(
     string SessionId,
@@ -95,7 +97,8 @@ internal sealed record CodexSessionSnapshot(
     string Cwd = "",
     string ThreadId = "",
     string TurnId = "",
-    DateTimeOffset? LastActivityUtc = null);
+    DateTimeOffset? LastActivityUtc = null,
+    string SourceInstanceId = "");
 
 internal sealed record CodexAttentionSnapshot(
     int RunningCount,
@@ -118,6 +121,8 @@ internal sealed class StateReducer
     private sealed class SessionRuntime
     {
         public required string Id { get; init; }
+        public string SourceInstanceId { get; init; } = string.Empty;
+        public string IdentityKey => CodexSourceIdentity.CompositeKey(SourceInstanceId, Id);
         public string ThreadId { get; set; } = string.Empty;
         public string TurnId { get; set; } = string.Empty;
         public string Cwd { get; set; } = string.Empty;
@@ -138,6 +143,7 @@ internal sealed class StateReducer
 
     private readonly TimeSpan? _staleAttentionTimeout;
     private readonly Dictionary<string, SessionRuntime> _sessions = new(StringComparer.Ordinal);
+    private string? _focusedSessionKey;
     private DateTimeOffset? _noRunningSinceUtc;
     private Guid _runtimeEpoch = Guid.NewGuid();
     private readonly DateTimeOffset _runtimeStartedUtc;
@@ -156,8 +162,13 @@ internal sealed class StateReducer
     }
 
     public K15NormalizedState State { get; private set; } = K15NormalizedState.Normal;
-    public string? FocusedSessionId { get; private set; }
-    public string FocusedCwd => FocusedSessionId is not null && _sessions.TryGetValue(FocusedSessionId, out var session)
+    public string? FocusedSessionId => _focusedSessionKey is not null && _sessions.TryGetValue(_focusedSessionKey, out var focused)
+        ? focused.Id
+        : null;
+    public string? FocusedSourceInstanceId => _focusedSessionKey is not null && _sessions.TryGetValue(_focusedSessionKey, out var focused)
+        ? focused.SourceInstanceId
+        : null;
+    public string FocusedCwd => _focusedSessionKey is not null && _sessions.TryGetValue(_focusedSessionKey, out var session)
         ? session.Cwd
         : string.Empty;
     public int ActiveTaskSessionCount => _sessions.Values.Count(session => !session.Internal && !session.Ended);
@@ -167,10 +178,11 @@ internal sealed class StateReducer
 
     public IReadOnlyList<CodexSessionSnapshot> SessionSnapshots => _sessions.Values
         .Where(session => !session.Internal)
-        .OrderBy(session => session.Id, StringComparer.Ordinal)
+        .OrderBy(session => session.SourceInstanceId, StringComparer.Ordinal)
+        .ThenBy(session => session.Id, StringComparer.Ordinal)
         .Select(session => new CodexSessionSnapshot(session.Id, session.State, !session.Ended,
-            string.Equals(session.Id, FocusedSessionId, StringComparison.Ordinal), session.Cwd,
-            session.ThreadId, session.TurnId, session.LastActivityUtc))
+            string.Equals(session.IdentityKey, _focusedSessionKey, StringComparison.Ordinal), session.Cwd,
+            session.ThreadId, session.TurnId, session.LastActivityUtc, session.SourceInstanceId))
         .ToArray();
 
     public IReadOnlyList<CodexCompletionKey> ReadAckCandidates => _sessions.Values
@@ -178,10 +190,11 @@ internal sealed class StateReducer
             session.Completion is not null && session.TurnId == session.Completion.TurnId &&
             (session.ThreadId.Length == 0 || session.ThreadId == session.Completion.ThreadId))
         .Select(session => session.Completion!)
-        .GroupBy(key => key.ThreadId, StringComparer.Ordinal)
+        .GroupBy(key => CodexSourceIdentity.CompositeKey(key.SourceInstanceId, key.ThreadId), StringComparer.Ordinal)
         .Where(group => group.Count() == 1)
         .Select(group => group.Single())
         .Where(key => !_sessions.Values.Any(other => other.Id != key.SessionId &&
+            other.SourceInstanceId == key.SourceInstanceId &&
             (other.ThreadId == key.ThreadId || other.Completion?.ThreadId == key.ThreadId)))
         .ToArray();
 
@@ -193,7 +206,8 @@ internal sealed class StateReducer
             evidence.HasUnreadUtc <= key.CompletedUtc || evidence.HasUnreadUtc <= _runtimeStartedUtc ||
             evidence.FirstNoUnreadUtc <= evidence.HasUnreadUtc || evidence.SecondNoUnreadUtc <= evidence.FirstNoUnreadUtc ||
             !ReadAckCandidates.Contains(key)) return null;
-        var session = _sessions[key.SessionId];
+        if (!_sessions.TryGetValue(CodexSourceIdentity.CompositeKey(key.SourceInstanceId, key.SessionId), out var session))
+            return null;
         session.ReadAcknowledgedCompletion = key;
         SetSessionState(session, K15NormalizedState.Normal, "codex_read_ack", evidence.SecondNoUnreadUtc,
             new(evidence.SecondNoUnreadUtc, "codex_unread_observer", "read_ack", ThreadId: key.ThreadId, TurnId: key.TurnId));
@@ -211,7 +225,8 @@ internal sealed class StateReducer
         foreach (var session in _sessions.Values.Where(s => s.State == K15NormalizedState.DonePendingAttention))
         {
             if (session.CompletionCorrelationRejected) continue;
-            var matches = records.Where(r => r.SessionId == session.Id && r.Current == K15NormalizedState.DonePendingAttention &&
+            var matches = records.Where(r => r.SourceInstanceId == session.SourceInstanceId &&
+                r.SessionId == session.Id && r.Current == K15NormalizedState.DonePendingAttention &&
                 r.TimestampUtc == session.CompletionEnteredUtc).ToArray();
             if (matches.Length == 0) continue;
             // An earlier Stop diagnostic may lack T. It must not erase a full
@@ -225,7 +240,8 @@ internal sealed class StateReducer
                 (session.Completion is not null && (session.Completion.ThreadId != pairs[0].ThreadId || session.Completion.TurnId != pairs[0].TurnId)))
             { session.Completion = null; session.CompletionCorrelationRejected = true; continue; }
             session.Completion = new(session.Id, pairs[0].ThreadId, pairs[0].TurnId,
-                session.CompletionGeneration, _runtimeEpoch, session.CompletionEnteredUtc!.Value);
+                session.CompletionGeneration, _runtimeEpoch, session.CompletionEnteredUtc!.Value,
+                session.SourceInstanceId);
         }
     }
 
@@ -312,7 +328,11 @@ internal sealed class StateReducer
     public StateTransition? Acknowledge(string sessionId, DateTimeOffset timestampUtc, string reason = "session_acknowledge")
     {
         LastSessionTransitions = Array.Empty<SessionStateTransition>();
-        if (!_sessions.TryGetValue(sessionId, out var session) || session.Internal ||
+        var matchingSessions = _sessions.Values.Where(candidate => candidate.Id == sessionId).ToArray();
+        if (matchingSessions.Length != 1)
+            return null;
+        var session = matchingSessions[0];
+        if (session.Internal ||
             session.State is not (K15NormalizedState.Waiting or K15NormalizedState.DonePendingAttention))
         {
             return null;
@@ -363,7 +383,7 @@ internal sealed class StateReducer
                 session.LastPermissionUtc = null;
             }
 
-            if (string.Equals(FocusedSessionId, session.Id, StringComparison.Ordinal))
+            if (string.Equals(_focusedSessionKey, session.IdentityKey, StringComparison.Ordinal))
                 SelectFallbackFocus();
             return RecomputeAggregate("codex_session_end", input.TimestampUtc);
         }
@@ -381,7 +401,7 @@ internal sealed class StateReducer
                 session.LastStopUtc = null;
                 session.DoneEnteredUtc = null;
                 session.AcknowledgedUtc = input.TimestampUtc;
-                FocusedSessionId = session.Id;
+                _focusedSessionKey = session.IdentityKey;
                 return RecomputeAggregate("codex_user_prompt_submit", input.TimestampUtc);
 
             case "PermissionRequest":
@@ -389,7 +409,7 @@ internal sealed class StateReducer
                 session.LastPermissionUtc = input.TimestampUtc;
                 session.LastStopUtc = null;
                 session.DoneEnteredUtc = null;
-                FocusedSessionId = session.Id;
+                _focusedSessionKey = session.IdentityKey;
                 return RecomputeAggregate("codex_permission_request", input.TimestampUtc);
 
             case "PreToolUse":
@@ -399,7 +419,7 @@ internal sealed class StateReducer
                 session.LastPermissionUtc = null;
                 session.LastStopUtc = null;
                 session.DoneEnteredUtc = null;
-                FocusedSessionId = session.Id;
+                _focusedSessionKey = session.IdentityKey;
                 return RecomputeAggregate(input.EventName == "PreToolUse" ? "codex_pre_tool_use" : "codex_post_tool_use", input.TimestampUtc);
 
             case "Stop":
@@ -407,7 +427,7 @@ internal sealed class StateReducer
                 session.LastPermissionUtc = null;
                 session.LastStopUtc = input.TimestampUtc;
                 session.DoneEnteredUtc = input.TimestampUtc;
-                FocusedSessionId = session.Id;
+                _focusedSessionKey = session.IdentityKey;
                 return RecomputeAggregate("codex_stop", input.TimestampUtc);
 
             default:
@@ -430,6 +450,8 @@ internal sealed class StateReducer
 
         var candidates = _sessions.Values
             .Where(session => !session.Internal && !session.Ended &&
+                              (string.IsNullOrWhiteSpace(input.SourceInstanceId) ||
+                               session.SourceInstanceId == input.SourceInstanceId) &&
                               session.State == K15NormalizedState.Waiting)
             .Where(session => MatchesApproval(session, input))
             .ToArray();
@@ -442,7 +464,7 @@ internal sealed class StateReducer
         session.LastStopUtc = null;
         session.DoneEnteredUtc = null;
         session.AcknowledgedUtc = input.TimestampUtc;
-        FocusedSessionId = session.Id;
+        _focusedSessionKey = session.IdentityKey;
         return RecomputeAggregate("codex_approval_resolved", input.TimestampUtc);
     }
 
@@ -453,6 +475,7 @@ internal sealed class StateReducer
             return null;
 
         var candidates = _sessions.Values.Where(session => !session.Internal && !session.Ended &&
+            (string.IsNullOrWhiteSpace(input.SourceInstanceId) || session.SourceInstanceId == input.SourceInstanceId) &&
             (string.Equals(session.ThreadId, input.ThreadId, StringComparison.Ordinal) ||
              string.Equals(session.Id, input.ThreadId, StringComparison.Ordinal)) &&
             string.Equals(session.TurnId, input.TurnId, StringComparison.Ordinal)).ToArray();
@@ -476,7 +499,7 @@ internal sealed class StateReducer
                 return null;
             }
             session.Completion ??= new(session.Id, input.ThreadId, input.TurnId,
-                session.CompletionGeneration, _runtimeEpoch, completedUtc);
+                session.CompletionGeneration, _runtimeEpoch, completedUtc, session.SourceInstanceId);
             return null;
         }
         if (session.State != K15NormalizedState.Running)
@@ -485,7 +508,7 @@ internal sealed class StateReducer
         SetSessionState(session, K15NormalizedState.DonePendingAttention, "codex_turn_completed", input.TimestampUtc, input);
         session.LastPermissionUtc = null;
         session.DoneEnteredUtc = input.TimestampUtc;
-        FocusedSessionId = session.Id;
+        _focusedSessionKey = session.IdentityKey;
         return RecomputeAggregate("codex_turn_completed", input.TimestampUtc);
     }
 
@@ -515,26 +538,29 @@ internal sealed class StateReducer
     private SessionRuntime GetOrCreateSession(StatusInputEvent input)
     {
         var id = string.IsNullOrWhiteSpace(input.SessionId) ? LegacySessionId : input.SessionId;
-        if (_sessions.TryGetValue(id, out var existing))
+        var sourceInstanceId = CodexSourceIdentity.IsValid(input.SourceInstanceId) ? input.SourceInstanceId : string.Empty;
+        var identityKey = CodexSourceIdentity.CompositeKey(sourceInstanceId, id);
+        if (_sessions.TryGetValue(identityKey, out var existing))
             return existing;
 
         var created = new SessionRuntime
         {
             Id = id,
+            SourceInstanceId = sourceInstanceId,
             Cwd = input.Cwd,
             Internal = IsInternalCwd(input.Cwd),
             LastActivityUtc = input.TimestampUtc
         };
-        _sessions[id] = created;
+        _sessions[identityKey] = created;
         return created;
     }
 
     private void SelectFallbackFocus()
     {
-        FocusedSessionId = _sessions.Values
+        _focusedSessionKey = _sessions.Values
             .Where(session => !session.Internal && !session.Ended)
             .OrderByDescending(session => session.LastActivityUtc)
-            .Select(session => session.Id)
+            .Select(session => session.IdentityKey)
             .FirstOrDefault();
     }
 
@@ -549,7 +575,7 @@ internal sealed class StateReducer
             running > 0 ? K15NormalizedState.Running : K15NormalizedState.Normal;
         var driver = sessions.Where(session => session.State == aggregate &&
                 (aggregate == K15NormalizedState.DonePendingAttention || !session.Ended))
-            .OrderByDescending(session => string.Equals(session.Id, FocusedSessionId, StringComparison.Ordinal))
+            .OrderByDescending(session => string.Equals(session.IdentityKey, _focusedSessionKey, StringComparison.Ordinal))
             .ThenByDescending(session => session.LastActivityUtc)
             .FirstOrDefault();
         return new CodexAttentionSnapshot(
@@ -588,7 +614,7 @@ internal sealed class StateReducer
     {
         _runtimeEpoch = Guid.NewGuid();
         _sessions.Clear();
-        FocusedSessionId = null;
+        _focusedSessionKey = null;
         State = K15NormalizedState.Normal;
         _noRunningSinceUtc = null;
         LastSessionTransitions = Array.Empty<SessionStateTransition>();
@@ -615,7 +641,8 @@ internal sealed class StateReducer
             var stopHasExactTurn = input is null || input.EventName != "Stop" ||
                 CodexUnreadStateReader.Bounded(input.TurnId);
             session.Completion = stopHasExactTurn && ValidCorrelation(session.Id, threadId, turnId)
-                ? new(session.Id, threadId, turnId, session.CompletionGeneration, _runtimeEpoch, timestampUtc) : null;
+                ? new(session.Id, threadId, turnId, session.CompletionGeneration, _runtimeEpoch, timestampUtc,
+                    session.SourceInstanceId) : null;
         }
         var transition = new SessionStateTransition(
             session.Id, previous, next, reason, timestampUtc,
@@ -638,7 +665,8 @@ internal sealed class StateReducer
                     ThreadIdPresent: !string.IsNullOrWhiteSpace(input.ThreadId),
                     TurnIdPresent: !string.IsNullOrWhiteSpace(input.TurnId),
                     SessionIdPresent: !string.IsNullOrWhiteSpace(input.SessionId))
-                : null);
+                : null,
+            session.SourceInstanceId);
         LastSessionTransitions = LastSessionTransitions.Append(transition).ToArray();
     }
 

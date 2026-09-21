@@ -146,12 +146,16 @@ internal static class EventJournal
         var allowed = name switch
         {
             "normalized_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "previous", "current", "reason", "sourceTimestampUtc", "focusedSessionId", "focusedCwd", "activeTaskSessions", "attention", "aggregatePrevious", "aggregateCurrent", "driverSessionId", "driverReason", "runningCount", "waitingCount", "doneUnreadCount" },
-            "session_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "sessionId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation", "permissionEvidence" },
+            "session_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "sessionId", "sourceInstanceId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation", "permissionEvidence" },
             "state_rehydrated" => new[] { "timestampUtc", "source", "event", "current", "focusedSessionId", "focusedCwd", "activeTaskSessions", "attention", "replayWindowMinutes" },
             _ => new[] { "timestampUtc", "source", "event", "exception", "hresult" }
         };
         if (!root.EnumerateObject().All(p => allowed.Contains(p.Name, StringComparer.Ordinal)) ||
             !DateTimeOffset.TryParse(GetString(root, "timestampUtc"), out _))
+            return false;
+        if (root.TryGetProperty("sourceInstanceId", out var sourceInstanceId) &&
+            (sourceInstanceId.ValueKind != JsonValueKind.String ||
+             (!string.IsNullOrEmpty(sourceInstanceId.GetString()) && !CodexSourceIdentity.IsValid(sourceInstanceId.GetString()))))
             return false;
 
         foreach (var nameToCheck in new[] { "previous", "current", "aggregatePrevious", "aggregateCurrent", "state" })

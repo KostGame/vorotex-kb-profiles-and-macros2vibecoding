@@ -45,7 +45,12 @@ function Get-DetectedCodexHomes {
     $seen = @{}
     $result = @()
     foreach ($candidate in $candidates) {
-        $full = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($candidate)).TrimEnd('\')
+        $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
+        $full = [IO.Path]::GetFullPath($expanded)
+        $root = [IO.Path]::GetPathRoot($full)
+        if ($null -eq $root -or -not [string]::Equals($full, $root, [StringComparison]::OrdinalIgnoreCase)) {
+            $full = $full.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        }
         $key = $full.ToLowerInvariant()
         if (-not $seen.ContainsKey($key)) {
             $seen[$key] = $true
@@ -54,6 +59,37 @@ function Get-DetectedCodexHomes {
     }
 
     return @($result)
+}
+
+function Get-CanonicalCodexHome {
+    param([Parameter(Mandatory)][string]$HomePath)
+
+    $expanded = [Environment]::ExpandEnvironmentVariables($HomePath)
+    $full = [IO.Path]::GetFullPath($expanded)
+    $root = [IO.Path]::GetPathRoot($full)
+    $normalized = if ($null -ne $root -and [string]::Equals($full, $root, [StringComparison]::OrdinalIgnoreCase)) {
+        $root
+    } else {
+        $full.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    }
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        throw "Codex home canonicalization failed: $HomePath"
+    }
+    return $normalized.Replace('/', '\').ToUpperInvariant()
+}
+
+function Get-SourceInstanceId {
+    param([Parameter(Mandatory)][string]$HomePath)
+
+    $canonical = Get-CanonicalCodexHome -HomePath $HomePath
+    $bytes = [Text.Encoding]::UTF8.GetBytes(('codex-home/v1' + [char]0 + $canonical))
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hex = [BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+    return 'local:' + $hex.Substring(0, 32)
 }
 
 function Test-IsStatusLabHandler {
@@ -190,7 +226,8 @@ function Install-StatusLabHooks {
     Remove-StatusLabHandlersFromAllEvents -Hooks $root.hooks
 
     $quotedLogger = '"' + $Logger + '"'
-    $commandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $quotedLogger"
+    $sourceInstanceId = Get-SourceInstanceId -HomePath $CodexHomePath
+    $commandLine = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $quotedLogger -SourceInstanceId `"$sourceInstanceId`""
 
     $events = @(
         @{ Name = 'UserPromptSubmit'; Async = $true },
@@ -241,6 +278,7 @@ function Install-StatusLabHooks {
             backupPath = $null
             changed = $false
             loggerPath = $Logger
+            sourceInstanceId = $sourceInstanceId
         }
     }
 
@@ -303,6 +341,7 @@ function Install-StatusLabHooks {
         backupPath = $backup
         changed = $true
         loggerPath = $Logger
+        sourceInstanceId = $sourceInstanceId
     }
 }
 

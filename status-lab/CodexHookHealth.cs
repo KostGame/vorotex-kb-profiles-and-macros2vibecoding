@@ -16,42 +16,84 @@ internal static class CodexHookHealth
         Environment.GetEnvironmentVariable("LOCALAPPDATA") ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "VorotexK15", "app", "hooks", "codex-hook-logger.ps1"));
 
-    public static CodexHookHealthSnapshot Inspect()
-    {
-        return InspectHomes(DetectHomes());
-    }
+    public static CodexHookHealthSnapshot Inspect() => InspectHomes(CodexHomeDiscovery.DetectHomes());
 
     internal static CodexHookHealthSnapshot InspectHomes(IReadOnlyList<string> homes)
     {
         if (homes.Count == 0) return new("Не установлены", 0, 0, "Codex home не найден");
 
-        var healthy = 0;
-        var details = new List<string>();
+        var outcomes = new List<HomeValidation>();
         foreach (var home in homes)
         {
+            var problems = new List<string>();
+            var actualIds = new HashSet<string>(StringComparer.Ordinal);
+            var expectedId = CodexSourceIdentity.ForHome(home);
+            if (!CodexSourceIdentity.IsValid(expectedId))
+            {
+                problems.Add("sourceInstanceId cannot be generated");
+                outcomes.Add(new(home, problems, actualIds));
+                continue;
+            }
+
             var hooksPath = Path.Combine(home, "hooks.json");
-            if (!File.Exists(hooksPath)) { details.Add($"{home}: hooks.json отсутствует"); continue; }
+            if (!File.Exists(hooksPath))
+            {
+                problems.Add("hooks.json отсутствует");
+                outcomes.Add(new(home, problems, actualIds));
+                continue;
+            }
+
             try
             {
                 using var document = JsonDocument.Parse(File.ReadAllText(hooksPath));
-                var problems = Validate(document.RootElement);
-                if (problems.Count == 0) { healthy++; details.Add($"{home}: OK"); }
-                else details.Add($"{home}: обновить ({string.Join(", ", problems)})");
+                problems.AddRange(Validate(document.RootElement, expectedId!, actualIds));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-            { details.Add($"{home}: malformed hooks.json"); }
+            {
+                problems.Add("malformed hooks.json");
+            }
+
+            outcomes.Add(new(home, problems, actualIds));
         }
 
-        var status = healthy == homes.Count ? "Установлены · актуальны" :
+        var duplicateIds = outcomes.SelectMany(outcome => outcome.ActualIds)
+            .GroupBy(id => id, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var details = new List<string>();
+        var healthy = 0;
+        foreach (var outcome in outcomes)
+        {
+            foreach (var duplicate in outcome.ActualIds.Where(duplicateIds.Contains))
+                outcome.Problems.Add($"duplicate sourceInstanceId {duplicate}");
+            if (outcome.Problems.Count == 0)
+            {
+                healthy++;
+                details.Add($"{outcome.Home}: OK");
+            }
+            else
+            {
+                details.Add($"{outcome.Home}: обновить ({string.Join(", ", outcome.Problems.Distinct(StringComparer.Ordinal))})");
+            }
+        }
+
+        var status = healthy == outcomes.Count ? "Установлены · актуальны" :
             healthy == 0 ? "Нужно установить / обновить" : "Частично актуальны";
-        return new(status, homes.Count, healthy, string.Join(" · ", details));
+        return new(status, outcomes.Count, healthy, string.Join(" · ", details));
     }
 
-    private static List<string> Validate(JsonElement root)
+    private sealed record HomeValidation(string Home, List<string> Problems, HashSet<string> ActualIds);
+
+    private static List<string> Validate(JsonElement root, string expectedId, HashSet<string> actualIds)
     {
         var problems = new List<string>();
         if (!root.TryGetProperty("hooks", out var hooks) || hooks.ValueKind != JsonValueKind.Object)
-        { problems.Add("missing hooks object"); return problems; }
+        {
+            problems.Add("missing hooks object");
+            return problems;
+        }
 
         var knownEvents = new HashSet<string>(RequiredEvents, StringComparer.Ordinal);
         foreach (var property in hooks.EnumerateObject())
@@ -59,11 +101,16 @@ internal static class CodexHookHealth
             if (!knownEvents.Contains(property.Name) && GetStatusLabHandlers(property.Value).Any())
                 problems.Add($"stale/unexpected Status Lab event {property.Name}");
         }
+
         foreach (var eventName in RequiredEvents)
         {
             var matches = hooks.TryGetProperty(eventName, out var groups)
                 ? GetStatusLabHandlers(groups).ToArray() : [];
-            if (matches.Length == 0) { problems.Add($"missing canonical handler {eventName}"); continue; }
+            if (matches.Length == 0)
+            {
+                problems.Add($"missing canonical handler {eventName}");
+                continue;
+            }
             if (matches.Length > 1) problems.Add($"duplicate Status Lab handler {eventName}");
             foreach (var command in matches.Select(GetCommand))
             {
@@ -75,9 +122,19 @@ internal static class CodexHookHealth
                     problems.Add($"path drift {eventName}");
                 if (target is not null && IsTransientPath(target)) problems.Add($"transient numbered build path {eventName}");
                 if (targetFull is null || !File.Exists(targetFull)) problems.Add($"target missing {eventName}");
+
+                var sourceId = ExtractSourceInstanceId(command);
+                if (!CodexSourceIdentity.IsValid(sourceId))
+                    problems.Add($"missing or malformed sourceInstanceId {eventName}");
+                else
+                {
+                    actualIds.Add(sourceId!);
+                    if (!string.Equals(sourceId, expectedId, StringComparison.Ordinal))
+                        problems.Add($"wrong sourceInstanceId {eventName}");
+                }
             }
         }
-        return problems.Distinct(StringComparer.Ordinal).ToList();
+        return problems;
     }
 
     private static IEnumerable<JsonElement> GetStatusLabHandlers(JsonElement groups)
@@ -107,24 +164,15 @@ internal static class CodexHookHealth
         return value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
     }
 
+    private static string? ExtractSourceInstanceId(string command)
+    {
+        var marker = command.IndexOf("-SourceInstanceId", StringComparison.OrdinalIgnoreCase);
+        if (marker < 0) return null;
+        var value = command[(marker + "-SourceInstanceId".Length)..].TrimStart();
+        if (value.StartsWith('"')) { var end = value.IndexOf('"', 1); return end > 1 ? value[1..end] : null; }
+        return value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+    }
+
     private static bool IsTransientPath(string path) => path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
         .Any(part => part.Length >= 3 && part.EndsWith(')') && part.Contains('(') && part[^2] is >= '0' and <= '9');
-
-    private static List<string> DetectHomes()
-    {
-        var result = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        void AddIfPresent(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value)) return;
-            try { var full = Path.GetFullPath(Environment.ExpandEnvironmentVariables(value)); if (Directory.Exists(full) && seen.Add(full)) result.Add(full); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
-        }
-        AddIfPresent(Environment.GetEnvironmentVariable("CODEX_HOME"));
-        var user = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        AddIfPresent(Path.Combine(user, ".codex-agentloop")); AddIfPresent(Path.Combine(user, ".codex"));
-        try { foreach (var path in Directory.EnumerateDirectories(user, ".codex-*", SearchOption.TopDirectoryOnly)) AddIfPresent(path); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        return result;
-    }
 }

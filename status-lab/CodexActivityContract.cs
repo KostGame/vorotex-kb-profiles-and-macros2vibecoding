@@ -77,10 +77,11 @@ internal sealed record CodexActivityRow(
     DateTimeOffset ObservedAt,
     CodexActivityEvidence Evidence,
     CodexActivityConfidence Confidence,
-    CodexActivityOpenTarget OpenTarget)
+    CodexActivityOpenTarget OpenTarget,
+    string SourceInstanceId = "")
 {
     internal string IdentityKey => string.Join("/", Source, ExecutionHost,
-        ThreadId ?? string.Empty, TaskId ?? string.Empty, SessionId);
+        SourceInstanceId, ThreadId ?? string.Empty, TaskId ?? string.Empty, SessionId);
 }
 
 internal sealed record CodexActivitySourceStatus(
@@ -170,7 +171,7 @@ internal static class CodexActivityNormalizer
             _ => CodexActivityState.Unknown
         };
         var unread = state == CodexActivityState.DonePendingAttention && threadId is not null &&
-                     unreadByThread.TryGetValue(threadId, out var value)
+                     TryGetUnread(unreadByThread, session.SourceInstanceId, threadId, out var value)
             ? value
             : CodexUnreadState.Unavailable;
         var evidence = new CodexActivityEvidence(CodexActivitySource.Local, session.SessionId, null,
@@ -184,7 +185,16 @@ internal static class CodexActivityNormalizer
                 ? CodexActivityOpenTarget.Unavailable(CodexActivitySource.Local, null, session.SessionId,
                     ThreadIdUnavailable)
                 : CodexActivityOpenTarget.Unavailable(CodexActivitySource.Local, threadId, session.SessionId,
-                    ExactFocusUnavailable));
+                    ExactFocusUnavailable),
+            session.SourceInstanceId);
+    }
+
+    private static bool TryGetUnread(IReadOnlyDictionary<string, CodexUnreadState> unreadByThread,
+        string sourceInstanceId, string threadId, out CodexUnreadState value)
+    {
+        if (unreadByThread.TryGetValue(CodexSourceIdentity.CompositeKey(sourceInstanceId, threadId), out value))
+            return true;
+        return string.IsNullOrWhiteSpace(sourceInstanceId) && unreadByThread.TryGetValue(threadId, out value);
     }
 
     internal static CodexActivityRow? Remote(CodexRemoteThreadObservation observation)

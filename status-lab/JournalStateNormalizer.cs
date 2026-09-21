@@ -23,9 +23,15 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private readonly CodexReadAckObserver? _readAckObserver;
 
     public JournalStateNormalizer(double staleAttentionTimeoutSeconds = 18000, ICodexUnreadStateReader? unreadReader = null)
+        : this(staleAttentionTimeoutSeconds,
+            unreadReader is null ? null : new SingleCodexUnreadSourceRegistry(unreadReader))
+    {
+    }
+
+    public JournalStateNormalizer(double staleAttentionTimeoutSeconds, ICodexUnreadSourceRegistry? unreadSources)
     {
         _reducer = new StateReducer(staleAttentionTimeoutSeconds);
-        if (unreadReader is not null) _readAckObserver = new(unreadReader, "local");
+        if (unreadSources is not null) _readAckObserver = new(unreadSources, "local");
     }
 
     public event Action<K15NormalizedState, StateTransition?>? StateChanged;
@@ -176,8 +182,15 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     }
 
     internal static bool MayAffectCompletion(StatusInputEvent input, CodexCompletionKey completion) =>
-        (input.Source == "codex_hook" && (input.SessionId == completion.SessionId || input.ThreadId == completion.ThreadId)) ||
-        (input.Source == ApprovalSource && (input.ThreadId == completion.ThreadId || input.ThreadId == completion.SessionId));
+        (input.Source == "codex_hook" &&
+         SameSource(input.SourceInstanceId, completion.SourceInstanceId) &&
+         (input.SessionId == completion.SessionId || input.ThreadId == completion.ThreadId)) ||
+        (input.Source == ApprovalSource &&
+         (input.ThreadId == completion.ThreadId || input.ThreadId == completion.SessionId));
+
+    private static bool SameSource(string left, string right) =>
+        string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right) ||
+        string.Equals(left, right, StringComparison.Ordinal);
 
     private void CollectNewEvents()
     {
@@ -309,6 +322,9 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             @event = "session_state_changed",
             plane = "per_session",
             sessionId = BoundOpaque(transition.SessionId),
+            sourceInstanceId = CodexSourceIdentity.IsValid(transition.SourceInstanceId)
+                ? transition.SourceInstanceId
+                : string.Empty,
             previous = ToWireName(transition.Previous),
             current = ToWireName(transition.Current),
             reason = transition.Reason,
@@ -341,12 +357,13 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 !DateTimeOffset.TryParse(GetString(root, "sourceTimestampUtc"), out var timestamp) ||
                 !root.TryGetProperty("correlation", out var correlation) || correlation.ValueKind != JsonValueKind.Object)
                 return null;
-            var allowed = new[] { "timestampUtc", "source", "event", "plane", "sessionId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation" };
+            var allowed = new[] { "timestampUtc", "source", "event", "plane", "sessionId", "sourceInstanceId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation" };
             if (root.EnumerateObject().Any(p => !allowed.Contains(p.Name, StringComparer.Ordinal)) ||
                 root.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != root.EnumerateObject().Count() ||
                 correlation.EnumerateObject().Any(p => p.Name is not ("threadId" or "turnId" or "rpcIdType" or "rpcId")) ||
                 correlation.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != correlation.EnumerateObject().Count()) return null;
             var session = GetString(root, "sessionId");
+            var sourceInstanceId = GetBoundedSourceInstanceId(root);
             var thread = GetString(correlation, "threadId");
             var turn = GetString(correlation, "turnId");
             if (!CodexUnreadStateReader.Bounded(session)) return null;
@@ -355,7 +372,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             if (!CodexUnreadStateReader.Bounded(thread)) thread = string.Empty;
             if (!CodexUnreadStateReader.Bounded(turn)) turn = string.Empty;
             return new(session, K15NormalizedState.Running, K15NormalizedState.DonePendingAttention,
-                "state_rehydrated", timestamp, thread, turn, "", "", true);
+                "state_rehydrated", timestamp, thread, turn, "", "", true,
+                SourceInstanceId: sourceInstanceId);
         }
         catch (JsonException) { return null; }
     }
@@ -395,6 +413,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             var errorHint = root.TryGetProperty("errorHint", out var errorNode) &&
                 errorNode.ValueKind is JsonValueKind.True;
             var sessionId = GetString(root, "sessionId");
+            var sourceInstanceId = source == "codex_hook" ? GetBoundedSourceInstanceId(root) : string.Empty;
             var threadId = GetString(root, "threadId");
             // For an ordinary root Codex chat, upstream defines the hook
             // session_id as the root thread identity. Keep this derivation
@@ -419,7 +438,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 ToolName: GetDiagnosticString(root, "toolName"),
                 PermissionMode: GetDiagnosticString(root, "permissionMode"),
                 ToolNameProvided: HasStringProperty(root, "toolName"),
-                PermissionModeProvided: HasStringProperty(root, "permissionMode"));
+                PermissionModeProvided: HasStringProperty(root, "permissionMode"),
+                SourceInstanceId: sourceInstanceId);
         }
         catch (JsonException)
         {
@@ -554,6 +574,12 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         const int maxBytes = 1024;
         var value = GetString(root, name);
         return value.Length > 0 && Encoding.UTF8.GetByteCount(value) <= maxBytes ? value : string.Empty;
+    }
+
+    private static string GetBoundedSourceInstanceId(JsonElement root)
+    {
+        var value = GetString(root, "sourceInstanceId");
+        return CodexSourceIdentity.IsValid(value) ? value : string.Empty;
     }
 
     private static bool HasStringProperty(JsonElement root, string name) =>
