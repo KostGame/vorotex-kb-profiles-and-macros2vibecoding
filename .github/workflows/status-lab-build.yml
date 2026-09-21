@@ -52,6 +52,9 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/device-ux-smoke.ps1
 
+      - name: RGB binding lifecycle behavioral tests
+        run: dotnet run --project status-lab/tests/RgbBindingLifecycleBehavioralSmoke.csproj -c Release
+
       - name: Codex hook home sync regression
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File status-lab/tests/hook-home-sync-smoke.ps1

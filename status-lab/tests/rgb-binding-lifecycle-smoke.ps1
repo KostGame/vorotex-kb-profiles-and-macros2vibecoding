@@ -3,17 +3,18 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $manager = Get-Content (Join-Path $root 'K15DeviceManager.cs') -Raw -Encoding UTF8
 $rgb = Get-Content (Join-Path $root 'K15RgbCanary.cs') -Raw -Encoding UTF8
+$guard = Get-Content (Join-Path $root 'K15RgbBindingGuard.cs') -Raw -Encoding UTF8
 $tray = Get-Content (Join-Path $root 'StatusTrayApplicationContext.cs') -Raw -Encoding UTF8
 
 if ($rgb -match '_controller\?\.Dispose\(\)') { throw 'RGB borrower must never dispose manager-owned controller.' }
-foreach ($member in @('ConnectionGeneration', 'IsCurrentBindingLocked', 'ReferenceEquals', 'InvalidateBindingLocked')) {
-    if ($manager + $rgb -notmatch [regex]::Escape($member)) { throw "Missing binding lifecycle guard: $member" }
+foreach ($member in @('ConnectionGeneration', 'IsCurrentBindingLocked', 'K15RgbBindingGuard', 'InvalidateBindingLocked')) {
+    if ($manager + $rgb + $guard -notmatch [regex]::Escape($member)) { throw "Missing binding lifecycle guard: $member" }
 }
 if ($manager -notmatch '_connectionGeneration\+\+' -or $manager -notmatch 'pendingController = null') {
     throw 'Controller ownership transfer or generation update missing.'
 }
-if ($rgb -notmatch 'generation == _deviceManager\.ConnectionGeneration' -or
-    $rgb -notmatch 'ReferenceEquals\(_controller, _deviceManager\.Controller\)') {
+if ($guard -notmatch 'generation == currentGeneration' -or
+    $guard -notmatch 'ReferenceEquals\(boundController, currentController\)') {
     throw 'Hardware operations lack generation and controller identity proof.'
 }
 if ($rgb -notmatch 'var reconnectState = _desiredState' -or

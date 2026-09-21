@@ -295,9 +295,14 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
 
     private async Task ConnectDeviceAsync(string? candidateId)
     {
-        if (string.IsNullOrWhiteSpace(candidateId) || !_deviceManager.SelectById(candidateId))
+        var candidate = string.IsNullOrWhiteSpace(candidateId)
+            ? null
+            : _deviceManager.Candidates.SingleOrDefault(item => item.CandidateId == candidateId);
+        if (candidate is null)
             throw new InvalidOperationException("Выбери устройство из списка кандидатов.");
-        if (!await RunDeviceOperationWithRgbAsync("device_connect", _deviceManager.Connect))
+        if (!await RunDeviceOperationWithRgbAsync(
+                "device_connect",
+                () => _deviceManager.Select(candidate) && _deviceManager.Connect()))
             throw new InvalidOperationException("Не удалось подтвердить выбранное K15 устройство.");
         UpdateDeviceStatus(_deviceManager.ConnectionState);
     }

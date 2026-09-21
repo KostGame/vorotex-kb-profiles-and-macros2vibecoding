@@ -571,6 +571,8 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             return;
 
         var reconnectState = _desiredState;
+        foreach (var pair in _snapshots)
+            _pendingRestores[pair.Key] = pair.Value;
         InvalidateBindingLocked("transport_reconnect");
         try
         {
@@ -581,6 +583,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             if (!IsCurrentBindingLocked())
                 throw new IOException("Selected K15 device binding changed during reconnect.");
             var currentSlot = _controller.ReadActiveSlot();
+            RestorePendingForSlotLocked(_controller, currentSlot, "transport_reconnect");
             _snapshot = _controller.PrepareProfileSnapshot(_config);
             _snapshots.Clear();
             _snapshots[_snapshot.OnboardSlot] = _snapshot;
@@ -596,7 +599,7 @@ internal sealed class K15RgbCanary : IAsyncDisposable
             else
                 ApplyDesiredLocked();
         }
-        catch (Exception retryEx) when (IsTransportFault(retryEx))
+        catch (Exception retryEx)
         {
             _deviceManager.MarkConnectionLost();
             Log("rgb_transport_reconnect_pending", new
@@ -627,9 +630,12 @@ internal sealed class K15RgbCanary : IAsyncDisposable
     }
 
     private bool IsCurrentBindingLocked() =>
-        _deviceManager.ConnectionState == K15DeviceConnectionState.Connected &&
-        _bindingGeneration is long generation && generation == _deviceManager.ConnectionGeneration &&
-        _controller is not null && ReferenceEquals(_controller, _deviceManager.Controller);
+        K15RgbBindingGuard.IsCurrent(
+            _controller,
+            _bindingGeneration,
+            _deviceManager.ConnectionState == K15DeviceConnectionState.Connected,
+            _deviceManager.Controller,
+            _deviceManager.ConnectionGeneration);
 
     private void InvalidateBindingLocked(string reason)
     {
