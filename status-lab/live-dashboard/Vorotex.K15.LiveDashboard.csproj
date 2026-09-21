@@ -8,6 +8,6 @@
     <PublishSingleFile>true</PublishSingleFile><PublishTrimmed>false</PublishTrimmed>
     <EnableDefaultContentItems>false</EnableDefaultContentItems>
   </PropertyGroup>
-  <ItemGroup><Compile Include="..\shared\StatusTrayIpc.cs" Link="StatusTrayIpc.cs" /><Compile Include="..\EventJournal.cs" Link="EventJournal.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="..\shared\StatusTrayIpc.cs" Link="StatusTrayIpc.cs" /><Compile Include="..\CodexSourceIdentity.cs" Link="CodexSourceIdentity.cs" /><Compile Include="..\EventJournal.cs" Link="EventJournal.cs" /></ItemGroup>
   <ItemGroup><Content Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" /></ItemGroup>
 </Project>
