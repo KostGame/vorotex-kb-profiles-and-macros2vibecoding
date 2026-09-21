@@ -9,5 +9,7 @@
   <ItemGroup>
     <Compile Include="CodexPetWindowUxSmokeProgram.cs" />
     <Compile Include="..\CodexPetPosition.cs" Link="CodexPetPosition.cs" />
+    <Compile Include="..\CodexPetTaskSurface.cs" Link="CodexPetTaskSurface.cs" />
+    <Compile Include="..\CodexPetUiPreferences.cs" Link="CodexPetUiPreferences.cs" />
   </ItemGroup>
 </Project>

@@ -18,8 +18,8 @@ internal static class CodexPetPopupPolicy
     };
 
     internal static bool ToggleOpen(bool isOpen) => !isOpen;
-    internal static int VisibleRows(int total) => Math.Min(5, Math.Max(0, total));
-    internal static int OverflowCount(int total) => Math.Max(0, total - VisibleRows(total));
+    internal static int VisibleRows(int total) => CodexPetTaskSurfacePolicy.ExpandedVisibleRows(total);
+    internal static int OverflowCount(int total) => CodexPetTaskSurfacePolicy.OverflowCount(total);
 
     internal static Point ClampToWorkingArea(Point desired, Size popupSize, Rectangle workingArea) => new(
         Math.Clamp(desired.X, workingArea.Left, Math.Max(workingArea.Left, workingArea.Right - popupSize.Width)),

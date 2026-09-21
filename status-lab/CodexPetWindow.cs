@@ -7,6 +7,7 @@ internal sealed class CodexPetWindow : Form
 {
     private readonly System.Windows.Forms.Timer _animation = new() { Interval = 33 };
     private readonly CodexPetPositionStore _positionStore;
+    private readonly CodexPetUiPreferenceStore _uiPreferenceStore;
     private readonly StatusLabConfig _config;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private ProfileColorHint _profileHint;
@@ -15,6 +16,8 @@ internal sealed class CodexPetWindow : Form
     private CodexPetPresentation _presentation = new(
         new(CodexPetVisualState.Idle, "initial", null, null), Array.Empty<CodexPetTaskRow>());
     private readonly CodexPetTaskPopup _popup;
+    private PetTaskSurfaceState _surfaceState;
+    private readonly Dictionary<PetTaskSurfaceState, ToolStripMenuItem> _surfaceMenuItems = new();
     private bool _dragging;
     private bool _dragMoved;
     private Point _dragStartCursor;
@@ -22,15 +25,18 @@ internal sealed class CodexPetWindow : Form
 
     internal event Action? CloseRequested;
 
-    public CodexPetWindow(StatusLabConfig config, CodexPetPositionStore? positionStore = null)
+    public CodexPetWindow(StatusLabConfig config, CodexPetPositionStore? positionStore = null,
+        CodexPetUiPreferenceStore? uiPreferenceStore = null)
     {
         _config = config;
         _profileHint = ProfileColorHint.Unknown(DateTimeOffset.UtcNow);
         _positionStore = positionStore ?? new CodexPetPositionStore();
+        _uiPreferenceStore = uiPreferenceStore ?? new CodexPetUiPreferenceStore();
+        _surfaceState = _uiPreferenceStore.Load();
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
-        Size = new Size(128, 128);
+        Size = new Size(192, 192);
         TopMost = true;
         BackColor = Color.FromArgb(24, 24, 30);
         TransparencyKey = BackColor;
@@ -58,6 +64,7 @@ internal sealed class CodexPetWindow : Form
     {
         _presentation = presentation;
         _popup.SetPresentation(presentation);
+        _popup.SetSurfaceState(_surfaceState, presentation.RelevantTaskCount);
         Invalidate();
     }
 
@@ -75,13 +82,49 @@ internal sealed class CodexPetWindow : Form
         base.OnShown(e);
         var areas = Screen.AllScreens.Select(screen => screen.WorkingArea).ToArray();
         Location = CodexPetPositionPolicy.Resolve(_positionStore.Load(), Size, areas);
+        _popup.SetSurfaceState(_surfaceState, _presentation.RelevantTaskCount);
     }
 
     private ContextMenuStrip BuildContextMenu()
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Закрыть питомца", null, (_, _) => CloseRequested?.Invoke());
+        var tasks = new ToolStripMenuItem("Задачи");
+        foreach (var state in Enum.GetValues<PetTaskSurfaceState>())
+        {
+            var item = new ToolStripMenuItem(TaskSurfaceLabel(state))
+            {
+                Tag = state,
+                Checked = state == _surfaceState,
+                CheckOnClick = false
+            };
+            item.Click += (_, _) => SetTaskSurfaceState((PetTaskSurfaceState)item.Tag!);
+            _surfaceMenuItems[state] = item;
+            tasks.DropDownItems.Add(item);
+        }
+        menu.Items.Add(tasks);
         return menu;
+    }
+
+    private static string TaskSurfaceLabel(PetTaskSurfaceState state) => state switch
+    {
+        PetTaskSurfaceState.Collapsed => "Свернуто",
+        PetTaskSurfaceState.Stacked => "Стопка",
+        _ => "Развернуто"
+    };
+
+    private void SetTaskSurfaceState(PetTaskSurfaceState state)
+    {
+        _surfaceState = CodexPetTaskSurfacePolicy.Select(state);
+        foreach (var item in _surfaceMenuItems)
+            item.Value.Checked = item.Key == _surfaceState;
+        try { _uiPreferenceStore.Save(_surfaceState); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // UI preference failure must not break task presentation.
+        }
+        _popup.SetSurfaceState(_surfaceState, _presentation.RelevantTaskCount);
+        Invalidate();
     }
 
     private void HandleMouseDown(object? sender, MouseEventArgs e)
@@ -89,10 +132,10 @@ internal sealed class CodexPetWindow : Form
         if (e.Button != MouseButtons.Left) return;
         if (BadgeBounds().Contains(e.Location))
         {
-            _popup.Toggle(_presentation.RelevantTaskCount);
+            if (_presentation.RelevantTaskCount > 0)
+                SetTaskSurfaceState(CodexPetTaskSurfacePolicy.Cycle(_surfaceState));
             return;
         }
-        if (_popup.Visible) _popup.Hide();
         _dragging = true;
         _dragMoved = false;
         _dragStartCursor = Cursor.Position;
@@ -108,6 +151,7 @@ internal sealed class CodexPetWindow : Form
         if (!_dragMoved && Math.Abs(delta.Width) < 2 && Math.Abs(delta.Height) < 2) return;
         _dragMoved = true;
         Location = new Point(_dragStartLocation.X + delta.Width, _dragStartLocation.Y + delta.Height);
+        _popup.Reanchor();
     }
 
     private void HandleMouseUp(object? sender, MouseEventArgs e)
@@ -117,6 +161,7 @@ internal sealed class CodexPetWindow : Form
         Capture = false;
         if (_dragMoved)
         {
+            _popup.Reanchor();
             try { _positionStore.Save(new CodexPetPosition(Location.X, Location.Y)); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -131,7 +176,7 @@ internal sealed class CodexPetWindow : Form
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var motion = CodexPetMotion.Sample(_state, _clock.Elapsed.TotalSeconds - _stateEnteredSeconds);
-        var body = new Rectangle(11 + (int)Math.Round(motion.OffsetX), 20 + (int)Math.Round(motion.OffsetY), 106, 88);
+        var body = new Rectangle(13 + (int)Math.Round(motion.OffsetX), 31 + (int)Math.Round(motion.OffsetY), 166, 146);
         using var shadow = new SolidBrush(Color.FromArgb(70, 0, 0, 0));
         FillRounded(g, new Rectangle(body.X + 3, body.Y + 5, body.Width, body.Height), 11, shadow);
         using var chassis = new SolidBrush(Color.FromArgb(40, 45, 54));
@@ -157,7 +202,7 @@ internal sealed class CodexPetWindow : Form
 
     }
 
-    private Rectangle BadgeBounds() => new(92, 5, 30, 18);
+    internal Rectangle BadgeBounds() => new(145, 6, 40, 23);
 
     private static void DrawBadge(Graphics graphics, Rectangle bounds, int count, PetPalette palette)
     {
@@ -191,14 +236,15 @@ internal sealed class CodexPetWindow : Form
             bounds = new Rectangle(bounds.X + (bounds.Width - size) / 2, bounds.Y + (bounds.Height - size) / 2, size, size);
             graphics.FillEllipse(controlFill, bounds);
             graphics.DrawEllipse(controlOutline, bounds);
-            var inset = control.Kind == MiniK15ControlKind.Rotary ? 4 : 3;
+            var inset = control.Kind == MiniK15ControlKind.Rotary ? 7 : 5;
             using var detail = new Pen(Color.FromArgb(145, 180, 190, 198), 1);
             graphics.DrawEllipse(detail, Rectangle.Inflate(bounds, -inset, -inset));
             if (control.Kind == MiniK15ControlKind.Joystick)
             {
                 var center = new Point(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
-                graphics.DrawLine(detail, center.X - 3, center.Y, center.X + 3, center.Y);
-                graphics.DrawLine(detail, center.X, center.Y - 3, center.X, center.Y + 3);
+                var arm = Math.Max(4, bounds.Width / 5);
+                graphics.DrawLine(detail, center.X - arm, center.Y, center.X + arm, center.Y);
+                graphics.DrawLine(detail, center.X, center.Y - arm, center.X, center.Y + arm);
             }
             return;
         }
@@ -209,7 +255,8 @@ internal sealed class CodexPetWindow : Form
         if (!string.IsNullOrWhiteSpace(control.Label))
         {
             using var label = new SolidBrush(Color.FromArgb(215, 235, 240, 244));
-            using var font = new Font("Segoe UI", 6f, FontStyle.Bold, GraphicsUnit.Pixel);
+            using var font = new Font("Segoe UI", control.Kind == MiniK15ControlKind.LongBottomKey ? 7f : 8f,
+                FontStyle.Bold, GraphicsUnit.Pixel);
             using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
             graphics.DrawString(control.Label, font, label, bounds, format);
         }
