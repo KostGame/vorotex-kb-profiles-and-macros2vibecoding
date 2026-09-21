@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="RgbBindingLifecycleBehavioralSmokeProgram.cs" />
+    <Compile Include="..\K15RgbBindingGuard.cs" Link="K15RgbBindingGuard.cs" />
+    <Compile Include="..\K15RgbLifecycleDecisions.cs" Link="K15RgbLifecycleDecisions.cs" />
+  </ItemGroup>
+</Project>

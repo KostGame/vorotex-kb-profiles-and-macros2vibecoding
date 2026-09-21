@@ -56,6 +56,7 @@ internal sealed class K15DeviceManager : IDisposable
     private K15HidLightingController? _controller;
     private K15DeviceCandidate? _selected;
     private string? _preferredFingerprint;
+    private long _connectionGeneration;
 
     public K15DeviceManager(string preferencePath)
     {
@@ -67,6 +68,7 @@ internal sealed class K15DeviceManager : IDisposable
     public IReadOnlyList<K15DeviceCandidate> Candidates { get; private set; } = Array.Empty<K15DeviceCandidate>();
     public K15DeviceCandidate? SelectedDevice => _selected;
     public K15HidLightingController? Controller => _controller;
+    public long ConnectionGeneration => _connectionGeneration;
     public string? PreferredFingerprint => _preferredFingerprint;
     public event Action<K15DeviceConnectionState>? StateChanged;
     public event Action<byte, DateTimeOffset>? ActiveSlotObserved;
@@ -131,6 +133,7 @@ internal sealed class K15DeviceManager : IDisposable
             Candidates = Candidates.Select(c => c.CandidateId == _selected.CandidateId ? _selected : c).ToArray();
             _controller = pendingController;
             pendingController = null;
+            _connectionGeneration++;
             _preferredFingerprint = _selected.IdentityFingerprint;
             SavePreference();
             SetState(K15DeviceConnectionState.Connected);
@@ -161,18 +164,26 @@ internal sealed class K15DeviceManager : IDisposable
 
     public void MarkConnectionLost()
     {
-        _controller?.Dispose();
-        _controller = null;
+        InvalidateController();
         SetState(K15DeviceConnectionState.ConnectionLost);
         Log("device_connection_lost", new { identity = _selected?.IdentityFingerprint });
     }
 
     public void Disconnect()
     {
-        _controller?.Dispose();
-        _controller = null;
+        InvalidateController();
         SetState(K15DeviceConnectionState.Disconnected);
         Log("device_disconnected", new { identity = _selected?.IdentityFingerprint });
+    }
+
+    private void InvalidateController()
+    {
+        if (_controller is null)
+            return;
+
+        _connectionGeneration++;
+        _controller.Dispose();
+        _controller = null;
     }
 
     private static string VerificationResultFor(Exception ex) => ex switch

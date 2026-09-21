@@ -293,22 +293,56 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         }
     }
 
-    private Task ConnectDeviceAsync(string? candidateId)
+    private async Task ConnectDeviceAsync(string? candidateId)
     {
-        if (string.IsNullOrWhiteSpace(candidateId) || !_deviceManager.SelectById(candidateId))
+        var candidate = string.IsNullOrWhiteSpace(candidateId)
+            ? null
+            : _deviceManager.Candidates.SingleOrDefault(item => item.CandidateId == candidateId);
+        if (candidate is null)
             throw new InvalidOperationException("Выбери устройство из списка кандидатов.");
-        if (!_deviceManager.Connect())
+        if (!await RunDeviceOperationWithRgbAsync(
+                "device_connect",
+                () => K15RgbLifecycleDecisions.RunAfterTeardown(
+                    teardownSucceeded: true,
+                    operation: () => _deviceManager.Select(candidate) && _deviceManager.Connect())))
             throw new InvalidOperationException("Не удалось подтвердить выбранное K15 устройство.");
         UpdateDeviceStatus(_deviceManager.ConnectionState);
-        return Task.CompletedTask;
     }
 
     private async Task ReconnectDeviceAsync()
     {
-        if (!_deviceManager.Reconnect())
+        if (!await RunDeviceOperationWithRgbAsync("device_reconnect", _deviceManager.Reconnect))
             throw new InvalidOperationException("Выбранное K15 устройство недоступно для reconnect.");
-        await Task.CompletedTask;
         UpdateDeviceStatus(_deviceManager.ConnectionState);
+    }
+
+    private async Task<bool> RunDeviceOperationWithRgbAsync(string reason, Func<bool> operation)
+    {
+        var wasRgbEnabled = _rgbCanary.Enabled;
+        if (wasRgbEnabled)
+            await _rgbCanary.DisableAsync(reason + "_teardown");
+
+        var connected = false;
+        try
+        {
+            connected = operation();
+            if (!connected || !wasRgbEnabled)
+                return connected;
+
+            await _rgbCanary.EnableAsync(_stateNormalizer.State);
+            return true;
+        }
+        catch
+        {
+            if (wasRgbEnabled)
+                await _rgbCanary.DisableAsync(reason + "_failed");
+            throw;
+        }
+        finally
+        {
+            if (!connected && wasRgbEnabled)
+                await _rgbCanary.DisableAsync(reason + "_unavailable");
+        }
     }
 
     private async Task DisconnectDeviceAsync()
