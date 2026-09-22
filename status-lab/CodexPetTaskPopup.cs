@@ -4,11 +4,14 @@ namespace Vorotex.K15.StatusLab;
 
 internal sealed class CodexPetTaskPopup : Form
 {
+    private const int CardWidth = 296;
+    private const int CardHeight = 54;
+
     private readonly CodexPetWindow _pet;
     private readonly StatusLabConfig _config;
     private IReadOnlyList<CodexPetTaskRow> _tasks = Array.Empty<CodexPetTaskRow>();
     private ProfileColorHint _profileHint;
-    private bool _open;
+    private PetTaskSurfaceState _surfaceState = CodexPetTaskSurfacePolicy.DefaultState;
 
     internal CodexPetTaskPopup(CodexPetWindow pet, StatusLabConfig config)
     {
@@ -21,24 +24,14 @@ internal sealed class CodexPetTaskPopup : Form
         StartPosition = FormStartPosition.Manual;
         BackColor = Color.FromArgb(24, 24, 30);
         DoubleBuffered = true;
-        Deactivate += (_, _) =>
-        {
-            // Deactivation can precede the owner's badge MouseDown. Defer the
-            // secondary click-outside close so badge toggle sees the explicit
-            // open state and cannot reopen a popup it just closed.
-            if (!_open || !IsHandleCreated) return;
-            BeginInvoke(() =>
-            {
-                if (_open) ClosePopup();
-            });
-        };
+        Cursor = Cursors.Default;
     }
 
     internal void SetPresentation(CodexPetPresentation presentation)
     {
         _tasks = presentation.Tasks;
+        ApplySurfaceState(_surfaceState, _tasks.Count);
         Invalidate();
-        if (Visible) PositionNearPet();
     }
 
     internal void SetProfileHint(ProfileColorHint hint)
@@ -47,34 +40,45 @@ internal sealed class CodexPetTaskPopup : Form
         Invalidate();
     }
 
-    internal void Toggle(int count)
+    internal void SetSurfaceState(PetTaskSurfaceState state, int count)
     {
-        if (_open)
+        _surfaceState = CodexPetTaskSurfacePolicy.Select(state);
+        ApplySurfaceState(_surfaceState, count);
+    }
+
+    internal void ApplySurfaceState(PetTaskSurfaceState state, int count)
+    {
+        _surfaceState = CodexPetTaskSurfacePolicy.Select(state);
+        if (!CodexPetTaskSurfacePolicy.IsVisible(_surfaceState, count) || !_pet.Visible)
         {
             ClosePopup();
             return;
         }
-        if (count == 0) return;
+
         PositionNearPet();
-        _open = true;
-        Show(_pet);
+        if (!Visible) Show(_pet);
+        Invalidate();
     }
 
-    internal void ClosePopup()
+    internal void Reanchor()
     {
-        _open = false;
-        Hide();
+        if (Visible) PositionNearPet();
     }
+
+    internal void ClosePopup() => Hide();
 
     private void PositionNearPet()
     {
-        var rows = CodexPetPopupPolicy.VisibleRows(_tasks.Count);
-        Height = 14 + rows * 34 + (_tasks.Count > rows ? 22 : 0);
-        Width = 220;
-        var area = Screen.FromControl(_pet).WorkingArea;
-        var desired = new Point(_pet.Right + 8, _pet.Top);
-        if (desired.X + Width > area.Right) desired.X = _pet.Left - Width - 8;
-        Location = CodexPetPopupPolicy.ClampToWorkingArea(desired, Size, area);
+        var layout = CodexPetTaskSurfacePolicy.Layout(_surfaceState, _tasks.Count,
+            new Size(CardWidth, CardHeight));
+        Size = layout.PanelSize;
+        if (layout.PanelSize == Size.Empty) return;
+
+        var monitor = Screen.FromRectangle(_pet.Bounds);
+        var placement = TaskPanelPlacementPolicy.Place(
+            _pet.Bounds, layout.PanelSize, monitor.WorkingArea);
+        Location = placement.Bounds.Location;
+        Size = placement.Bounds.Size;
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -84,32 +88,62 @@ internal sealed class CodexPetTaskPopup : Form
         using var background = new SolidBrush(Color.FromArgb(245, 31, 36, 45));
         using var border = new Pen(Color.FromArgb(180, 92, 112, 126), 1);
         e.Graphics.FillRectangle(background, ClientRectangle);
-        e.Graphics.DrawRectangle(border, 0, 0, Width - 1, Height - 1);
-        var y = 7;
-        foreach (var row in _tasks.Take(5))
+        e.Graphics.DrawRectangle(border, 0, 0, Math.Max(0, Width - 1), Math.Max(0, Height - 1));
+
+        var layout = CodexPetTaskSurfacePolicy.Layout(_surfaceState, _tasks.Count,
+            new Size(CardWidth, CardHeight));
+        var palette = PetPaletteResolver.Resolve(_config, _profileHint, DateTimeOffset.UtcNow);
+        foreach (var card in layout.Cards)
         {
-            var glyph = CodexPetPopupPolicy.GlyphFor(row.VisualState);
-            DrawGlyph(e.Graphics, glyph, new Point(14, y + 14));
-            using var title = new SolidBrush(Color.FromArgb(235, 235, 240, 244));
-            using var titleFont = new Font("Segoe UI", 10f, FontStyle.Bold, GraphicsUnit.Pixel);
-            e.Graphics.DrawString(row.DisplayTitle, titleFont, title, 28, y + 3);
-            if (!string.IsNullOrWhiteSpace(row.DisplaySubtitle))
-            {
-                using var subtitle = new SolidBrush(Color.FromArgb(170, 190, 198, 205));
-                using var subtitleFont = new Font("Segoe UI", 8f, FontStyle.Regular, GraphicsUnit.Pixel);
-                e.Graphics.DrawString(row.DisplaySubtitle, subtitleFont, subtitle, 28, y + 18);
-            }
-            y += 34;
+            var row = card.TaskIndex >= 0 && card.TaskIndex < _tasks.Count ? _tasks[card.TaskIndex] : null;
+            DrawCard(e.Graphics, card, row, palette);
         }
-        if (_tasks.Count > 5)
+
+        if (layout.State == PetTaskSurfaceState.Expanded && layout.OverflowCount > 0)
         {
-            using var overflow = new SolidBrush(Color.FromArgb(175, 190, 198, 205));
-            using var font = new Font("Segoe UI", 8f, FontStyle.Regular, GraphicsUnit.Pixel);
-            e.Graphics.DrawString("+ " + CodexPetPopupPolicy.OverflowCount(_tasks.Count) + " ещё", font, overflow, 10, y + 1);
+            using var overflow = new SolidBrush(Color.FromArgb(190, 190, 198, 205));
+            using var font = new Font("Segoe UI", 9f, FontStyle.Regular, GraphicsUnit.Pixel);
+            var y = 12 + CodexPetTaskSurfacePolicy.ExpandedVisibleRows(_tasks.Count) * (CardHeight + 8);
+            e.Graphics.DrawString("+" + layout.OverflowCount + " ещё", font, overflow, 18, y);
         }
     }
 
-    private static void DrawGlyph(Graphics graphics, CodexPetPopupPolicy.TaskStatusGlyphStyle glyph, Point center)
+    private static void DrawCard(Graphics graphics, TaskCardLayout card, CodexPetTaskRow? row,
+        PetPalette palette)
+    {
+        var fillColor = card.IsTopCard
+            ? Color.FromArgb(248, 46, 53, 65)
+            : Color.FromArgb(190, 39, 45, 56);
+        var accent = row is null
+            ? Color.FromArgb(95, 116, 132)
+            : CodexPetPopupPolicy.Accent(palette, row.VisualState);
+        using var fill = new SolidBrush(fillColor);
+        using var outline = new Pen(Color.FromArgb(card.IsTopCard ? 220 : 130, accent), 1);
+        FillRounded(graphics, card.Bounds, 10, fill);
+        DrawRounded(graphics, card.Bounds, 10, outline);
+        if (!card.ShowsText || row is null) return;
+
+        var glyph = CodexPetPopupPolicy.GlyphFor(row.VisualState);
+        DrawGlyph(graphics, glyph, new Point(card.Bounds.Left + 17, card.Bounds.Top + 27));
+        var textBounds = new Rectangle(card.Bounds.Left + 32, card.Bounds.Top + 7,
+            card.Bounds.Width - 42, 22);
+        using var title = new SolidBrush(Color.FromArgb(240, 235, 240, 244));
+        using var titleFont = new Font("Segoe UI", 10f, FontStyle.Bold, GraphicsUnit.Pixel);
+        using var titleFormat = new StringFormat { Trimming = StringTrimming.EllipsisCharacter };
+        graphics.DrawString(row.DisplayTitle, titleFont, title, textBounds, titleFormat);
+        if (!string.IsNullOrWhiteSpace(row.DisplaySubtitle))
+        {
+            using var subtitle = new SolidBrush(Color.FromArgb(180, 190, 198, 205));
+            using var subtitleFont = new Font("Segoe UI", 8f, FontStyle.Regular, GraphicsUnit.Pixel);
+            var subtitleBounds = new Rectangle(textBounds.X, card.Bounds.Top + 29,
+                textBounds.Width, 17);
+            graphics.DrawString(row.DisplaySubtitle, subtitleFont, subtitle, subtitleBounds,
+                titleFormat);
+        }
+    }
+
+    private static void DrawGlyph(Graphics graphics, CodexPetPopupPolicy.TaskStatusGlyphStyle glyph,
+        Point center)
     {
         using var brush = new SolidBrush(glyph.SemanticColor);
         using var pen = new Pen(glyph.SemanticColor, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
@@ -124,8 +158,37 @@ internal sealed class CodexPetTaskPopup : Form
                 graphics.FillEllipse(brush, center.X - 1, center.Y + 3, 2, 2);
                 break;
             case CodexPetPopupPolicy.TaskStatusGlyphShape.Check:
-                graphics.DrawLines(pen, new Point[] { new Point(center.X - 6, center.Y), new Point(center.X - 2, center.Y + 4), new Point(center.X + 6, center.Y - 5) });
+                graphics.DrawLines(pen, new Point[]
+                {
+                    new(center.X - 6, center.Y),
+                    new(center.X - 2, center.Y + 4),
+                    new(center.X + 6, center.Y - 5)
+                });
                 break;
         }
+    }
+
+    private static void FillRounded(Graphics graphics, Rectangle rectangle, int radius, Brush brush)
+    {
+        using var path = RoundedPath(rectangle, radius);
+        graphics.FillPath(brush, path);
+    }
+
+    private static void DrawRounded(Graphics graphics, Rectangle rectangle, int radius, Pen pen)
+    {
+        using var path = RoundedPath(rectangle, radius);
+        graphics.DrawPath(pen, path);
+    }
+
+    private static GraphicsPath RoundedPath(Rectangle rectangle, int radius)
+    {
+        var diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(rectangle.X, rectangle.Y, diameter, diameter, 180, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Y, diameter, diameter, 270, 90);
+        path.AddArc(rectangle.Right - diameter, rectangle.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(rectangle.X, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 }

@@ -9,5 +9,10 @@
   <ItemGroup>
     <Compile Include="CodexPetWindowUxSmokeProgram.cs" />
     <Compile Include="..\CodexPetPosition.cs" Link="CodexPetPosition.cs" />
+    <Compile Include="..\CodexPetTaskSurface.cs" Link="CodexPetTaskSurface.cs" />
+    <Compile Include="..\CodexPetUiPreferences.cs" Link="CodexPetUiPreferences.cs" />
+    <Compile Include="..\CodexPetSizePolicy.cs" Link="CodexPetSizePolicy.cs" />
+    <Compile Include="..\LiveDashboardPathPolicy.cs" Link="LiveDashboardPathPolicy.cs" />
+    <Compile Include="..\MiniK15ControlLayout.cs" Link="MiniK15ControlLayout.cs" />
   </ItemGroup>
 </Project>

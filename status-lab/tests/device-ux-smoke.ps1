@@ -6,6 +6,8 @@ $formatter = Get-Content -LiteralPath (Join-Path $root 'DeviceUxFormatting.cs') 
 $control = Get-Content -LiteralPath (Join-Path $root 'control-center\ControlCenterForm.cs') -Raw -Encoding UTF8
 $controlProject = Get-Content -LiteralPath (Join-Path $root 'control-center\Vorotex.K15.ControlCenter.csproj') -Raw -Encoding UTF8
 $ipc = Get-Content -LiteralPath (Join-Path $root 'shared\StatusTrayIpc.cs') -Raw -Encoding UTF8
+$dashboardPolicy = Get-Content -LiteralPath (Join-Path $root 'LiveDashboardPathPolicy.cs') -Raw -Encoding UTF8
+$workflow = Get-Content -LiteralPath (Join-Path $root '..\.github\workflows\status-lab-build.yml') -Raw -Encoding UTF8
 
 foreach ($text in @('AppContext.BaseDirectory', 'control-center', 'ResolveControlCenterPath')) {
     if ($formatter -notmatch [regex]::Escape($text) -and $tray -notmatch [regex]::Escape($text)) { throw "Missing deterministic path resolver evidence: $text" }
@@ -23,6 +25,12 @@ if ($control -notmatch 'DeviceUxFormatting\.CandidateLabel' -or $controlProject 
 if ($control -notmatch '_explicitCandidateId' -or $control -notmatch 'connect_device') { throw 'Control Center explicit selection path is missing.' }
 if ($tray -notmatch 'RGB|_rgbCanary') { throw 'RGB/device separation evidence is missing.' }
 if ($ipc -notmatch 'StatusTrayDeviceCandidate') { throw 'Device candidate IPC contract is missing.' }
+if ($dashboardPolicy -notmatch 'live-dashboard' -or $dashboardPolicy -match 'SearchOption\.AllDirectories|GetFiles\(') { throw 'Live Dashboard resolver must remain exact-path and non-recursive.' }
+if ($tray -notmatch 'LiveDashboardPathPolicy\.Resolve' -or $tray -notmatch 'live-dashboard') { throw 'Tray must use the bounded Live Dashboard resolver.' }
+if ($workflow -notmatch 'vorotex-k15-live-dashboard-win-x64' -or
+    $workflow -notmatch 'status-lab/live-dashboard/bin/Release/net8\.0/win-x64/publish/\*\*' -or
+    $workflow -notmatch 'wwwroot/index\.html' -or $workflow -notmatch 'wwwroot/app\.js' -or
+    $workflow -notmatch 'wwwroot/styles\.css') { throw 'Live Dashboard artifact upload or published-tree contract is missing.' }
 
 Write-Output 'Device UX resolver, discriminator, explicit selection, submenu and RGB separation smoke: PASS'
 Write-Output 'CONTROL_CENTER_COLOCATED_PATH=PASS'
@@ -35,3 +43,4 @@ Write-Output 'NO_FIRST_CANDIDATE_AUTOPICK=PASS'
 Write-Output 'EXPLICIT_CANDIDATE_ID_REQUIRED=PASS'
 Write-Output 'TRAY_DEVICE_ACTIONS_PRESENT=PASS'
 Write-Output 'RGB_DEVICE_STATE_SEPARATION_PRESERVED=PASS'
+Write-Output 'LIVE_DASHBOARD_ARTIFACT_UPLOAD=PASS'
