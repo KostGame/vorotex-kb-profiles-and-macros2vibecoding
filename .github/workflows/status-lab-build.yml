@@ -126,8 +126,14 @@ jobs:
           $control = 'status-lab/control-center/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.ControlCenter.exe'
           $lighting = 'status-lab/lighting-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.LightingLab.exe'
           $research = 'status-lab/hid-research-lab/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/Vorotex.K15.HidResearchLab.exe'
-          $dashboard = 'status-lab/live-dashboard/bin/Release/net8.0/win-x64/publish/Vorotex.K15.LiveDashboard.exe'
-          foreach ($file in @($tray,$control,$lighting,$research,$dashboard)) {
+          $dashboardRoot = 'status-lab/live-dashboard/bin/Release/net8.0/win-x64/publish'
+          $dashboardFiles = @(
+            (Join-Path $dashboardRoot 'Vorotex.K15.LiveDashboard.exe'),
+            (Join-Path $dashboardRoot 'wwwroot/index.html'),
+            (Join-Path $dashboardRoot 'wwwroot/app.js'),
+            (Join-Path $dashboardRoot 'wwwroot/styles.css')
+          )
+          foreach ($file in @($tray,$control,$lighting,$research) + $dashboardFiles) {
             if (-not (Test-Path -LiteralPath $file)) { throw "Split executable missing: $file" }
           }
 
@@ -163,5 +169,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vorotex-k15-live-dashboard-win-x64
-          path: status-lab/live-dashboard/bin/Release/net8.0/win-x64/publish/Vorotex.K15.LiveDashboard.exe
+          path: status-lab/live-dashboard/bin/Release/net8.0/win-x64/publish/**
           if-no-files-found: error

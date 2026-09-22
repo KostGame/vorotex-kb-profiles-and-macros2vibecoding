@@ -28,7 +28,9 @@ if ($ipc -notmatch 'StatusTrayDeviceCandidate') { throw 'Device candidate IPC co
 if ($dashboardPolicy -notmatch 'live-dashboard' -or $dashboardPolicy -match 'SearchOption\.AllDirectories|GetFiles\(') { throw 'Live Dashboard resolver must remain exact-path and non-recursive.' }
 if ($tray -notmatch 'LiveDashboardPathPolicy\.Resolve' -or $tray -notmatch 'live-dashboard') { throw 'Tray must use the bounded Live Dashboard resolver.' }
 if ($workflow -notmatch 'vorotex-k15-live-dashboard-win-x64' -or
-    $workflow -notmatch 'status-lab/live-dashboard/bin/Release/net8\.0/win-x64/publish/Vorotex\.K15\.LiveDashboard\.exe') { throw 'Live Dashboard artifact upload or exact source is missing.' }
+    $workflow -notmatch 'status-lab/live-dashboard/bin/Release/net8\.0/win-x64/publish/\*\*' -or
+    $workflow -notmatch 'wwwroot/index\.html' -or $workflow -notmatch 'wwwroot/app\.js' -or
+    $workflow -notmatch 'wwwroot/styles\.css') { throw 'Live Dashboard artifact upload or published-tree contract is missing.' }
 
 Write-Output 'Device UX resolver, discriminator, explicit selection, submenu and RGB separation smoke: PASS'
 Write-Output 'CONTROL_CENTER_COLOCATED_PATH=PASS'
