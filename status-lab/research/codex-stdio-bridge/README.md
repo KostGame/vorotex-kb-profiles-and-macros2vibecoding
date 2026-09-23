@@ -66,11 +66,13 @@ The wrapper never parses protocol bytes, writes payload files, or emits telemetr
 
 ## Phase B.1 direct Windows executable adapter
 
-The B.1 adapter is a dependency-minimal WinExe apphost published for win-x64. Its .exe is suitable for an owner-controlled CODEX_CLI_PATH experiment: it starts the exact CODEX_BRIDGE_NODE_PATH executable with UseShellExecute=false, passes transparent-wrapper.mjs followed by the original argv through ArgumentList, and forwards stdin/stdout/stderr as raw streams.
+The B.1 adapter is a dependency-minimal WinExe apphost published for win-x64. Its .exe is suitable for an owner-controlled CODEX_CLI_PATH experiment. It uses the configured CODEX_BRIDGE_NODE_PATH when present, otherwise the packaged sibling node/node.exe, always with UseShellExecute=false. It passes the selected wrapper followed by the original Desktop argv through ArgumentList and forwards stdin/stdout/stderr as raw streams.
 
-The adapter accepts an optional absolute CODEX_BRIDGE_WRAPPER_PATH; otherwise it uses the packaged transparent-wrapper.mjs. The existing CODEX_BRIDGE_CHILD_PATH and optional CODEX_BRIDGE_CHILD_SHA256 remain the wrapper's explicit child boundary. Adapter diagnostics are fixed text only. It does not parse protocol bytes, write payload files, or emit telemetry.
+The adapter accepts an optional absolute CODEX_BRIDGE_WRAPPER_PATH; otherwise it uses the packaged transparent-wrapper.mjs. A configured CODEX_BRIDGE_CHILD_PATH outside the standard Desktop runtime root remains an explicit child boundary for isolated tests or owner-controlled custom use. When Desktop invokes the adapter with no child path or with a child under the standard LocalAppData/OpenAI/Codex/bin runtime root, the adapter derives compatibility from the currently running OpenAI.Codex WindowsApps package: it hashes that package's codex.exe plus codex-code-mode-host.exe and accepts only a LocalAppData runtime generation with the exact same pair of hashes. It then supplies that exact child path and SHA to the wrapper process. A stale bridge pin therefore cannot force a newly updated Desktop through an older backend, while an arbitrary unmatching runtime is never adopted.
 
-Before any child launch, the adapter resolves its own canonical executable path and rejects CODEX_BRIDGE_NODE_PATH or CODEX_BRIDGE_CHILD_PATH when either resolves back to the adapter, returning configuration exit code 2.
+This compatibility selection is process-local. It does not rewrite CODEX_BRIDGE_CHILD_PATH, CODEX_BRIDGE_CHILD_SHA256, the production manifest, User/Machine environment, WindowsApps, or LocalAppData runtime files. If Desktop is not active, an existing explicit child remains the fallback boundary. Adapter diagnostics are fixed text only. It does not parse protocol bytes, write payload files, or emit telemetry.
+
+Before any child launch, the adapter resolves its own canonical executable path and rejects CODEX_BRIDGE_NODE_PATH or CODEX_BRIDGE_CHILD_PATH when either resolves back to the adapter, returning configuration exit code 2. Missing packaged dependencies or absence of an exact current-Desktop runtime match also fail closed.
 
 Build the offline package and fake child with npm.cmd test.
 
