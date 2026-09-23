@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,9 @@ function environmentFor(overrides = {}, { packagedWrapper = false } = {}) {
     ...overrides
   };
   if (packagedWrapper) delete environment.CODEX_BRIDGE_WRAPPER_PATH;
+  for (const [name, value] of Object.entries(environment)) {
+    if (value === undefined) delete environment[name];
+  }
   return environment;
 }
 
@@ -97,6 +100,37 @@ test('direct executable boundary preserves argv without shell association', asyn
     'opaque-value'
   ]);
   assert.equal(result.stderr.toString('utf8'), 'fake-child:argv\n');
+});
+
+test('preserves current Desktop plugin arguments unchanged', async () => {
+  const args = [
+    '-c', 'features.code_mode_host=true',
+    'app-server',
+    '--analytics-default-enabled',
+    '-c', 'plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true'
+  ];
+  const result = await runExecutable({
+    args,
+    env: { FAKE_CHILD_MODE: 'argv' }
+  });
+  assert.equal(result.code, 0);
+  assert.deepEqual(JSON.parse(result.stdout.toString('utf8')), args);
+});
+
+test('uses packaged node when CODEX_BRIDGE_NODE_PATH is absent', async () => {
+  const packagedNode = path.resolve(path.dirname(adapterPath), '..', 'node', 'node.exe');
+  await mkdir(path.dirname(packagedNode), { recursive: true });
+  await copyFile(process.execPath, packagedNode);
+  try {
+    const result = await runExecutable({
+      args: ['app-server', '--future-plugin-flag'],
+      env: { CODEX_BRIDGE_NODE_PATH: undefined, FAKE_CHILD_MODE: 'argv' }
+    });
+    assert.equal(result.code, 0);
+    assert.deepEqual(JSON.parse(result.stdout.toString('utf8')), ['app-server', '--future-plugin-flag']);
+  } finally {
+    await rm(path.dirname(packagedNode), { recursive: true, force: true });
+  }
 });
 
 test('packaged wrapper is usable when no wrapper override is provided', async () => {
@@ -204,7 +238,7 @@ test('rejects a missing child before spawning it', async () => {
     }
   });
   assert.equal(result.code, 2);
-  assert.match(result.stderr.toString('utf8'), /^codex bridge: invalid child configuration\n$/);
+  assert.match(result.stderr.toString('utf8'), /^codex bridge adapter: invalid configuration\n$/);
 });
 
 test('rejects wrapper recursion', async () => {
