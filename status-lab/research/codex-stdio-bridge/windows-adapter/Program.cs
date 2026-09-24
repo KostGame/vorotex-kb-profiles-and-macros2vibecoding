@@ -21,7 +21,15 @@ internal static class Program
     private const string ChildSha256Variable = "CODEX_BRIDGE_CHILD_SHA256";
     private const string WrapperPathVariable = "CODEX_BRIDGE_WRAPPER_PATH";
     private const uint FileNameNormalized = 0;
-    private sealed record ChildResolution(string Path, string? Sha256Override);
+    private static readonly string[] DesktopCoreExecutableNames =
+    [
+        "codex.exe",
+        "codex-code-mode-host.exe",
+        "codex-windows-sandbox-setup.exe",
+        "codex-command-runner.exe"
+    ];
+    internal sealed record ChildResolution(string Path, string? Sha256Override);
+    private sealed record RuntimeFile(string Name, string SourcePath, long Length, string Sha256);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandleW(
@@ -171,7 +179,12 @@ internal static class Program
 
     private static string GetRuntimeRoot()
     {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        if (string.IsNullOrWhiteSpace(localAppData))
+        {
+            localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        }
+
         if (string.IsNullOrWhiteSpace(localAppData))
         {
             throw new AdapterConfigurationException("LocalAppData is unavailable");
@@ -195,69 +208,188 @@ internal static class Program
     private static ChildResolution? TryResolveCurrentDesktopRuntime(string runtimeRoot)
     {
         var resourcesDirectory = ResolveActiveCodexResourcesDirectory();
-        if (resourcesDirectory is null)
+        return resourcesDirectory is null
+            ? null
+            : ResolveDesktopRuntimeFromResources(resourcesDirectory, runtimeRoot);
+    }
+
+    internal static ChildResolution ResolveDesktopRuntimeFromResources(string resourcesDirectory, string runtimeRoot)
+    {
+        var runtimeFiles = DesktopCoreExecutableNames
+            .Select(name => DescribeRuntimeFile(resourcesDirectory, name))
+            .ToArray();
+        var generation = ComputeRuntimeGeneration(runtimeFiles);
+        var generationDirectory = Path.Combine(runtimeRoot, generation);
+
+        Directory.CreateDirectory(runtimeRoot);
+        var runtimeRootInfo = new DirectoryInfo(runtimeRoot);
+        if ((runtimeRootInfo.Attributes & FileAttributes.ReparsePoint) != 0)
         {
-            return null;
+            throw new AdapterConfigurationException("Codex runtime root must not be a reparse point");
         }
 
-        var resourceChild = RequireExecutablePathValue(
-            Path.Combine(resourcesDirectory, "codex.exe"),
-            "current Desktop codex.exe");
-        var resourceHost = RequireExecutablePathValue(
-            Path.Combine(resourcesDirectory, "codex-code-mode-host.exe"),
-            "current Desktop codex-code-mode-host.exe");
-        var resourceChildLength = new FileInfo(resourceChild).Length;
-        var resourceHostLength = new FileInfo(resourceHost).Length;
-        var childSha256 = Sha256File(resourceChild);
-        var hostSha256 = Sha256File(resourceHost);
-
-        if (!Directory.Exists(runtimeRoot))
+        if (!RuntimeGenerationMatches(generationDirectory, runtimeFiles))
         {
-            throw new AdapterConfigurationException("Codex runtime root is unavailable");
+            RepairOrMaterializeRuntimeGeneration(runtimeRoot, generationDirectory, generation, runtimeFiles);
         }
 
-        var matches = new List<(string ChildPath, DateTime LastWriteUtc, string Generation)>();
-        foreach (var generationDirectory in Directory.EnumerateDirectories(runtimeRoot))
+        if (!RuntimeGenerationMatches(generationDirectory, runtimeFiles))
         {
-            var directoryInfo = new DirectoryInfo(generationDirectory);
-            if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                continue;
-            }
-
-            var childPath = Path.Combine(generationDirectory, "codex.exe");
-            var hostPath = Path.Combine(generationDirectory, "codex-code-mode-host.exe");
-            if (!File.Exists(childPath) || !File.Exists(hostPath))
-            {
-                continue;
-            }
-
-            var childInfo = new FileInfo(childPath);
-            var hostInfo = new FileInfo(hostPath);
-            if (childInfo.Length != resourceChildLength || hostInfo.Length != resourceHostLength)
-            {
-                continue;
-            }
-
-            if (!string.Equals(Sha256File(childPath), childSha256, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(Sha256File(hostPath), hostSha256, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            matches.Add((Path.GetFullPath(childPath), directoryInfo.LastWriteTimeUtc, directoryInfo.Name));
+            throw new AdapterConfigurationException("current Desktop runtime materialization failed");
         }
 
-        if (matches.Count == 0)
+        var child = runtimeFiles.Single(file => string.Equals(file.Name, "codex.exe", StringComparison.Ordinal));
+        return new ChildResolution(
+            Path.GetFullPath(Path.Combine(generationDirectory, child.Name)),
+            child.Sha256);
+    }
+
+    private static RuntimeFile DescribeRuntimeFile(string resourcesDirectory, string name)
+    {
+        var sourcePath = RequireExecutablePathValue(
+            Path.Combine(resourcesDirectory, name),
+            $"current Desktop {name}");
+        var info = new FileInfo(sourcePath);
+        if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
         {
-            throw new AdapterConfigurationException("matching current Desktop runtime is unavailable");
+            throw new AdapterConfigurationException($"current Desktop {name} must not be a reparse point");
         }
 
-        var selected = matches
-            .OrderByDescending(match => match.LastWriteUtc)
-            .ThenBy(match => match.Generation, StringComparer.OrdinalIgnoreCase)
-            .First();
-        return new ChildResolution(selected.ChildPath, childSha256);
+        return new RuntimeFile(name, sourcePath, info.Length, Sha256File(sourcePath));
+    }
+
+    private static string ComputeRuntimeGeneration(IReadOnlyList<RuntimeFile> runtimeFiles)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var file in runtimeFiles)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(file.Name));
+            hash.AppendData([0]);
+            hash.AppendData(Encoding.ASCII.GetBytes(file.Sha256));
+            hash.AppendData([0]);
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()[..16];
+    }
+
+    private static bool RuntimeGenerationMatches(string generationDirectory, IReadOnlyList<RuntimeFile> runtimeFiles)
+    {
+        if (!Directory.Exists(generationDirectory))
+        {
+            return false;
+        }
+
+        var directoryInfo = new DirectoryInfo(generationDirectory);
+        if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            return false;
+        }
+
+        foreach (var file in runtimeFiles)
+        {
+            var destinationPath = Path.Combine(generationDirectory, file.Name);
+            if (!File.Exists(destinationPath))
+            {
+                return false;
+            }
+
+            var destinationInfo = new FileInfo(destinationPath);
+            if ((destinationInfo.Attributes & FileAttributes.ReparsePoint) != 0
+                || destinationInfo.Length != file.Length
+                || !string.Equals(Sha256File(destinationPath), file.Sha256, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return Directory
+            .EnumerateFileSystemEntries(generationDirectory)
+            .All(entry => runtimeFiles.Any(file =>
+                string.Equals(Path.GetFileName(entry), file.Name, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static void RepairOrMaterializeRuntimeGeneration(
+        string runtimeRoot,
+        string generationDirectory,
+        string generation,
+        IReadOnlyList<RuntimeFile> runtimeFiles)
+    {
+        if (Directory.Exists(generationDirectory))
+        {
+            var generationInfo = new DirectoryInfo(generationDirectory);
+            if ((generationInfo.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new AdapterConfigurationException("current Desktop runtime generation must not be a reparse point");
+            }
+
+            var allowedNames = runtimeFiles
+                .Select(file => file.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var entries = Directory
+                .EnumerateFileSystemEntries(generationDirectory)
+                .ToArray();
+
+            foreach (var entry in entries)
+            {
+                var entryName = Path.GetFileName(entry);
+                if (!allowedNames.Contains(entryName)
+                    || !File.Exists(entry)
+                    || Directory.Exists(entry))
+                {
+                    throw new AdapterConfigurationException("current Desktop runtime generation contains unexpected entries");
+                }
+
+                var entryInfo = new FileInfo(entry);
+                if ((entryInfo.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new AdapterConfigurationException("current Desktop runtime generation contains a reparse point");
+                }
+            }
+
+            foreach (var entry in entries)
+            {
+                File.Delete(entry);
+            }
+            Directory.Delete(generationDirectory, recursive: false);
+        }
+
+        var stagingDirectory = Path.Combine(
+            runtimeRoot,
+            $".staging-{generation}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(stagingDirectory);
+
+        try
+        {
+            foreach (var file in runtimeFiles)
+            {
+                var destinationPath = Path.Combine(stagingDirectory, file.Name);
+                File.Copy(file.SourcePath, destinationPath, overwrite: false);
+
+                var copiedInfo = new FileInfo(destinationPath);
+                if ((copiedInfo.Attributes & FileAttributes.ReparsePoint) != 0
+                    || copiedInfo.Length != file.Length
+                    || !string.Equals(Sha256File(destinationPath), file.Sha256, StringComparison.Ordinal))
+                {
+                    throw new AdapterConfigurationException($"copied Desktop runtime file failed verification: {file.Name}");
+                }
+            }
+
+            try
+            {
+                Directory.Move(stagingDirectory, generationDirectory);
+            }
+            catch (IOException) when (RuntimeGenerationMatches(generationDirectory, runtimeFiles))
+            {
+                // Another bridge/Desktop process won the same-generation relocation race.
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(stagingDirectory))
+            {
+                Directory.Delete(stagingDirectory, recursive: true);
+            }
+        }
     }
 
     private static string? ResolveActiveCodexResourcesDirectory()

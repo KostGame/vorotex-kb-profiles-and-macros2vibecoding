@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +11,14 @@ const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const bridgeDirectory = path.resolve(testDirectory, '..');
 const adapterPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'K15.CodexBridge.WindowsAdapter.exe');
 const fakeChildPath = path.join(bridgeDirectory, 'bin', 'fake-child-test', 'K15.CodexBridge.FakeChild.exe');
+const relocatorProbePath = path.join(bridgeDirectory, 'bin', 'runtime-relocator-probe-test', 'K15.CodexBridge.WindowsAdapter.TestProbe.exe');
 const wrapperPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'transparent-wrapper.mjs');
+const desktopCoreExecutableNames = [
+  'codex.exe',
+  'codex-code-mode-host.exe',
+  'codex-windows-sandbox-setup.exe',
+  'codex-command-runner.exe'
+];
 const approvalWrapperPath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'approval-wrapper.mjs');
 const authorityModulePath = path.join(bridgeDirectory, 'bin', 'adapter-test', 'runtime-process-authority.mjs');
 
@@ -78,6 +86,73 @@ function runExecutable({
   });
 }
 
+function runRelocatorProbe(resourcesDirectory, runtimeRoot) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(relocatorProbePath, [resourcesDirectory, runtimeRoot], {
+      cwd: bridgeDirectory,
+      env: process.env,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', (chunk) => stdout.push(chunk));
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.once('error', reject);
+    child.once('close', (code, signal) => resolve({
+      code,
+      signal,
+      stdout: Buffer.concat(stdout),
+      stderr: Buffer.concat(stderr)
+    }));
+  });
+}
+
+function stockRuntimeGeneration(entries) {
+  const hash = createHash('sha256');
+  for (const entry of entries) {
+    hash.update(entry.name, 'utf8');
+    hash.update(Buffer.from([0]));
+    hash.update(entry.sha256, 'ascii');
+    hash.update(Buffer.from([0]));
+  }
+  return hash.digest('hex').slice(0, 16);
+}
+
+async function createSyntheticDesktopResources(rootDirectory) {
+  const resourcesDirectory = path.join(rootDirectory, 'resources');
+  await mkdir(resourcesDirectory, { recursive: true });
+  const fakeBytes = await readFile(fakeChildPath);
+  const sha256 = createHash('sha256').update(fakeBytes).digest('hex');
+  const entries = [];
+  for (const name of desktopCoreExecutableNames) {
+    const destination = path.join(resourcesDirectory, name);
+    await copyFile(fakeChildPath, destination);
+    entries.push({ name, sha256, length: fakeBytes.length });
+  }
+  return {
+    resourcesDirectory,
+    entries,
+    generation: stockRuntimeGeneration(entries)
+  };
+}
+
+async function runtimeSnapshot(generationDirectory) {
+  const snapshot = [];
+  for (const name of desktopCoreExecutableNames) {
+    const filePath = path.join(generationDirectory, name);
+    const bytes = await readFile(filePath);
+    const info = await stat(filePath);
+    snapshot.push({
+      name,
+      length: info.size,
+      mtimeMs: info.mtimeMs,
+      sha256: createHash('sha256').update(bytes).digest('hex')
+    });
+  }
+  return snapshot;
+}
+
 test('publishes a direct Windows executable and packages the wrapper', async () => {
   assert.equal((await stat(adapterPath)).isFile(), true);
   assert.equal(path.extname(adapterPath).toLowerCase(), '.exe');
@@ -86,6 +161,99 @@ test('publishes a direct Windows executable and packages the wrapper', async () 
   assert.equal((await stat(approvalWrapperPath)).isFile(), true);
   assert.match(await readFile(wrapperPath, 'utf8'), /runTransparentWrapper/);
   assert.match(await readFile(approvalWrapperPath, 'utf8'), /runApprovalWrapper/);
+});
+
+test('cold-start relocator materializes the stock generation and reuses it unchanged', async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-runtime-cold-start-'));
+  try {
+    const { resourcesDirectory, entries, generation } = await createSyntheticDesktopResources(temporaryDirectory);
+    const runtimeRoot = path.join(temporaryDirectory, 'localapp', 'OpenAI', 'Codex', 'bin');
+    const generationDirectory = path.join(runtimeRoot, generation);
+
+    const first = await runRelocatorProbe(resourcesDirectory, runtimeRoot);
+    assert.equal(first.code, 0, first.stderr.toString('utf8'));
+    const firstResult = JSON.parse(first.stdout.toString('utf8'));
+    assert.equal(
+      path.normalize(firstResult.path).toLowerCase(),
+      path.normalize(path.join(generationDirectory, 'codex.exe')).toLowerCase()
+    );
+    assert.equal(firstResult.sha256, entries[0].sha256);
+    assert.deepEqual((await readdir(generationDirectory)).sort(), [...desktopCoreExecutableNames].sort());
+
+    const before = await runtimeSnapshot(generationDirectory);
+    for (let index = 0; index < entries.length; index += 1) {
+      assert.equal(before[index].name, entries[index].name);
+      assert.equal(before[index].length, entries[index].length);
+      assert.equal(before[index].sha256, entries[index].sha256);
+    }
+
+    const second = await runRelocatorProbe(resourcesDirectory, runtimeRoot);
+    assert.equal(second.code, 0, second.stderr.toString('utf8'));
+    assert.deepEqual(await runtimeSnapshot(generationDirectory), before);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('cold-start relocator repairs an expected-name-only partial generation', async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-runtime-partial-'));
+  try {
+    const { resourcesDirectory, entries, generation } = await createSyntheticDesktopResources(temporaryDirectory);
+    const runtimeRoot = path.join(temporaryDirectory, 'localapp', 'OpenAI', 'Codex', 'bin');
+    const generationDirectory = path.join(runtimeRoot, generation);
+    await mkdir(generationDirectory, { recursive: true });
+    await copyFile(path.join(resourcesDirectory, 'codex.exe'), path.join(generationDirectory, 'codex.exe'));
+
+    const result = await runRelocatorProbe(resourcesDirectory, runtimeRoot);
+    assert.equal(result.code, 0, result.stderr.toString('utf8'));
+    assert.deepEqual((await readdir(generationDirectory)).sort(), [...desktopCoreExecutableNames].sort());
+
+    const snapshot = await runtimeSnapshot(generationDirectory);
+    for (let index = 0; index < entries.length; index += 1) {
+      assert.equal(snapshot[index].sha256, entries[index].sha256);
+    }
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('cold-start relocator refuses foreign residue in the target generation', async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-runtime-foreign-'));
+  try {
+    const { resourcesDirectory, generation } = await createSyntheticDesktopResources(temporaryDirectory);
+    const runtimeRoot = path.join(temporaryDirectory, 'localapp', 'OpenAI', 'Codex', 'bin');
+    const generationDirectory = path.join(runtimeRoot, generation);
+    const foreignPath = path.join(generationDirectory, 'foreign.txt');
+    await mkdir(generationDirectory, { recursive: true });
+    await writeFile(foreignPath, 'foreign');
+
+    const result = await runRelocatorProbe(resourcesDirectory, runtimeRoot);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr.toString('utf8'), /unexpected entries/);
+    assert.equal((await stat(foreignPath)).isFile(), true);
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('cold-start relocator refuses an expected-name directory without deleting it', async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'k15-codex-runtime-directory-entry-'));
+  try {
+    const { resourcesDirectory, generation } = await createSyntheticDesktopResources(temporaryDirectory);
+    const runtimeRoot = path.join(temporaryDirectory, 'localapp', 'OpenAI', 'Codex', 'bin');
+    const generationDirectory = path.join(runtimeRoot, generation);
+    const unsafeEntry = path.join(generationDirectory, 'codex.exe');
+    await mkdir(unsafeEntry, { recursive: true });
+    await writeFile(path.join(unsafeEntry, 'preserve.txt'), 'preserve');
+
+    const result = await runRelocatorProbe(resourcesDirectory, runtimeRoot);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr.toString('utf8'), /unexpected entries/);
+    assert.equal((await stat(unsafeEntry)).isDirectory(), true);
+    assert.equal((await readFile(path.join(unsafeEntry, 'preserve.txt'), 'utf8')), 'preserve');
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
 });
 
 test('direct executable boundary preserves argv without shell association', async () => {
