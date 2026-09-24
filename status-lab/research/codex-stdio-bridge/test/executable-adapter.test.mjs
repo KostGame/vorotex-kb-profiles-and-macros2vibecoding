@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -173,9 +173,11 @@ test('cold-start relocator materializes the stock generation and reuses it uncha
     const first = await runRelocatorProbe(resourcesDirectory, runtimeRoot);
     assert.equal(first.code, 0, first.stderr.toString('utf8'));
     const firstResult = JSON.parse(first.stdout.toString('utf8'));
+    const actualChildPath = await realpath(firstResult.path);
+    const expectedChildPath = await realpath(path.join(generationDirectory, 'codex.exe'));
     assert.equal(
-      path.normalize(firstResult.path).toLowerCase(),
-      path.normalize(path.join(generationDirectory, 'codex.exe')).toLowerCase()
+      path.normalize(actualChildPath).toLowerCase(),
+      path.normalize(expectedChildPath).toLowerCase()
     );
     assert.equal(firstResult.sha256, entries[0].sha256);
     assert.deepEqual((await readdir(generationDirectory)).sort(), [...desktopCoreExecutableNames].sort());
