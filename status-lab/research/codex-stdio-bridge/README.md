@@ -6,7 +6,25 @@ This is an **offline research prototype**. It only starts the bundled determinis
 
 The bridge sends transport bytes using Node `pipe()` in both directions, preserving the original chunk objects while retaining native backpressure. Child stderr is piped independently and never enters JSONL observation. Observation is a separate `data` listener: an invalid, incomplete, or oversize record remains transport traffic and never becomes a transport failure.
 
-The Phase C observer recognizes the separately proven live JSON-RPC approval shape:
+The Phase C observer recognizes the live JSON-RPC approval families pinned
+against OpenAI Codex commit `dfdb40cd0b72dfba3293db5c7c441232e8ef1a60`
+(verified 2026-09-26):
+
+- `item/commandExecution/requestApproval`
+- `item/fileChange/requestApproval`
+- `item/permissions/requestApproval`
+
+The upstream server request declarations are in
+[`common.rs`](https://github.com/openai/codex/blob/dfdb40cd0b72dfba3293db5c7c441232e8ef1a60/codex-rs/app-server-protocol/src/protocol/common.rs).
+The pinned [`PermissionsRequestApprovalParams`](https://github.com/openai/codex/blob/dfdb40cd0b72dfba3293db5c7c441232e8ef1a60/codex-rs/app-server-protocol/schema/typescript/v2/PermissionsRequestApprovalParams.ts)
+contains exact `threadId`, `turnId`, and `itemId`; its response has
+`permissions`, `scope` (`turn` or `session`), and optional boolean
+`strictAutoReview` ([response type](https://github.com/openai/codex/blob/dfdb40cd0b72dfba3293db5c7c441232e8ef1a60/codex-rs/app-server-protocol/schema/typescript/v2/PermissionsRequestApprovalResponse.ts),
+[scope type](https://github.com/openai/codex/blob/dfdb40cd0b72dfba3293db5c7c441232e8ef1a60/codex-rs/app-server-protocol/schema/typescript/v2/PermissionGrantScope.ts)).
+This response is not a `result.decision` approval and never resolves
+`approval_resolved`.
+
+Command execution and file change requests retain the existing contract:
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"item/commandExecution/requestApproval","params":{"threadId":"T","turnId":"U","itemId":"I"}}
@@ -14,9 +32,26 @@ The Phase C observer recognizes the separately proven live JSON-RPC approval sha
 ```
 
 
-The corresponding item/fileChange/requestApproval request is also exact allowlisted. Requests are correlated by method family, typed top-level JSON-RPC id, and present threadId/turnId/itemId metadata; number 1 and string "1" cannot alias. Only safe integer numbers and bounded non-empty strings are supported. The live response has no method and must contain an object result.decision with one of accept, acceptForSession, decline, or cancel. The old fixture-only respondApproval/params.requestId model is REMOVED and never resolves a live pending request.
+Those two families are correlated by method family, typed top-level JSON-RPC id, and present threadId/turnId/itemId metadata; number 1 and string "1" cannot alias. Only safe integer numbers and bounded non-empty strings are supported. Their live response has no method and must contain an object result.decision with one of accept, acceptForSession, decline, or cancel. The old fixture-only respondApproval/params.requestId model is REMOVED and never resolves a live pending request.
 
-Only a fresh allowlisted event is sent to the optional sink: timestamp, source, event name, typed sanitized RPC correlation (rpcIdType and rpcId), decision, and present thread/turn/item IDs. Request payloads are parsed transiently to read these values but are never persisted or forwarded to telemetry. JSONL framing retains at most 64 KiB of an incomplete record and 256 pending IDs. The sink has at most one asynchronous write in flight; errors and overload drop telemetry without blocking the pipes.
+The permissions family has its own exact correlation path and requires all
+three bounded request identifiers. Only an unambiguous same-typed RPC id,
+matching request family, and well-formed permission response can emit
+`k15-codex-permissions-approval-diagnostic/v1` / `permissions_approval_observed`.
+The diagnostic contains source, family, typed RPC id, the request identifiers,
+request/response observation timestamps, and only an allowlisted scope and
+boolean `strictAutoReview` when present. Permission payloads and all other
+request/response fields are discarded. The diagnostic is not consumed by
+Status Lab state mapping.
+
+Command/file events sent to the optional sink contain only timestamp, source,
+event name, typed sanitized RPC correlation, decision, and present
+thread/turn/item IDs. Permissions events use the separate diagnostic schema
+below and never contain permission payloads. Request payloads are parsed
+transiently to read allowlisted values but are never persisted or forwarded to
+telemetry. JSONL framing retains at most 64 KiB of an incomplete record and
+256 pending IDs. The sink has at most one asynchronous write in flight; errors
+and overload drop telemetry without blocking the pipes.
 
 ## Configuration boundary
 
@@ -91,10 +126,11 @@ absolute path. When set, the observer appends only the versioned sanitized
 file is created.
 
 The live-allowlisted request families are the only protocol assumptions in this
-implementation:
+implementation (see the immutable upstream pin above):
 
 - item/commandExecution/requestApproval with a top-level id
 - item/fileChange/requestApproval with a top-level id
+- item/permissions/requestApproval with a top-level id
 
 Correlation is keyed by exact typed top-level RPC id plus family; `accept`,
 `acceptForSession`, `decline`, and `cancel` stay distinct. The legacy fixture-only
@@ -106,6 +142,9 @@ produce no semantic event. No generic `serverRequest/resolved`, timers,
 focus/toast state, process polling, completion timing, or Desktop heuristics
 are used. The observer never persists or forwards raw protocol bytes or
 content and a sink error/overload is fail-open for transport.
+
+Permissions responses follow the separate diagnostic schema above; they are
+never converted into `approval_resolved` and do not alter reducer semantics.
 
 Status Lab accepts only the exact sanitized schema from source
 `codex_stdio_bridge`. Only `accept` and `acceptForSession` can move a waiting
