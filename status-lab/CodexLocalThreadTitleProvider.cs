@@ -7,7 +7,55 @@ namespace Vorotex.K15.StatusLab;
 internal interface ICodexLocalThreadTitleProvider
 {
     Task<IReadOnlyDictionary<string, string>> ReadTitlesAsync(
-        IReadOnlyCollection<string> exactThreadIds, CancellationToken cancellationToken);
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        IReadOnlyList<CodexUnreadSource> trustedSources,
+        CancellationToken cancellationToken);
+}
+
+internal sealed record CodexLocalThreadTitleSource(
+    string SourceInstanceId,
+    string CodexHomePath,
+    IReadOnlyList<string> ThreadIds);
+
+internal static class CodexLocalThreadTitleSourceResolver
+{
+    internal static IReadOnlyList<CodexLocalThreadTitleSource> Resolve(
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        IReadOnlyList<CodexUnreadSource> trustedSources)
+    {
+        var registryById = trustedSources
+            .Where(source => CodexSourceIdentity.IsValid(source.SourceInstanceId))
+            .GroupBy(source => source.SourceInstanceId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        var rowsById = sessions
+            .Where(session => (session.IsAlive || session.State == K15NormalizedState.DonePendingAttention) &&
+                CodexSourceIdentity.IsValid(session.SourceInstanceId) && IsBoundedThreadId(session.ThreadId))
+            .GroupBy(session => session.SourceInstanceId, StringComparer.Ordinal);
+        var requests = new List<CodexLocalThreadTitleSource>();
+
+        foreach (var rows in rowsById)
+        {
+            if (!registryById.TryGetValue(rows.Key, out var matches) || matches.Length != 1)
+                continue;
+            var source = matches[0];
+            var home = CodexSourceIdentity.CanonicalizeHome(source.CodexHomePath);
+            if (source.Health == CodexUnreadSourceHealth.Duplicate || home is null ||
+                !string.Equals(home, source.CodexHomePath, StringComparison.Ordinal) ||
+                !string.Equals(CodexSourceIdentity.ForHome(home), source.SourceInstanceId, StringComparison.Ordinal) ||
+                !Directory.Exists(home))
+                continue;
+
+            var threadIds = rows.Select(session => session.ThreadId!)
+                .Distinct(StringComparer.Ordinal).Take(20).ToArray();
+            if (threadIds.Length > 0)
+                requests.Add(new(source.SourceInstanceId, home, threadIds));
+        }
+
+        return requests;
+    }
+
+    private static bool IsBoundedThreadId(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 256 && !value.Any(char.IsControl);
 }
 
 // Reads only stock app-server metadata. Lifecycle and unread evidence never enter this provider.
@@ -18,9 +66,26 @@ internal sealed class CodexAppServerLocalThreadTitleProvider : ICodexLocalThread
     private const int MaxMessagesPerResponse = 64;
 
     public async Task<IReadOnlyDictionary<string, string>> ReadTitlesAsync(
-        IReadOnlyCollection<string> exactThreadIds, CancellationToken cancellationToken)
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        IReadOnlyList<CodexUnreadSource> trustedSources,
+        CancellationToken cancellationToken)
     {
-        var ids = exactThreadIds.Where(IsBoundedId).Distinct(StringComparer.Ordinal)
+        var requests = CodexLocalThreadTitleSourceResolver.Resolve(sessions, trustedSources);
+        var titles = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var request in requests)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sourceTitles = await ReadSourceTitlesAsync(request, cancellationToken).ConfigureAwait(false);
+            foreach (var (threadId, name) in sourceTitles)
+                titles[CodexSourceIdentity.CompositeKey(request.SourceInstanceId, threadId)] = name;
+        }
+        return titles;
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string>> ReadSourceTitlesAsync(
+        CodexLocalThreadTitleSource source, CancellationToken cancellationToken)
+    {
+        var ids = source.ThreadIds.Where(IsBoundedId).Distinct(StringComparer.Ordinal)
             .Take(MaxThreadIds).ToArray();
         if (ids.Length == 0) return new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -41,6 +106,7 @@ internal sealed class CodexAppServerLocalThreadTitleProvider : ICodexLocalThread
             EnableRaisingEvents = true
         };
         process.StartInfo.ArgumentList.Add("app-server");
+        process.StartInfo.Environment["CODEX_HOME"] = source.CodexHomePath;
 
         try
         {

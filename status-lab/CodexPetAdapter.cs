@@ -107,27 +107,27 @@ internal static class CodexPetAdapter
     internal static CodexPetPresentation MapPresentation(
         IReadOnlyList<CodexSessionSnapshot> sessions,
         IReadOnlyDictionary<string, CodexUnreadState> unreadByThread,
-        IReadOnlyDictionary<string, string> namesByExactThreadId) =>
-        WithLocalTitles(MapPresentation(sessions, unreadByThread), namesByExactThreadId);
+        IReadOnlyDictionary<string, string> namesBySourceAndThread) =>
+        WithLocalTitles(MapPresentation(sessions, unreadByThread), namesBySourceAndThread);
 
     internal static CodexPetPresentation MapPresentation(
         IReadOnlyList<CodexSessionSnapshot> sessions,
         CodexUnreadSnapshot? unreadSnapshot,
-        IReadOnlyDictionary<string, string> namesByExactThreadId) =>
-        WithLocalTitles(MapPresentation(sessions, unreadSnapshot), namesByExactThreadId);
+        IReadOnlyDictionary<string, string> namesBySourceAndThread) =>
+        WithLocalTitles(MapPresentation(sessions, unreadSnapshot), namesBySourceAndThread);
 
     internal static CodexPetPresentation MapPresentation(
         IReadOnlyList<CodexSessionSnapshot> sessions,
         ICodexUnreadSourceRegistry sources,
-        IReadOnlyDictionary<string, string> namesByExactThreadId) =>
-        WithLocalTitles(MapPresentation(sessions, sources), namesByExactThreadId);
+        IReadOnlyDictionary<string, string> namesBySourceAndThread) =>
+        WithLocalTitles(MapPresentation(sessions, sources), namesBySourceAndThread);
 
     private static CodexPetPresentation WithLocalTitles(CodexPetPresentation presentation,
-        IReadOnlyDictionary<string, string> namesByExactThreadId)
+        IReadOnlyDictionary<string, string> namesBySourceAndThread)
     {
         var enriched = presentation.Tasks.Select(task =>
         {
-            var activity = CodexActivityNormalizer.EnrichLocalTitles([task.Activity], namesByExactThreadId)[0];
+            var activity = CodexActivityNormalizer.EnrichLocalTitles([task.Activity], namesBySourceAndThread)[0];
             return task with { DisplayTitle = activity.Title, Activity = activity };
         }).ToArray();
         return presentation with { Tasks = enriched };

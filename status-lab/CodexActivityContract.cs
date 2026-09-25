@@ -240,13 +240,15 @@ internal static class CodexActivityNormalizer
 
     internal static IReadOnlyList<CodexActivityRow> EnrichLocalTitles(
         IReadOnlyList<CodexActivityRow> rows,
-        IReadOnlyDictionary<string, string> namesByExactThreadId)
+        IReadOnlyDictionary<string, string> namesBySourceAndThread)
     {
         return rows.Select(row =>
         {
             if (row.Source != CodexActivitySource.Local)
                 return row;
-            if (row.ThreadId is null || !namesByExactThreadId.TryGetValue(row.ThreadId, out var candidate))
+            if (!CodexSourceIdentity.IsValid(row.SourceInstanceId) || row.ThreadId is null ||
+                !namesBySourceAndThread.TryGetValue(
+                    CodexSourceIdentity.CompositeKey(row.SourceInstanceId, row.ThreadId), out var candidate))
                 return row with { Title = FallbackTitle(row.SessionId) };
 
             var name = SanitizeLabel(candidate);

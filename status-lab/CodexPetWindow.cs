@@ -446,30 +446,25 @@ internal sealed class CodexPetController : IDisposable
     {
         var now = DateTimeOffset.UtcNow;
         if (_titleRefreshInFlight || now < _nextTitleRefreshUtc) return;
-        var threadIds = sessions.Where(session => session.IsAlive ||
-                session.State == K15NormalizedState.DonePendingAttention)
-            .Select(session => session.ThreadId)
-            .Where(threadId => !string.IsNullOrWhiteSpace(threadId))
-            .Select(threadId => threadId!)
-            .Distinct(StringComparer.Ordinal)
-            .Take(20)
-            .ToArray();
+        var trustedSources = _sources.Sources.ToArray();
+        var titleSources = CodexLocalThreadTitleSourceResolver.Resolve(sessions, trustedSources);
         _nextTitleRefreshUtc = now.AddSeconds(30);
         _localTitles = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (threadIds.Length == 0) return;
+        if (titleSources.Count == 0) return;
 
         _titleRefreshInFlight = true;
-        _ = ReadLocalTitlesAsync(threadIds, _titleCancellation.Token);
+        _ = ReadLocalTitlesAsync(sessions.ToArray(), trustedSources, _titleCancellation.Token);
     }
 
-    private async Task ReadLocalTitlesAsync(string[] threadIds, CancellationToken cancellationToken)
+    private async Task ReadLocalTitlesAsync(CodexSessionSnapshot[] sessions,
+        CodexUnreadSource[] trustedSources, CancellationToken cancellationToken)
     {
         IReadOnlyDictionary<string, string> titles;
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(15));
-            titles = await _titleProvider.ReadTitlesAsync(threadIds, timeout.Token).ConfigureAwait(false);
+            titles = await _titleProvider.ReadTitlesAsync(sessions, trustedSources, timeout.Token).ConfigureAwait(false);
         }
         catch
         {
