@@ -1128,4 +1128,5 @@ Require(CodexPetPopupPolicy.Accent(paletteA, CodexPetVisualState.Waiting).R >= 0
     "Popup accents must reuse profile families and the 1800ms TTL.");
 
 CodexReadAckTests.Run();
+CodexLocalThreadTitleTests.Run();
 Console.WriteLine("RC1 approval + session-aware reducer + 30s DONE + RGB policy + HID tests: PASS");

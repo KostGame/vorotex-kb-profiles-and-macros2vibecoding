@@ -361,7 +361,13 @@ internal sealed class CodexPetController : IDisposable
     private readonly JournalStateNormalizer _normalizer;
     private readonly ICodexUnreadSourceRegistry _sources;
     private readonly CodexPetWindow _window;
+    private readonly ICodexLocalThreadTitleProvider _titleProvider = new CodexAppServerLocalThreadTitleProvider();
+    private readonly SynchronizationContext _uiContext;
+    private readonly CancellationTokenSource _titleCancellation = new();
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 1000 };
+    private IReadOnlyDictionary<string, string> _localTitles = new Dictionary<string, string>(StringComparer.Ordinal);
+    private DateTimeOffset _nextTitleRefreshUtc = DateTimeOffset.MinValue;
+    private bool _titleRefreshInFlight;
     private bool _visible;
 
     public CodexPetController(JournalStateNormalizer normalizer, ICodexUnreadSourceRegistry sources, StatusLabConfig config)
@@ -369,6 +375,7 @@ internal sealed class CodexPetController : IDisposable
         _normalizer = normalizer;
         _sources = sources;
         _window = new CodexPetWindow(config);
+        _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _window.CloseRequested += HidePet;
         _normalizer.StateChanged += OnStateChanged;
         _refresh.Tick += (_, _) => Refresh();
@@ -422,22 +429,63 @@ internal sealed class CodexPetController : IDisposable
     {
         if (_window.IsDisposed) return;
         var sessions = _normalizer.SessionSnapshots;
+        RefreshLocalTitlesIfDue(sessions);
         var canPollUnread = CodexPetAdapter.ShouldPollUnread(sessions);
         // The existing bounded refresh also catches per-session list changes
         // while the pet is visible; it never performs animation work.
         if ((canPollUnread || _visible) && !_refresh.Enabled) _refresh.Start();
         if (!canPollUnread && !_visible && _refresh.Enabled) _refresh.Stop();
         var presentation = canPollUnread
-            ? CodexPetAdapter.MapPresentation(sessions, _sources)
-            : CodexPetAdapter.MapPresentation(sessions, (CodexUnreadSnapshot?)null);
+            ? CodexPetAdapter.MapPresentation(sessions, _sources, _localTitles)
+            : CodexPetAdapter.MapPresentation(sessions, (CodexUnreadSnapshot?)null, _localTitles);
         _window.SetPresentation(presentation);
         _window.SetState(presentation.Global.State);
+    }
+
+    private void RefreshLocalTitlesIfDue(IReadOnlyList<CodexSessionSnapshot> sessions)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_titleRefreshInFlight || now < _nextTitleRefreshUtc) return;
+        var trustedSources = _sources.Sources.ToArray();
+        var titleSources = CodexLocalThreadTitleSourceResolver.Resolve(sessions, trustedSources);
+        _nextTitleRefreshUtc = now.AddSeconds(30);
+        _localTitles = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (titleSources.Count == 0) return;
+
+        _titleRefreshInFlight = true;
+        _ = ReadLocalTitlesAsync(sessions.ToArray(), trustedSources, _titleCancellation.Token);
+    }
+
+    private async Task ReadLocalTitlesAsync(CodexSessionSnapshot[] sessions,
+        CodexUnreadSource[] trustedSources, CancellationToken cancellationToken)
+    {
+        IReadOnlyDictionary<string, string> titles;
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(15));
+            titles = await _titleProvider.ReadTitlesAsync(sessions, trustedSources, timeout.Token).ConfigureAwait(false);
+        }
+        catch
+        {
+            titles = new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        _uiContext.Post(_ =>
+        {
+            if (_window.IsDisposed) return;
+            _titleRefreshInFlight = false;
+            _localTitles = titles;
+            Refresh();
+        }, null);
     }
 
     public void Dispose()
     {
         _normalizer.StateChanged -= OnStateChanged;
         _window.CloseRequested -= HidePet;
+        _titleCancellation.Cancel();
+        _titleCancellation.Dispose();
         _refresh.Dispose();
         _window.Close();
         _window.Dispose();

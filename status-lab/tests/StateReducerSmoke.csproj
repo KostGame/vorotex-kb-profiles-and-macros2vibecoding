@@ -10,6 +10,7 @@
   <ItemGroup>
     <Compile Include="StateReducerSmokeProgram.cs" />
     <Compile Include="CodexReadAckTests.cs" />
+    <Compile Include="CodexLocalThreadTitleTests.cs" />
     <Compile Include="..\CodexReadAck.cs" Link="CodexReadAck.cs" />
     <Compile Include="..\CodexUnreadStateReader.cs" Link="CodexUnreadStateReader.cs" />
     <Compile Include="..\CodexUnreadSourceRegistry.cs" Link="CodexUnreadSourceRegistry.cs" />
@@ -22,6 +23,7 @@
     <Compile Include="..\JournalStateNormalizer.cs" Link="JournalStateNormalizer.cs" />
     <Compile Include="..\CodexPetAdapter.cs" Link="CodexPetAdapter.cs" />
     <Compile Include="..\CodexActivityContract.cs" Link="CodexActivityContract.cs" />
+    <Compile Include="..\CodexLocalThreadTitleProvider.cs" Link="CodexLocalThreadTitleProvider.cs" />
     <Compile Include="..\VisualEffectIntent.cs" Link="VisualEffectIntent.cs" />
     <Compile Include="..\CodexPetMotion.cs" Link="CodexPetMotion.cs" />
     <Compile Include="..\CodexPetPopupPolicy.cs" Link="CodexPetPopupPolicy.cs" />
