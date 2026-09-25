@@ -95,6 +95,18 @@ implementation:
 
 - item/commandExecution/requestApproval with a top-level id
 - item/fileChange/requestApproval with a top-level id
+- item/permissions/requestApproval with exact threadId, turnId, and itemId
+
+Permissions protocol pin: [OpenAI Codex commit 68e0c9f5d8fd9449e97a81e92e8fcb86795713b2](https://github.com/openai/codex/blob/68e0c9f5d8fd9449e97a81e92e8fcb86795713b2/codex-rs/app-server-protocol/src/protocol/v2/permissions.rs),
+verified file blob fd13791112ce3391801a7507d0ac9126b65ab46e.
+The pinned PermissionsRequestApprovalParams carries thread, turn, item, cwd,
+reason, and requested permissions. PermissionsRequestApprovalResponse carries
+granted permissions, scope (turn or session), and optional strictAutoReview.
+The observer requires the pinned envelope shape and keeps the permissions
+object transient only. It emits separate
+k15-codex-permissions-approval-diagnostic/v1 metadata with request and
+response observation timestamps; it never maps this response to
+approval_resolved or reads a decision.
 
 Correlation is keyed by exact typed top-level RPC id plus family; `accept`,
 `acceptForSession`, `decline`, and `cancel` stay distinct. The legacy fixture-only
@@ -102,7 +114,12 @@ respondApproval/params.requestId shape is REMOVED and never resolves a live
 pending request. The sanitized event uses rpcIdType and rpcId instead of
 pretending the live top-level id was a requestId. Unknown,
 malformed, unmatched, duplicate, stale, cross-family, and oversize records
-produce no semantic event. No generic `serverRequest/resolved`, timers,
+produce no semantic event. Permission requests use a separate response
+validator and diagnostic schema; they never enter the command/file decision
+path. The permission diagnostic forwards only family, typed RPC id, exact
+thread/turn/item ids, request/response receipt timestamps, scope, and optional
+boolean strictAutoReview. It never forwards cwd, reason, granted/requested
+permission payloads, paths, hosts, or raw JSON. No generic `serverRequest/resolved`, timers,
 focus/toast state, process polling, completion timing, or Desktop heuristics
 are used. The observer never persists or forwards raw protocol bytes or
 content and a sink error/overload is fail-open for transport.

@@ -5,12 +5,15 @@ const REQUEST_FAMILIES = new Map([
   ['item/commandExecution/requestApproval', 'item/commandExecution'],
   ['item/fileChange/requestApproval', 'item/fileChange']
 ]);
+const PERMISSIONS_REQUEST_METHOD = 'item/permissions/requestApproval';
+const PERMISSIONS_REQUEST_FAMILY = 'item/permissions';
 
 const DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 const MAX_PENDING = 256;
 const MAX_PARTIAL_BYTES = 64 * 1024;
 const MAX_FIELD_BYTES = 1024;
 export const APPROVAL_SCHEMA_VERSION = 'k15-codex-approval/v1';
+export const PERMISSIONS_APPROVAL_DIAGNOSTIC_SCHEMA_VERSION = 'k15-codex-permissions-approval-diagnostic/v1';
 export const COMPLETION_SCHEMA_VERSION = 'k15-codex-completion/v1';
 export const THREAD_STATUS_SCHEMA_VERSION = 'k15-codex-thread-status/v1';
 export const THREAD_METADATA_SCHEMA_VERSION = 'k15-codex-thread-metadata/v1';
@@ -42,6 +45,60 @@ function rpcId(value) {
     return { type: 'number', value: Object.is(value, -0) ? '-0' : String(value) };
   }
   return undefined;
+}
+
+function exactKeys(value, required, optional = []) {
+  const allowed = [...required, ...optional];
+  return Object.keys(value).every(key => allowed.includes(key)) &&
+    required.every(key => Object.hasOwn(value, key));
+}
+
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isPermissionProfile(value) {
+  if (!isObject(value) || !exactKeys(value, [], ['network', 'fileSystem'])) return false;
+  if (Object.hasOwn(value, 'network')) {
+    const network = value.network;
+    if (network !== null && (!isObject(network) || !exactKeys(network, [], ['enabled']) ||
+        (Object.hasOwn(network, 'enabled') && network.enabled !== null && typeof network.enabled !== 'boolean'))) return false;
+  }
+  if (Object.hasOwn(value, 'fileSystem')) {
+    const fileSystem = value.fileSystem;
+    if (fileSystem === null) return true;
+    if (!isObject(fileSystem) ||
+        !exactKeys(fileSystem, [], ['read', 'write', 'globScanMaxDepth', 'entries'])) return false;
+    for (const key of ['read', 'write']) {
+      if (Object.hasOwn(fileSystem, key) && fileSystem[key] !== null &&
+          (!Array.isArray(fileSystem[key]) || fileSystem[key].some(path => typeof path !== 'string'))) return false;
+    }
+    if (Object.hasOwn(fileSystem, 'globScanMaxDepth') && fileSystem.globScanMaxDepth !== null &&
+        (!Number.isSafeInteger(fileSystem.globScanMaxDepth) || fileSystem.globScanMaxDepth < 1)) return false;
+    if (Object.hasOwn(fileSystem, 'entries') && fileSystem.entries !== null &&
+        (!Array.isArray(fileSystem.entries) || fileSystem.entries.some(entry => !isFileSystemEntry(entry)))) return false;
+  }
+  return true;
+}
+
+function isFileSystemEntry(entry) {
+  if (!isObject(entry) || !exactKeys(entry, ['path', 'access']) ||
+      !['read', 'write', 'deny'].includes(entry.access) || !isObject(entry.path)) return false;
+  const pathValue = entry.path;
+  if (pathValue.type === 'path')
+    return exactKeys(pathValue, ['type', 'path']) && typeof pathValue.path === 'string';
+  if (pathValue.type === 'glob_pattern')
+    return exactKeys(pathValue, ['type', 'pattern']) && typeof pathValue.pattern === 'string';
+  if (pathValue.type !== 'special' || !exactKeys(pathValue, ['type', 'value']) || !isObject(pathValue.value)) return false;
+  const special = pathValue.value;
+  if (['root', 'minimal', 'tmpdir', 'slash_tmp'].includes(special.kind))
+    return exactKeys(special, ['kind']);
+  if (special.kind === 'project_roots')
+    return exactKeys(special, ['kind'], ['subpath']) &&
+      (!Object.hasOwn(special, 'subpath') || special.subpath === null || typeof special.subpath === 'string');
+  return special.kind === 'unknown' && exactKeys(special, ['kind', 'path'], ['subpath']) &&
+    typeof special.path === 'string' &&
+    (!Object.hasOwn(special, 'subpath') || special.subpath === null || typeof special.subpath === 'string');
 }
 
 function pendingKey(family, id, metadata = {}) {
@@ -163,6 +220,7 @@ export class ApprovalObserver {
   observeServerChunk(chunk) {
     this.#observeChunk(chunk, 'server', (message) => {
       this.#trackRequest(message);
+      this.#trackPermissionsRequest(message);
       this.#trackCompletion(message);
     });
   }
@@ -232,6 +290,37 @@ export class ApprovalObserver {
     this.#pending.set(key, request);
   }
 
+  #trackPermissionsRequest(message) {
+    if (!message || typeof message !== 'object' || Array.isArray(message) ||
+        message.jsonrpc !== '2.0' || message.method !== PERMISSIONS_REQUEST_METHOD ||
+        !exactKeys(message, ['jsonrpc', 'id', 'method', 'params'])) return;
+    const id = rpcId(message.id);
+    const params = message.params;
+    if (!id || !params || typeof params !== 'object' || Array.isArray(params) ||
+        !exactKeys(params, ['threadId', 'turnId', 'itemId', 'startedAtMs', 'cwd', 'permissions'], ['environmentId', 'reason'])) return;
+    const metadata = {};
+    for (const key of ['threadId', 'turnId', 'itemId']) {
+      const value = optionalString(params[key]);
+      if (!value) return;
+      metadata[key] = value;
+    }
+    if (!Number.isSafeInteger(params.startedAtMs) || typeof params.cwd !== 'string' ||
+        !params.cwd || (params.environmentId !== undefined && params.environmentId !== null && typeof params.environmentId !== 'string') ||
+        (params.reason !== undefined && params.reason !== null && typeof params.reason !== 'string') ||
+        !isPermissionProfile(params.permissions)) return;
+
+    const key = pendingKey(PERMISSIONS_REQUEST_FAMILY, id, metadata);
+    if (this.#pending.size >= MAX_PENDING && !this.#pending.has(key)) return;
+    if (this.#pending.has(key)) return;
+    this.#pending.set(key, {
+      rpcIdType: id.type,
+      rpcId: id.value,
+      family: PERMISSIONS_REQUEST_FAMILY,
+      requestObservedAtUtc: new Date().toISOString(),
+      ...metadata
+    });
+  }
+
   #trackCompletion(message) {
     if (!message || typeof message !== 'object' || Array.isArray(message) ||
         message.method !== 'turn/completed' || !message.params ||
@@ -254,19 +343,55 @@ export class ApprovalObserver {
     });
   }
 
+  #resolvePermissionsResponse(message, id, entry) {
+    if (!message || typeof message !== 'object' || Array.isArray(message) ||
+        message.jsonrpc !== '2.0' || Object.hasOwn(message, 'method') ||
+        !exactKeys(message, ['jsonrpc', 'id', 'result'])) return;
+    const result = message.result;
+    if (!result || typeof result !== 'object' || Array.isArray(result) ||
+        !exactKeys(result, ['permissions', 'scope'], ['strictAutoReview']) ||
+        !isPermissionProfile(result.permissions) ||
+        !['turn', 'session'].includes(result.scope) ||
+        (Object.hasOwn(result, 'strictAutoReview') && typeof result.strictAutoReview !== 'boolean')) return;
+    const requestKey = [...this.#pending.entries()].find(([, request]) => request === entry)?.[0];
+    if (!requestKey) return;
+    this.#pending.delete(requestKey);
+    const event = {
+      schemaVersion: PERMISSIONS_APPROVAL_DIAGNOSTIC_SCHEMA_VERSION,
+      source: 'codex_stdio_bridge',
+      event: 'permissions_approval_observed',
+      requestFamily: PERMISSIONS_REQUEST_METHOD,
+      rpcIdType: id.type,
+      rpcId: id.value,
+      threadId: entry.threadId,
+      turnId: entry.turnId,
+      itemId: entry.itemId,
+      requestObservedAtUtc: entry.requestObservedAtUtc,
+      responseObservedAtUtc: new Date().toISOString(),
+      scope: result.scope,
+      ...(Object.hasOwn(result, 'strictAutoReview') ? { strictAutoReview: result.strictAutoReview } : {})
+    };
+    this.#emitFailOpen(event);
+  }
+
   #resolveResponse(message) {
     if (!message || typeof message !== 'object' || Array.isArray(message) || Object.hasOwn(message, 'method')) return;
     const id = rpcId(message.id);
-    const result = message.result;
-    const decision = optionalString(result?.decision);
-    if (!id || !result || typeof result !== 'object' || Array.isArray(result) || !decision || !DECISIONS.has(decision)) return;
-
+    if (!id) return;
     const requestEntries = [...this.#pending.entries()]
       .filter(([, request]) => request.rpcIdType === id.type && request.rpcId === id.value);
-    const request = requestEntries.length === 1 ? requestEntries[0][1] : undefined;
-    if (!request || !decision || !DECISIONS.has(decision)) return;
+    if (requestEntries.length !== 1) return;
+    const [requestKey, request] = requestEntries[0];
+    if (request.family === PERMISSIONS_REQUEST_FAMILY) {
+      this.#resolvePermissionsResponse(message, id, request);
+      return;
+    }
 
-    this.#pending.delete(requestEntries[0][0]);
+    const result = message.result;
+    const decision = optionalString(result?.decision);
+    if (!result || typeof result !== 'object' || Array.isArray(result) || !decision || !DECISIONS.has(decision)) return;
+
+    this.#pending.delete(requestKey);
     const event = {
       schemaVersion: APPROVAL_SCHEMA_VERSION,
       timestampUtc: new Date().toISOString(),

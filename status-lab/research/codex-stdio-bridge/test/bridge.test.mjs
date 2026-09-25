@@ -9,7 +9,15 @@ import { ApprovalObserver, NativeThreadStatusObserver, NativeThreadMetadataObser
 const request = (method, id, params = {}) => JSON.stringify({ jsonrpc: '2.0', id, method, params });
 const commandRequest = (id, extras = {}) => request('item/commandExecution/requestApproval', id, extras);
 const fileRequest = (id, extras = {}) => request('item/fileChange/requestApproval', id, extras);
+const permissionsRequest = (id, extras = {}) => request('item/permissions/requestApproval', id, {
+  threadId: 'permissions-thread', turnId: 'permissions-turn', itemId: 'permissions-item',
+  startedAtMs: 1788854400000, cwd: 'C:\\private-cwd', reason: 'private-reason',
+  permissions: { network: { enabled: true }, fileSystem: { read: ['C:\\private-path'] } }, ...extras
+});
 const response = (id, decision, extras = {}) => JSON.stringify({ jsonrpc: '2.0', id, result: { decision, ...extras } });
+const permissionsResponse = (id, extras = {}) => JSON.stringify({ jsonrpc: '2.0', id, result: {
+  permissions: {}, scope: 'turn', ...extras
+} });
 const legacyResponse = (id, decision) => JSON.stringify({
   method: 'item/commandExecution/respondApproval',
   params: { requestId: id, decision }
@@ -215,6 +223,117 @@ test('live numeric approval request and exact result.decision response emit one 
   assert.equal(observer.pendingCount(), 0);
 });
 
+test('exact permissions approval request and matching response emit separate diagnostic without decision', async () => {
+  const events = []; const observer = observerWith(events);
+  const requestLine = permissionsRequest(70, {
+    threadId: 'perm-thread', turnId: 'perm-turn', itemId: 'perm-item',
+    environmentId: 'private-environment', startedAtMs: 1788854400123,
+    cwd: 'PRIVATE-CWD', reason: 'PRIVATE-REASON',
+    permissions: { network: { enabled: true }, fileSystem: { read: ['PRIVATE-PATH'] } }
+  });
+  observer.observeServerChunk(Buffer.from(requestLine + '\n'));
+  observer.observeClientChunk(Buffer.from(permissionsResponse(70, {
+    permissions: { network: { enabled: true }, fileSystem: { write: ['PRIVATE-GRANTED-PATH'] } },
+    scope: 'session', strictAutoReview: true
+  }) + '\n'));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.deepEqual(Object.keys(events[0]).sort(), [
+    'event', 'itemId', 'requestFamily', 'requestObservedAtUtc', 'responseObservedAtUtc',
+    'rpcId', 'rpcIdType', 'schemaVersion', 'scope', 'source', 'strictAutoReview', 'threadId', 'turnId'
+  ].sort());
+  assert.equal(events[0].schemaVersion, 'k15-codex-permissions-approval-diagnostic/v1');
+  assert.equal(events[0].event, 'permissions_approval_observed');
+  assert.equal(events[0].requestFamily, 'item/permissions/requestApproval');
+  assert.equal(events[0].rpcIdType, 'number');
+  assert.equal(events[0].rpcId, '70');
+  assert.equal(events[0].threadId, 'perm-thread');
+  assert.equal(events[0].turnId, 'perm-turn');
+  assert.equal(events[0].itemId, 'perm-item');
+  assert.equal(events[0].scope, 'session');
+  assert.equal(events[0].strictAutoReview, true);
+  assert.match(events[0].requestObservedAtUtc, /^\d{4}-\d\d-/);
+  assert.match(events[0].responseObservedAtUtc, /^\d{4}-\d\d-/);
+  assert.doesNotMatch(JSON.stringify(events[0]), /PRIVATE-CWD|PRIVATE-REASON|PRIVATE-HOST|PRIVATE-PATH|PRIVATE-GRANTED-PATH|private-environment/);
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('permissions correlation keeps numeric and string RPC ids distinct', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(
+    permissionsRequest(71, { threadId: 'number-thread' }) + '\n' +
+    permissionsRequest('71', { threadId: 'string-thread' }) + '\n'
+  ));
+  observer.observeClientChunk(Buffer.from(
+    permissionsResponse('71', { scope: 'session' }) + '\n' +
+    permissionsResponse(71, { scope: 'turn', strictAutoReview: false }) + '\n'
+  ));
+  await tick();
+  assert.deepEqual(events.map(({ rpcIdType, rpcId, threadId, scope }) => ({ rpcIdType, rpcId, threadId, scope })), [
+    { rpcIdType: 'string', rpcId: '71', threadId: 'string-thread', scope: 'session' },
+    { rpcIdType: 'number', rpcId: '71', threadId: 'number-thread', scope: 'turn' }
+  ]);
+});
+
+test('permissions approval rejects malformed, mismatched, duplicate, and cross-family responses', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(
+    permissionsRequest(72) + '\n' +
+    permissionsRequest(77, { threadId: null }) + '\n' +
+    commandRequest(73) + '\n'
+  ));
+  observer.observeClientChunk(Buffer.from(
+    permissionsResponse(999) + '\n' +
+    permissionsResponse(77) + '\n' +
+    permissionsResponse(72, { scope: 'project' }) + '\n' +
+    permissionsResponse(72, { unexpected: 'PRIVATE' }) + '\n' +
+    permissionsResponse(72, { permissions: undefined }) + '\n' +
+    response(72, 'accept') + '\n' +
+    permissionsResponse(73) + '\n' +
+    permissionsResponse(72, { scope: 'session' }) + '\n' +
+    permissionsResponse(72, { scope: 'session' }) + '\n'
+  ));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].rpcId, '72');
+  assert.equal(events[0].scope, 'session');
+});
+
+test('permission payload markers never reach diagnostic sink and malformed host data fails closed', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(permissionsRequest(74, {
+    cwd: 'PRIVATE-CWD-MARKER', reason: 'PRIVATE-REASON-MARKER',
+    permissions: { network: { enabled: true }, fileSystem: { read: ['PRIVATE-PATH-MARKER'] } }
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(permissionsResponse(74, {
+    permissions: { fileSystem: { write: ['PRIVATE-GRANTED-PATH-MARKER'] } }, scope: 'turn'
+  }) + '\n'));
+  observer.observeServerChunk(Buffer.from(permissionsRequest(75, {
+    permissions: { network: { enabled: true, host: 'PRIVATE-HOST-MARKER' } }
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(permissionsResponse(75) + '\n'));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.doesNotMatch(JSON.stringify(events[0]), /PRIVATE-CWD-MARKER|PRIVATE-REASON-MARKER|PRIVATE-HOST-MARKER|PRIVATE-PATH-MARKER|PRIVATE-GRANTED-PATH-MARKER/);
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('diagnostic sink failure leaves native status authority healthy', async () => {
+  const nativeEvents = [];
+  const status = new NativeThreadStatusObserver({ authoritySink: event => nativeEvents.push(event) });
+  const failing = new ApprovalObserver({ telemetrySink: () => { throw new Error('diagnostic sink unavailable'); } });
+  failing.observeServerChunk(Buffer.from(permissionsRequest(76) + '\n'));
+  failing.observeClientChunk(Buffer.from(permissionsResponse(76) + '\n'));
+  status.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/status/changed', params: {
+    threadId: 'native-status-survives', status: { type: 'active', activeFlags: ['waitingOnApproval'] }
+  } }) + '\n'));
+  await tick();
+  assert.equal(nativeEvents.length, 1);
+  assert.equal(status.authorityHealth().healthy, true);
+  assert.equal(failing.pendingCount(), 0);
+  assert.doesNotThrow(() => failing.observeClientChunk(Buffer.from(permissionsResponse(76) + '\n')));
+});
+
 test('exact turn/completed notification emits only bounded sanitized completion metadata', async () => {
   const events = []; const observer = observerWith(events);
   const message = JSON.stringify({
@@ -410,8 +529,8 @@ test('a failing telemetry sink cannot block either transparent transport directi
   const childOutput = new PassThrough(); const clientOutput = new PassThrough();
   let sinkCalls = 0;
   connectTransparentBridge({ clientInput, clientOutput, childInput, childOutput, telemetrySink: () => { sinkCalls += 1; throw new Error('offline sink'); } });
-  const clientBytes = Buffer.from(response(60, 'accept') + '\n');
-  const serverBytes = Buffer.from(commandRequest(60) + '\n');
+  const clientBytes = Buffer.from(permissionsResponse(60, { scope: 'session' }) + '\n');
+  const serverBytes = Buffer.from(permissionsRequest(60) + '\n');
   const gotChild = collect(childInput); const gotClient = collect(clientOutput);
   childOutput.end(serverBytes);
   await tick();
