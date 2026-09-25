@@ -238,6 +238,22 @@ internal static class CodexActivityNormalizer
         return label.Length == 0 ? null : label;
     }
 
+    internal static IReadOnlyList<CodexActivityRow> EnrichLocalTitles(
+        IReadOnlyList<CodexActivityRow> rows,
+        IReadOnlyDictionary<string, string> namesByExactThreadId)
+    {
+        return rows.Select(row =>
+        {
+            if (row.Source != CodexActivitySource.Local)
+                return row;
+            if (row.ThreadId is null || !namesByExactThreadId.TryGetValue(row.ThreadId, out var candidate))
+                return row with { Title = FallbackTitle(row.SessionId) };
+
+            var name = SanitizeLabel(candidate);
+            return row with { Title = name ?? FallbackTitle(row.SessionId) };
+        }).ToArray();
+    }
+
     private static bool TryMapRemoteState(string status, IReadOnlySet<string>? flags,
         out CodexActivityState state)
     {

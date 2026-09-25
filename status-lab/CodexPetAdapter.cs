@@ -105,6 +105,35 @@ internal static class CodexPetAdapter
     }
 
     internal static CodexPetPresentation MapPresentation(
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        IReadOnlyDictionary<string, CodexUnreadState> unreadByThread,
+        IReadOnlyDictionary<string, string> namesByExactThreadId) =>
+        WithLocalTitles(MapPresentation(sessions, unreadByThread), namesByExactThreadId);
+
+    internal static CodexPetPresentation MapPresentation(
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        CodexUnreadSnapshot? unreadSnapshot,
+        IReadOnlyDictionary<string, string> namesByExactThreadId) =>
+        WithLocalTitles(MapPresentation(sessions, unreadSnapshot), namesByExactThreadId);
+
+    internal static CodexPetPresentation MapPresentation(
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        ICodexUnreadSourceRegistry sources,
+        IReadOnlyDictionary<string, string> namesByExactThreadId) =>
+        WithLocalTitles(MapPresentation(sessions, sources), namesByExactThreadId);
+
+    private static CodexPetPresentation WithLocalTitles(CodexPetPresentation presentation,
+        IReadOnlyDictionary<string, string> namesByExactThreadId)
+    {
+        var enriched = presentation.Tasks.Select(task =>
+        {
+            var activity = CodexActivityNormalizer.EnrichLocalTitles([task.Activity], namesByExactThreadId)[0];
+            return task with { DisplayTitle = activity.Title, Activity = activity };
+        }).ToArray();
+        return presentation with { Tasks = enriched };
+    }
+
+    internal static CodexPetPresentation MapPresentation(
         IReadOnlyList<CodexSessionSnapshot> localSessions,
         IReadOnlyDictionary<string, CodexUnreadState> localUnreadByThread,
         CodexRemoteActivitySnapshot remote)
