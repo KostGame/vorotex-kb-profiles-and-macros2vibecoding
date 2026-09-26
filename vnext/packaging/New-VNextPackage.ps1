@@ -38,18 +38,43 @@ $versionManifest = @{
 }
 $versionManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $out "versions\$Version\manifest.json")
 @{ bridgeEnabled = $false; physicalHidEnabled = $false; autostart = $false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'integration\default-config.json')
-$projects = @(
-  'vnext\Vorotex.K15.Runtime\Vorotex.K15.Runtime.csproj',
-  'vnext\Vorotex.K15.StatusTray\Vorotex.K15.StatusTray.csproj',
-  'vnext\Vorotex.K15.ControlCenter\Vorotex.K15.ControlCenter.csproj',
-  'vnext\Vorotex.K15.LiveDashboard\Vorotex.K15.LiveDashboard.csproj'
+$verifyStatusTray = Join-Path $PSScriptRoot 'Verify-StatusTrayArtifact.ps1'
+$staging = Join-Path $out 'staging'
+$projectSpecs = @(
+  @{ Name = 'Vorotex.K15.Runtime.exe'; Project = 'vnext\Vorotex.K15.Runtime\Vorotex.K15.Runtime.csproj'; Identity = $false },
+  @{ Name = 'Vorotex.K15.StatusTray.exe'; Project = 'status-lab\Vorotex.K15.StatusLab.csproj'; Identity = $true },
+  @{ Name = 'Vorotex.K15.ControlCenter.exe'; Project = 'status-lab\control-center\Vorotex.K15.ControlCenter.csproj'; Identity = $false },
+  @{ Name = 'Vorotex.K15.LiveDashboard.exe'; Project = 'status-lab\live-dashboard\Vorotex.K15.LiveDashboard.csproj'; Identity = $false }
 )
-foreach ($project in $projects) {
-  & dotnet publish (Join-Path $repo $project) -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o $payload
-  if ($LASTEXITCODE) { throw "publish failed: $project" }
+foreach ($spec in $projectSpecs) {
+  $projectPath = Join-Path $repo $spec.Project
+  $projectStage = Join-Path $staging ([IO.Path]::GetFileNameWithoutExtension($spec.Project))
+  New-Item -ItemType Directory -Path $projectStage -Force | Out-Null
+  $publishArgs = @($projectPath, '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true', '-p:PublishTrimmed=false', '-o', $projectStage)
+  if ($spec.Identity) { $publishArgs += "-p:InformationalVersion=$SourceCommit" }
+  & dotnet publish @publishArgs
+  if ($LASTEXITCODE) { throw "publish failed: $($spec.Project)" }
+  $sourceExe = Join-Path $projectStage $spec.Name
+  if (-not (Test-Path -LiteralPath $sourceExe -PathType Leaf)) { throw "explicit publish missing $($spec.Name) from $($spec.Project)" }
+  if ($spec.Identity) {
+    $verification = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $verifyStatusTray -ArtifactPath $sourceExe -ExpectedProject (Join-Path $repo $spec.Project) -ExpectedBuildCommit $SourceCommit | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'Status Tray artifact identity gate failed' }
+    Copy-Item -LiteralPath $sourceExe -Destination (Join-Path $payload $spec.Name)
+    $packagedExe = Join-Path $payload $spec.Name
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $verifyStatusTray -ArtifactPath $packagedExe -ExpectedProject (Join-Path $repo $spec.Project) -SourceArtifactPath $sourceExe -ExpectedBuildCommit $SourceCommit | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Status Tray final-copy provenance gate failed' }
+  } else {
+    Copy-Item -LiteralPath $sourceExe -Destination (Join-Path $payload $spec.Name)
+    if ($spec.Name -eq 'Vorotex.K15.LiveDashboard.exe') {
+      $wwwroot = Join-Path $projectStage 'wwwroot'
+      if (Test-Path -LiteralPath $wwwroot) { Copy-Item -LiteralPath (Join-Path $wwwroot '*') -Destination (Join-Path $payload 'wwwroot') -Recurse -Force }
+    }
+  }
 }
-$expected = @('Vorotex.K15.Runtime.exe','Vorotex.K15.StatusTray.exe','Vorotex.K15.ControlCenter.exe','Vorotex.K15.LiveDashboard.exe')
-foreach ($name in $expected) { if (-not (Test-Path (Join-Path $payload $name))) { throw "package missing $name" } }
+$expected = $projectSpecs.Name
+foreach ($name in $expected) { if (-not (Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)) { throw "package missing explicit $name" } }
+$provenance = [ordered]@{ schema = 'vorotex-k15-status-tray-provenance/v1'; sourceProject = 'status-lab/Vorotex.K15.StatusLab.csproj'; sourceCommit = $SourceCommit; publishConfiguration = 'Release'; runtimeIdentifier = 'win-x64'; selfContained = $true; singleFile = $true; sourceSha256 = $verification.Sha256; sourceSize = $verification.Size; packagedSha256 = Get-VNextFileSha256 -LiteralPath (Join-Path $payload 'Vorotex.K15.StatusTray.exe'); packagedSize = (Get-Item (Join-Path $payload 'Vorotex.K15.StatusTray.exe')).Length }
+$provenance | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $payload 'Vorotex.K15.StatusTray.provenance.json')
 $hashes = [ordered]@{}
 Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForEach-Object {
   $relative = $_.FullName.Substring($payload.Length + 1).Replace('\','/')
