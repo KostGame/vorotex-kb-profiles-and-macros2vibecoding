@@ -97,15 +97,43 @@ Require(CodexPetSizePolicy.DefaultPreset == PetSizePreset.Medium &&
         CodexPetSizePolicy.Geometry(PetSizePreset.Medium).WindowSize == new Size(160, 160) &&
         CodexPetSizePolicy.Geometry(PetSizePreset.Large).WindowSize == new Size(192, 192),
     "PET_SIZE_PRESETS_AND_DEFAULT");
+var ordinaryKeyIds = new[]
+{
+    "key-1", "key-2", "key-3", "key-4", "key-5", "key-6",
+    "key-7", "key-8", "key-9", "key-0", "key-dot", "minus", "plus"
+};
+var ordinaryKeys = ordinaryKeyIds.Select(id => MiniK15ControlLayout.Controls.Single(control => control.Id == id)).ToArray();
+Require(ordinaryKeys.All(control => control.Kind == MiniK15ControlKind.Key &&
+        control.Width == MiniK15ControlLayout.OrdinaryKeyWidth &&
+        control.Height == MiniK15ControlLayout.OrdinaryKeyHeight) &&
+        ordinaryKeys.Select(control => (control.Width, control.Height)).Distinct().Count() == 1,
+    "ALL_ORDINARY_KEYCAPS_SHARE_ONE_UNIT");
+Require(MiniK15ControlLayout.Controls.Single(control => control.Id == "enter") is
+            { Kind: MiniK15ControlKind.WideEnter, Width: > MiniK15ControlLayout.OrdinaryKeyWidth } &&
+        MiniK15ControlLayout.Controls.Single(control => control.Id == "long-bottom") is
+            { Kind: MiniK15ControlKind.LongBottomKey, Width: > MiniK15ControlLayout.OrdinaryKeyWidth } &&
+        MiniK15ControlLayout.Controls.Single(control => control.Id == "rotary").Kind == MiniK15ControlKind.Rotary &&
+        MiniK15ControlLayout.Controls.Single(control => control.Id == "joystick").Kind == MiniK15ControlKind.Joystick &&
+        MiniK15ControlLayout.Controls.Count(control => control.Kind != MiniK15ControlKind.Key) == 4,
+    "ONLY_FOUR_INTENTIONAL_SPECIAL_CONTROLS");
 foreach (var preset in Enum.GetValues<PetSizePreset>())
 {
     var geometry = CodexPetSizePolicy.Geometry(preset);
+    var controlBounds = MiniK15ControlLayout.Controls.Select(control =>
+        (Control: control, Bounds: CodexPetSizePolicy.ControlBounds(geometry.KeyboardBodyBounds, control))).ToArray();
     Require(new Rectangle(Point.Empty, geometry.WindowSize).Contains(geometry.KeyboardBodyBounds) &&
             new Rectangle(Point.Empty, geometry.WindowSize).Contains(geometry.BadgeBounds) &&
-            MiniK15ControlLayout.Controls.All(control =>
-                new Rectangle(Point.Empty, geometry.WindowSize).Contains(
-                    CodexPetSizePolicy.ControlBounds(geometry.KeyboardBodyBounds, control))),
+            controlBounds.All(item => geometry.KeyboardBodyBounds.Contains(item.Bounds)) &&
+            controlBounds.All(item => new Rectangle(Point.Empty, geometry.WindowSize).Contains(item.Bounds)),
         $"PET_SIZE_GEOMETRY_{preset}");
+    Require(controlBounds.SelectMany((left, index) => controlBounds.Skip(index + 1)
+                .Select(right => (left, right)))
+            .All(pair => !pair.left.Bounds.IntersectsWith(pair.right.Bounds)),
+        $"PET_CONTROL_BOUNDS_DO_NOT_OVERLAP_{preset}");
+    Require(controlBounds.Where(item => !string.IsNullOrWhiteSpace(item.Control.Label)).All(item =>
+            item.Bounds.Width >= item.Control.Label!.Length * (item.Control.Kind == MiniK15ControlKind.LongBottomKey ? 4 : 5) + 2 &&
+            item.Bounds.Height >= 10),
+        $"PET_CONTROL_LABELS_FIT_{preset}");
 }
 Require(CodexPetSizePolicy.Select((PetSizePreset)99) == PetSizePreset.Medium, "PET_SIZE_INVALID_DEFAULTS");
 
