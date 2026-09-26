@@ -9,7 +9,9 @@ import { ApprovalObserver, NativeThreadStatusObserver, NativeThreadMetadataObser
 const request = (method, id, params = {}) => JSON.stringify({ jsonrpc: '2.0', id, method, params });
 const commandRequest = (id, extras = {}) => request('item/commandExecution/requestApproval', id, extras);
 const fileRequest = (id, extras = {}) => request('item/fileChange/requestApproval', id, extras);
+const permissionsRequest = (id, extras = {}) => request('item/permissions/requestApproval', id, extras);
 const response = (id, decision, extras = {}) => JSON.stringify({ jsonrpc: '2.0', id, result: { decision, ...extras } });
+const permissionsResponse = (id, extras = {}) => JSON.stringify({ jsonrpc: '2.0', id, result: { permissions: { privateProfile: 'MUST NOT REACH SIDE CHANNEL' }, ...extras } });
 const legacyResponse = (id, decision) => JSON.stringify({
   method: 'item/commandExecution/respondApproval',
   params: { requestId: id, decision }
@@ -212,6 +214,96 @@ test('live numeric approval request and exact result.decision response emit one 
     itemId: 'I'
   });
   assert.doesNotMatch(JSON.stringify(events[0]), /MUST NOT REACH SIDE CHANNEL/);
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('permissions request and response emit separate exact diagnostic without decision semantics', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(permissionsRequest(71, {
+    threadId: 'thread-permission', turnId: 'turn-permission', itemId: 'item-permission',
+    permissions: { privateProfile: 'PRIVATE_PROFILE_MARKER' }, cwd: 'PRIVATE_CWD_MARKER',
+    reason: 'PRIVATE_REASON_MARKER', host: 'PRIVATE_HOST_MARKER', path: 'PRIVATE_PATH_MARKER'
+  }) + '\n'));
+  assert.equal(observer.pendingCount(), 1);
+  observer.observeClientChunk(Buffer.from(permissionsResponse(71, {
+    scope: 'session', strictAutoReview: true
+  }) + '\n'));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0], {
+    schemaVersion: 'k15-codex-permissions-approval-diagnostic/v1',
+    source: 'codex_stdio_bridge', event: 'permissions_approval_observed',
+    requestFamily: 'item/permissions', rpcIdType: 'number', rpcId: '71',
+    threadId: 'thread-permission', turnId: 'turn-permission', itemId: 'item-permission',
+    requestObservedAtUtc: events[0].requestObservedAtUtc,
+    responseObservedAtUtc: events[0].responseObservedAtUtc,
+    scope: 'session', strictAutoReview: true
+  });
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE_PROFILE_MARKER|PRIVATE_CWD_MARKER|PRIVATE_REASON_MARKER|PRIVATE_HOST_MARKER|PRIVATE_PATH_MARKER|MUST NOT REACH SIDE CHANNEL/);
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('permissions response without decision is accepted only by its diagnostic path', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(permissionsRequest('no-decision', {
+    threadId: 'T', turnId: 'U', itemId: 'I'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(permissionsResponse('no-decision', { scope: 'turn' }) + '\n'));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, 'permissions_approval_observed');
+  assert.equal(events[0].schemaVersion, 'k15-codex-permissions-approval-diagnostic/v1');
+  assert.equal(Object.hasOwn(events[0], 'decision'), false);
+});
+
+test('permissions correlation requires exact IDs, typed RPC id, and unambiguous family', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(
+    permissionsRequest(72, { threadId: 'thread-number', turnId: 'turn-number', itemId: 'item-number' }) + '\n' +
+    permissionsRequest('72', { threadId: 'thread-string', turnId: 'turn-string', itemId: 'item-string' }) + '\n' +
+    permissionsRequest(73, { threadId: 'thread-mismatch', turnId: 'turn-mismatch', itemId: 'item-mismatch' }) + '\n'
+  ));
+  observer.observeClientChunk(Buffer.from(
+    permissionsResponse('72', { scope: 'turn' }) + '\n' +
+    permissionsResponse(72, { scope: 'session' }) + '\n' +
+    JSON.stringify({ jsonrpc: '2.0', id: 73, result: { permissions: {}, scope: 'turn', threadId: 'other-thread' } }) + '\n' +
+    permissionsResponse(73, { scope: 'turn', strictAutoReview: 'not-boolean' }) + '\n'
+  ));
+  await tick();
+  assert.deepEqual(events.map(({ rpcIdType, rpcId, threadId, turnId, itemId }) => ({ rpcIdType, rpcId, threadId, turnId, itemId })), [
+    { rpcIdType: 'string', rpcId: '72', threadId: 'thread-string', turnId: 'turn-string', itemId: 'item-string' },
+    { rpcIdType: 'number', rpcId: '72', threadId: 'thread-number', turnId: 'turn-number', itemId: 'item-number' }
+  ]);
+  assert.equal(observer.pendingCount(), 1);
+});
+
+test('permissions malformed, duplicate, cross-family, and mismatched responses fail closed', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(
+    permissionsRequest(74, { threadId: 'T', turnId: 'U', itemId: 'I' }) + '\n' +
+    commandRequest(75, { threadId: 'command-thread', turnId: 'command-turn', itemId: 'command-item' }) + '\n' +
+    permissionsRequest(75, { threadId: 'permission-thread', turnId: 'permission-turn', itemId: 'permission-item' }) + '\n' +
+    permissionsRequest(76, { threadId: 'duplicate', turnId: 'duplicate', itemId: 'duplicate' }) + '\n'
+  ));
+  observer.observeClientChunk(Buffer.from(
+    JSON.stringify({ jsonrpc: '2.0', id: 74, result: { permissions: {}, scope: 'global' } }) + '\n' +
+    response(75, 'accept') + '\n' +
+    permissionsResponse(74, { scope: 'turn' }) + '\n' +
+    permissionsResponse(76, { scope: 'turn' }) + '\n' +
+    permissionsResponse(76, { scope: 'turn' }) + '\n'
+  ));
+  await tick();
+  assert.deepEqual(events.map(event => event.rpcId), ['74', '76']);
+  assert.equal(observer.pendingCount(), 2);
+});
+
+test('permissions requests missing exact thread, turn, or item identity are rejected', () => {
+  const observer = new ApprovalObserver();
+  observer.observeServerChunk(Buffer.from(
+    permissionsRequest(80, { turnId: 'U', itemId: 'I' }) + '\n' +
+    permissionsRequest(81, { threadId: 'T', itemId: 'I' }) + '\n' +
+    permissionsRequest(82, { threadId: 'T', turnId: 'U' }) + '\n'
+  ));
   assert.equal(observer.pendingCount(), 0);
 });
 

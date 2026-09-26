@@ -439,6 +439,10 @@ var parsedApproval = JournalStateNormalizer.ParseInput("""
 Require(parsedApproval?.Decision == "accept" && parsedApproval.RpcId == "8" && parsedApproval.RpcIdType == "number" && parsedApproval.TurnId == "turn-a",
     "Status Lab must accept only the versioned sanitized approval schema.");
 Require(JournalStateNormalizer.ParseInput("""
+{"schemaVersion":"k15-codex-permissions-approval-diagnostic/v1","source":"codex_stdio_bridge","event":"permissions_approval_observed","requestFamily":"item/permissions","rpcIdType":"number","rpcId":"11","threadId":"thread-a","turnId":"turn-a","itemId":"item-a","requestObservedAtUtc":"2026-09-26T00:00:00Z","responseObservedAtUtc":"2026-09-26T00:00:01Z","scope":"turn","strictAutoReview":false}
+""") is null,
+    "Permissions approval diagnostics must not enter Status Lab state input.");
+Require(JournalStateNormalizer.ParseInput("""
 {"schemaVersion":"k15-codex-approval/v1","timestampUtc":"2026-08-25T00:00:08Z","source":"codex_stdio_bridge","event":"approval_resolved","decision":"accept","rpcIdType":"number","rpcId":"9","turnId":"turn-a","command":"MUST NOT BE ACCEPTED"}
 """) is null,
     "Approval parser must reject arbitrary payload fields.");

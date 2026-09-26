@@ -3,14 +3,17 @@ import path from 'node:path';
 
 const REQUEST_FAMILIES = new Map([
   ['item/commandExecution/requestApproval', 'item/commandExecution'],
-  ['item/fileChange/requestApproval', 'item/fileChange']
+  ['item/fileChange/requestApproval', 'item/fileChange'],
+  ['item/permissions/requestApproval', 'item/permissions']
 ]);
+const PERMISSIONS_REQUEST_FAMILY = 'item/permissions';
 
 const DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 const MAX_PENDING = 256;
 const MAX_PARTIAL_BYTES = 64 * 1024;
 const MAX_FIELD_BYTES = 1024;
 export const APPROVAL_SCHEMA_VERSION = 'k15-codex-approval/v1';
+export const PERMISSIONS_APPROVAL_DIAGNOSTIC_SCHEMA_VERSION = 'k15-codex-permissions-approval-diagnostic/v1';
 export const COMPLETION_SCHEMA_VERSION = 'k15-codex-completion/v1';
 export const THREAD_STATUS_SCHEMA_VERSION = 'k15-codex-thread-status/v1';
 export const THREAD_METADATA_SCHEMA_VERSION = 'k15-codex-thread-metadata/v1';
@@ -217,6 +220,8 @@ export class ApprovalObserver {
       const value = optionalString(params?.[key]);
       if (value) metadata[key] = value;
     }
+    if (family === PERMISSIONS_REQUEST_FAMILY &&
+        !['threadId', 'turnId', 'itemId'].every(key => metadata[key])) return;
     const key = pendingKey(family, id, metadata);
     if (this.#pending.size >= MAX_PENDING && !this.#pending.has(key)) return;
     // A duplicate request identity must not replace the original correlation
@@ -257,14 +262,18 @@ export class ApprovalObserver {
   #resolveResponse(message) {
     if (!message || typeof message !== 'object' || Array.isArray(message) || Object.hasOwn(message, 'method')) return;
     const id = rpcId(message.id);
-    const result = message.result;
-    const decision = optionalString(result?.decision);
-    if (!id || !result || typeof result !== 'object' || Array.isArray(result) || !decision || !DECISIONS.has(decision)) return;
-
+    if (!id) return;
     const requestEntries = [...this.#pending.entries()]
       .filter(([, request]) => request.rpcIdType === id.type && request.rpcId === id.value);
     const request = requestEntries.length === 1 ? requestEntries[0][1] : undefined;
-    if (!request || !decision || !DECISIONS.has(decision)) return;
+    if (!request) return;
+    if (request.family === PERMISSIONS_REQUEST_FAMILY) {
+      this.#resolvePermissionsResponse(message, id, requestEntries[0][0], request);
+      return;
+    }
+    const result = message.result;
+    const decision = optionalString(result?.decision);
+    if (!result || typeof result !== 'object' || Array.isArray(result) || !decision || !DECISIONS.has(decision)) return;
 
     this.#pending.delete(requestEntries[0][0]);
     const event = {
@@ -279,6 +288,38 @@ export class ApprovalObserver {
     for (const key of ['threadId', 'turnId', 'itemId']) {
       if (request[key]) event[key] = request[key];
     }
+    this.#emitFailOpen(event);
+  }
+
+  #resolvePermissionsResponse(message, id, pendingKeyValue, request) {
+    const result = message.result;
+    if (!result || typeof result !== 'object' || Array.isArray(result) ||
+        Object.hasOwn(result, 'decision') || !result.permissions || typeof result.permissions !== 'object' ||
+        Array.isArray(result.permissions) || !Object.hasOwn(result, 'scope')) return;
+
+    if (Object.hasOwn(result, 'scope') && result.scope !== 'turn' && result.scope !== 'session') return;
+    if (Object.hasOwn(result, 'strictAutoReview') && typeof result.strictAutoReview !== 'boolean') return;
+    for (const key of ['threadId', 'turnId', 'itemId']) {
+      if (Object.hasOwn(message, key) && message[key] !== request[key]) return;
+      if (Object.hasOwn(result, key) && result[key] !== request[key]) return;
+    }
+
+    this.#pending.delete(pendingKeyValue);
+    const event = {
+      schemaVersion: PERMISSIONS_APPROVAL_DIAGNOSTIC_SCHEMA_VERSION,
+      source: 'codex_stdio_bridge',
+      event: 'permissions_approval_observed',
+      requestFamily: PERMISSIONS_REQUEST_FAMILY,
+      rpcIdType: id.type,
+      rpcId: id.value,
+      threadId: request.threadId,
+      turnId: request.turnId,
+      itemId: request.itemId,
+      requestObservedAtUtc: request.timestampUtc,
+      responseObservedAtUtc: new Date().toISOString(),
+      ...(Object.hasOwn(result, 'scope') ? { scope: result.scope } : {}),
+      ...(Object.hasOwn(result, 'strictAutoReview') ? { strictAutoReview: result.strictAutoReview } : {})
+    };
     this.#emitFailOpen(event);
   }
 
