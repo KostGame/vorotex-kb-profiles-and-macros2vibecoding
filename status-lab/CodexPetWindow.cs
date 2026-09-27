@@ -237,8 +237,11 @@ internal sealed class CodexPetWindow : Form
             CodexPetControlRenderer.Draw(g, control, bounds, KeyColor(sample, palette));
         }
 
-        CodexPetBadgeRenderer.Draw(g, BadgeBounds(), CodexPetAdapter.FormatTaskCount(_presentation.RelevantTaskCount),
-            Color.FromArgb(palette.Primary.R, palette.Primary.G, palette.Primary.B));
+        if (CodexPetBadgeRenderer.ShouldDraw(_presentation.RelevantTaskCount))
+        {
+            CodexPetBadgeRenderer.Draw(g, BadgeBounds(), CodexPetAdapter.FormatTaskCount(_presentation.RelevantTaskCount),
+                Color.FromArgb(palette.Primary.R, palette.Primary.G, palette.Primary.B));
+        }
 
     }
 

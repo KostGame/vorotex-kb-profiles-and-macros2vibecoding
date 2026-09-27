@@ -113,6 +113,9 @@ Require(expectedPetSizes.Keys.All(preset => !string.IsNullOrWhiteSpace(CodexPetS
     "PET_SIZE_MENU_LABELS");
 var blueBadgeStyle = CodexPetBadgeVisualPolicy.Resolve(Color.Blue);
 var redBadgeStyle = CodexPetBadgeVisualPolicy.Resolve(Color.Red);
+Require(!CodexPetBadgeRenderer.ShouldDraw(0) &&
+        new[] { 1, 99, 100 }.All(CodexPetBadgeRenderer.ShouldDraw),
+    "TASK_BADGE_HIDDEN_AT_ZERO_AND_SHOWN_FOR_POSITIVE_COUNTS");
 Require(blueBadgeStyle.ContrastRatio >= 4.5 && redBadgeStyle.ContrastRatio >= 4.5 &&
         Math.Abs(blueBadgeStyle.ContrastRatio - CodexPetBadgeVisualPolicy.ContrastRatio(
             blueBadgeStyle.Foreground, blueBadgeStyle.Fill)) < 0.001 &&

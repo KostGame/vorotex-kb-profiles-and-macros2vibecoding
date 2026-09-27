@@ -4,6 +4,8 @@ namespace Vorotex.K15.StatusLab;
 
 internal static class CodexPetBadgeRenderer
 {
+    internal static bool ShouldDraw(int count) => count > 0;
+
     internal static void Draw(Graphics graphics, Rectangle bounds, string countLabel, Color accent)
     {
         if (string.IsNullOrEmpty(countLabel)) return;
