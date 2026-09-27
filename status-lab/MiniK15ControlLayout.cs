@@ -31,12 +31,13 @@ internal static class MiniK15ControlLayout
     internal const int RotaryWidth = 14;
     internal const int JoystickWidth = 14;
     internal const int EnterWidth = 24;
-    internal const int SpaceWidth = 32;
 
     internal const int ChassisWidth = 100;
     internal const int RowGutter = 2;
-    internal const int BottomGroupSeparation = 16;
     internal const int BottomOuterMargin = 7;
+    internal const int BottomJoystickGap = 5;
+    internal const int SpaceWidth = ChassisWidth - 2 * BottomOuterMargin - JoystickWidth - BottomJoystickGap -
+        2 * OrdinaryKeyWidth - 2 * RowGutter;
 
     private sealed record Track(string Id, MiniK15ControlKind Kind, int Width, string? Label = null);
 
@@ -98,7 +99,7 @@ internal static class MiniK15ControlLayout
 
         // Keep joystick in its own right cell. The left cluster and outer edge
         // share fixed row tokens, so the separation stays deliberate at all sizes.
-        var joystickX = BottomOuterMargin + leftWidth + BottomGroupSeparation;
+        var joystickX = BottomOuterMargin + leftWidth + BottomJoystickGap;
         var joystick = new MiniK15Control("joystick", MiniK15ControlBand.Bottom,
             MiniK15ControlKind.Joystick, joystickX, 65, JoystickWidth, 21);
         return [.. leftCluster, joystick];

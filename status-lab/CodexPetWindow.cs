@@ -124,12 +124,7 @@ internal sealed class CodexPetWindow : Form
         return menu;
     }
 
-    private static string PetSizeLabel(PetSizePreset preset) => preset switch
-    {
-        PetSizePreset.Small => "Маленький",
-        PetSizePreset.Large => "Большой",
-        _ => "Средний"
-    };
+    private static string PetSizeLabel(PetSizePreset preset) => CodexPetSizePolicy.Label(preset);
 
     private static string TaskSurfaceLabel(PetTaskSurfaceState state) => state switch
     {

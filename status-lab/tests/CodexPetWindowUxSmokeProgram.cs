@@ -92,11 +92,24 @@ var oversized = TaskPanelPlacementPolicy.Place(new Rectangle(100, 100, 100, 100)
 Require(oversized.Bounds == new Rectangle(-50, -40, 400, 300),
     "PLACEMENT_OVERSIZED_PANEL_BOUNDED");
 
+var expectedPetSizes = new Dictionary<PetSizePreset, Size>
+{
+    [PetSizePreset.ExtraSmall] = new(96, 96),
+    [PetSizePreset.Small] = new(128, 128),
+    [PetSizePreset.Medium] = new(160, 160),
+    [PetSizePreset.Large] = new(192, 192),
+    [PetSizePreset.ExtraLarge] = new(256, 256),
+    [PetSizePreset.Huge] = new(320, 320)
+};
 Require(CodexPetSizePolicy.DefaultPreset == PetSizePreset.Medium &&
-        CodexPetSizePolicy.Geometry(PetSizePreset.Small).WindowSize == new Size(128, 128) &&
-        CodexPetSizePolicy.Geometry(PetSizePreset.Medium).WindowSize == new Size(160, 160) &&
-        CodexPetSizePolicy.Geometry(PetSizePreset.Large).WindowSize == new Size(192, 192),
+        expectedPetSizes.Count == Enum.GetValues<PetSizePreset>().Length &&
+        expectedPetSizes.All(pair => CodexPetSizePolicy.Geometry(pair.Key).WindowSize == pair.Value),
     "PET_SIZE_PRESETS_AND_DEFAULT");
+Require(expectedPetSizes.Keys.All(preset => !string.IsNullOrWhiteSpace(CodexPetSizePolicy.Label(preset))) &&
+        CodexPetSizePolicy.Label(PetSizePreset.ExtraSmall) == "Очень маленький" &&
+        CodexPetSizePolicy.Label(PetSizePreset.ExtraLarge) == "Очень большой" &&
+        CodexPetSizePolicy.Label(PetSizePreset.Huge) == "Огромный",
+    "PET_SIZE_MENU_LABELS");
 var ordinaryKeyIds = new[]
 {
     "key-1", "key-2", "key-3", "key-4", "key-5", "key-6",
@@ -138,14 +151,18 @@ Require(topRow.Length == 7 && middleRow.Length == 6 &&
 Require(bottomRow.Length == 4 && Gap(bottomRow[0], bottomRow[1]) == MiniK15ControlLayout.RowGutter &&
         Gap(bottomRow[1], bottomRow[2]) == MiniK15ControlLayout.RowGutter &&
         bottomRow[0].X == MiniK15ControlLayout.BottomOuterMargin &&
-        Gap(bottomRow[2], bottomRow[3]) == MiniK15ControlLayout.BottomGroupSeparation &&
+        bottomRow[2].Width == MiniK15ControlLayout.ChassisWidth - 2 * MiniK15ControlLayout.BottomOuterMargin -
+            MiniK15ControlLayout.JoystickWidth - MiniK15ControlLayout.BottomJoystickGap -
+            2 * MiniK15ControlLayout.OrdinaryKeyWidth - 2 * MiniK15ControlLayout.RowGutter &&
+        bottomRow[2].Width > 4 * MiniK15ControlLayout.OrdinaryKeyWidth &&
+        Gap(bottomRow[2], bottomRow[3]) == MiniK15ControlLayout.BottomJoystickGap &&
         bottomRow[3].X + bottomRow[3].Width ==
             MiniK15ControlLayout.ChassisWidth - MiniK15ControlLayout.BottomOuterMargin,
     "BOTTOM_LEFT_CLUSTER_AND_DEDICATED_RIGHT_CELL");
 Require(Math.Abs(MiniK15ControlLayout.RotaryWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 1.4) < 0.01 &&
         Math.Abs(MiniK15ControlLayout.JoystickWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 1.4) < 0.01 &&
         Math.Abs(MiniK15ControlLayout.EnterWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 2.4) < 0.01 &&
-        Math.Abs(MiniK15ControlLayout.SpaceWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 3.2) < 0.01,
+        MiniK15ControlLayout.SpaceWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth > 4.0,
     "SPECIAL_CONTROL_HARDWARE_RATIOS");
 foreach (var preset in Enum.GetValues<PetSizePreset>())
 {
@@ -154,6 +171,7 @@ foreach (var preset in Enum.GetValues<PetSizePreset>())
         (Control: control, Bounds: CodexPetSizePolicy.ControlBounds(geometry.KeyboardBodyBounds, control))).ToArray();
     Require(new Rectangle(Point.Empty, geometry.WindowSize).Contains(geometry.KeyboardBodyBounds) &&
             new Rectangle(Point.Empty, geometry.WindowSize).Contains(geometry.BadgeBounds) &&
+            geometry.BadgeBounds.Width >= 18 && geometry.BadgeBounds.Height >= 10 &&
             controlBounds.All(item => geometry.KeyboardBodyBounds.Contains(item.Bounds)) &&
             controlBounds.All(item => new Rectangle(Point.Empty, geometry.WindowSize).Contains(item.Bounds)),
         $"PET_SIZE_GEOMETRY_{preset}");
@@ -178,9 +196,13 @@ foreach (var preset in Enum.GetValues<PetSizePreset>())
     Require(roundtrip == new CodexPetUiPreferences(PetTaskSurfaceState.Expanded, preset),
         $"UI_PREFERENCE_SIZE_ROUNDTRIP_{preset}");
 }
-var invalidSize = CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Expanded\",\"petSize\":\"Huge\"}");
+var invalidSize = CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Expanded\",\"petSize\":\"Unknown\"}");
 Require(invalidSize == new CodexPetUiPreferences(PetTaskSurfaceState.Expanded, PetSizePreset.Medium),
     "INVALID_SIZE_ONLY_DEFAULTS_SIZE");
+Require(CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Expanded\",\"petSize\":\"Small\"}").PetSize == PetSizePreset.Small &&
+        CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Expanded\",\"petSize\":\"Medium\"}").PetSize == PetSizePreset.Medium &&
+        CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Expanded\",\"petSize\":\"Large\"}").PetSize == PetSizePreset.Large,
+    "LEGACY_PET_SIZE_STRINGS_RETAIN_MEANING");
 var invalidState = CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Unknown\",\"petSize\":\"Small\"}");
 Require(invalidState == new CodexPetUiPreferences(PetTaskSurfaceState.Stacked, PetSizePreset.Small),
     "INVALID_STATE_ONLY_DEFAULTS_STATE");

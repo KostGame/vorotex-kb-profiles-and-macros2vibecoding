@@ -4,9 +4,12 @@ namespace Vorotex.K15.StatusLab;
 
 internal enum PetSizePreset
 {
+    ExtraSmall,
     Small,
     Medium,
-    Large
+    Large,
+    ExtraLarge,
+    Huge
 }
 
 internal readonly record struct CodexPetSizeGeometry(
@@ -21,12 +24,40 @@ internal static class CodexPetSizePolicy
     internal static PetSizePreset Select(PetSizePreset preset) =>
         Enum.IsDefined(preset) ? preset : DefaultPreset;
 
-    internal static CodexPetSizeGeometry Geometry(PetSizePreset preset) => Select(preset) switch
+    private static readonly Rectangle ReferenceKeyboardBody = new(11, 26, 138, 122);
+    private static readonly Rectangle ReferenceBadge = new(121, 5, 33, 19);
+
+    internal static string Label(PetSizePreset preset) => Select(preset) switch
     {
-        PetSizePreset.Small => new(new Size(128, 128), new Rectangle(9, 22, 111, 97), new Rectangle(96, 3, 29, 18)),
-        PetSizePreset.Large => new(new Size(192, 192), new Rectangle(13, 31, 166, 146), new Rectangle(145, 6, 40, 23)),
-        _ => new(new Size(160, 160), new Rectangle(11, 26, 138, 122), new Rectangle(121, 5, 33, 19))
+        PetSizePreset.ExtraSmall => "Очень маленький",
+        PetSizePreset.Small => "Маленький",
+        PetSizePreset.Medium => "Средний",
+        PetSizePreset.Large => "Большой",
+        PetSizePreset.ExtraLarge => "Очень большой",
+        PetSizePreset.Huge => "Огромный",
+        _ => "Средний"
     };
+
+    internal static CodexPetSizeGeometry Geometry(PetSizePreset preset)
+    {
+        var size = Select(preset) switch
+        {
+            PetSizePreset.ExtraSmall => 96,
+            PetSizePreset.Small => 128,
+            PetSizePreset.Medium => 160,
+            PetSizePreset.Large => 192,
+            PetSizePreset.ExtraLarge => 256,
+            PetSizePreset.Huge => 320,
+            _ => 160
+        };
+        return new(new Size(size, size), Scale(ReferenceKeyboardBody, size), Scale(ReferenceBadge, size));
+    }
+
+    private static Rectangle Scale(Rectangle bounds, int size) => new(
+        (int)Math.Round(bounds.X * size / 160d),
+        (int)Math.Round(bounds.Y * size / 160d),
+        (int)Math.Round(bounds.Width * size / 160d),
+        (int)Math.Round(bounds.Height * size / 160d));
 
     internal static Rectangle ControlBounds(Rectangle body, MiniK15Control control) => new(
         body.X + control.X * body.Width / 100,
