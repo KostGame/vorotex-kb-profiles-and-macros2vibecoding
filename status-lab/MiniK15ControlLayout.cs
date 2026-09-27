@@ -29,6 +29,7 @@ internal static class MiniK15ControlLayout
 {
     internal const int OrdinaryKeyWidth = 10;
     internal const int OrdinaryKeyHeight = 17;
+    internal const int ModifierKeyWidth = 8;
     internal const int RotaryWidth = 14;
     internal const int JoystickWidth = 14;
     internal const int EnterWidth = 24;
@@ -38,7 +39,7 @@ internal static class MiniK15ControlLayout
     internal const int BottomOuterMargin = 7;
     internal const int BottomJoystickGap = 5;
     internal const int SpaceWidth = ChassisWidth - 2 * BottomOuterMargin - JoystickWidth - BottomJoystickGap -
-        2 * OrdinaryKeyWidth - 2 * RowGutter;
+        2 * ModifierKeyWidth - 2 * RowGutter;
 
     private sealed record Track(string Id, MiniK15ControlKind Kind, int Width, string? Label = null);
 
@@ -91,8 +92,8 @@ internal static class MiniK15ControlLayout
     {
         Track[] leftTracks =
         [
-            new("minus", MiniK15ControlKind.RectangularKey, OrdinaryKeyWidth, "−"),
-            new("plus", MiniK15ControlKind.RectangularKey, OrdinaryKeyWidth, "+"),
+            new("minus", MiniK15ControlKind.RectangularKey, ModifierKeyWidth, "−"),
+            new("plus", MiniK15ControlKind.RectangularKey, ModifierKeyWidth, "+"),
             new("long-bottom", MiniK15ControlKind.LongBottomKey, SpaceWidth, "SPACE")
         ];
         var leftWidth = leftTracks.Sum(track => track.Width) + RowGutter * (leftTracks.Length - 1);

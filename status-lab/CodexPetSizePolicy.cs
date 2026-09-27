@@ -64,14 +64,23 @@ internal static class CodexPetSizePolicy
         var x = body.X + control.X * body.Width / 100;
         var y = body.Y + control.Y * body.Height / 100;
         var width = Math.Max(4, control.Width * body.Width / 100);
-        var height = Math.Max(4, control.Height * body.Height / 100);
-        if (control.Kind is MiniK15ControlKind.SquareKey or MiniK15ControlKind.Rotary or MiniK15ControlKind.Joystick)
+        if (control.Kind == MiniK15ControlKind.SquareKey)
         {
             var rowCenterY = body.Y + (control.Y + control.Height / 2d) * body.Height / 100d;
-            if (control.Kind == MiniK15ControlKind.SquareKey)
-                return new Rectangle(x, (int)Math.Round(rowCenterY - width / 2d), width, width);
-            y = (int)Math.Round(rowCenterY - height / 2d);
+            return new Rectangle(x, (int)Math.Round(rowCenterY - width / 2d), width, width);
         }
-        return new Rectangle(x, y, width, height);
+
+        var rowCenter = body.Y + (control.Y + control.Height / 2d) * body.Height / 100d;
+        if (control.Kind is MiniK15ControlKind.Rotary or MiniK15ControlKind.Joystick)
+        {
+            var circleHeight = Math.Max(4, control.Height * body.Height / 100);
+            return new Rectangle(x, (int)Math.Round(rowCenter - circleHeight / 2d), width, circleHeight);
+        }
+
+        var keycapHeight = KeycapPixelHeight(body);
+        return new Rectangle(x, (int)Math.Round(rowCenter - keycapHeight / 2d), width, keycapHeight);
     }
+
+    internal static int KeycapPixelHeight(Rectangle body) =>
+        Math.Max(4, MiniK15ControlLayout.OrdinaryKeyWidth * body.Width / MiniK15ControlLayout.ChassisWidth);
 }

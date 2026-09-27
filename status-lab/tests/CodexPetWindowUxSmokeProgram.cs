@@ -133,7 +133,9 @@ var digitKeys = ordinaryKeys.Where(control => control.Id.StartsWith("key-", Stri
 var modifierKeys = ordinaryKeys.Where(control => control.Id is "minus" or "plus").ToArray();
 Require(digitKeys.Length == 11 && digitKeys.All(control => control.Kind == MiniK15ControlKind.SquareKey) &&
         modifierKeys.Length == 2 && modifierKeys.All(control => control.Kind == MiniK15ControlKind.RectangularKey) &&
-        ordinaryKeys.All(control => control.Width == MiniK15ControlLayout.OrdinaryKeyWidth &&
+        digitKeys.All(control => control.Width == MiniK15ControlLayout.OrdinaryKeyWidth) &&
+        modifierKeys.All(control => control.Width == MiniK15ControlLayout.ModifierKeyWidth) &&
+        ordinaryKeys.All(control =>
             control.Height == MiniK15ControlLayout.OrdinaryKeyHeight),
     "DIGITS_DOT_SQUARE_MODIFIERS_RECTANGULAR");
 Require(MiniK15ControlLayout.Controls.Single(control => control.Id == "enter") is
@@ -169,7 +171,7 @@ Require(bottomRow.Length == 4 && Gap(bottomRow[0], bottomRow[1]) == MiniK15Contr
         bottomRow[0].X == MiniK15ControlLayout.BottomOuterMargin &&
         bottomRow[2].Width == MiniK15ControlLayout.ChassisWidth - 2 * MiniK15ControlLayout.BottomOuterMargin -
             MiniK15ControlLayout.JoystickWidth - MiniK15ControlLayout.BottomJoystickGap -
-            2 * MiniK15ControlLayout.OrdinaryKeyWidth - 2 * MiniK15ControlLayout.RowGutter &&
+            2 * MiniK15ControlLayout.ModifierKeyWidth - 2 * MiniK15ControlLayout.RowGutter &&
         bottomRow[2].Width > 4 * MiniK15ControlLayout.OrdinaryKeyWidth &&
         Gap(bottomRow[2], bottomRow[3]) == MiniK15ControlLayout.BottomJoystickGap &&
         bottomRow[3].X + bottomRow[3].Width ==
@@ -194,12 +196,21 @@ foreach (var preset in Enum.GetValues<PetSizePreset>())
     var squareBounds = controlBounds.Where(item => item.Control.Kind == MiniK15ControlKind.SquareKey).ToArray();
     var rectangularBounds = controlBounds.Where(item => item.Control.Kind is MiniK15ControlKind.RectangularKey or
         MiniK15ControlKind.WideEnter or MiniK15ControlKind.LongBottomKey).ToArray();
+    var sharedKeycapHeights = rectangularBounds.Select(item => item.Bounds.Height)
+        .Concat(squareBounds.Select(item => item.Bounds.Height)).Distinct().ToArray();
+    var sharedKeycapHeight = CodexPetSizePolicy.KeycapPixelHeight(geometry.KeyboardBodyBounds);
     Require(squareBounds.Length == 11 && squareBounds.All(item =>
-            item.Bounds.Width == item.Bounds.Height &&
+            item.Bounds.Width == item.Bounds.Height && Math.Abs(item.Bounds.Height - sharedKeycapHeight) <= 1 &&
             Math.Abs((item.Bounds.Top + item.Bounds.Height / 2d) -
                 (geometry.KeyboardBodyBounds.Top +
                  (item.Control.Y + item.Control.Height / 2d) * geometry.KeyboardBodyBounds.Height / 100d)) <= 1d) &&
-        rectangularBounds.Length == 4 && rectangularBounds.All(item => item.Bounds.Width != item.Bounds.Height),
+        rectangularBounds.Length == 4 && sharedKeycapHeights.Length == 1 &&
+        sharedKeycapHeights[0] == sharedKeycapHeight && rectangularBounds.All(item =>
+            item.Bounds.Height == sharedKeycapHeight && item.Bounds.Width != item.Bounds.Height) &&
+        controlBounds.Where(item => item.Control.Id is "minus" or "plus")
+            .All(item => item.Bounds.Width < sharedKeycapHeight) &&
+        controlBounds.Where(item => item.Control.Id is "enter" or "long-bottom")
+            .All(item => item.Bounds.Width > sharedKeycapHeight),
         $"PET_PIXEL_KEYCAP_SHAPES_AND_ALL_RECTANGLES_{preset}");
     var circleControls = controlBounds.Where(item => item.Control.Kind is MiniK15ControlKind.Rotary or
         MiniK15ControlKind.Joystick).ToArray();
