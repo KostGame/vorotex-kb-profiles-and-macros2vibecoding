@@ -28,30 +28,79 @@ internal static class MiniK15ControlLayout
 {
     internal const int OrdinaryKeyWidth = 10;
     internal const int OrdinaryKeyHeight = 17;
+    internal const int RotaryWidth = 14;
+    internal const int JoystickWidth = 14;
+    internal const int EnterWidth = 24;
+    internal const int SpaceWidth = 32;
+
+    internal const int ChassisWidth = 100;
+    internal const int RowGutter = 2;
+    internal const int BottomGroupSeparation = 16;
+    internal const int BottomOuterMargin = 7;
+
+    private sealed record Track(string Id, MiniK15ControlKind Kind, int Width, string? Label = null);
+
+    private static readonly MiniK15Control[] TopRow = ComposeCenteredRow(MiniK15ControlBand.Top, 10,
+    [
+        new("rotary", MiniK15ControlKind.Rotary, RotaryWidth),
+        new("key-1", MiniK15ControlKind.Key, OrdinaryKeyWidth, "1"),
+        new("key-2", MiniK15ControlKind.Key, OrdinaryKeyWidth, "2"),
+        new("key-3", MiniK15ControlKind.Key, OrdinaryKeyWidth, "3"),
+        new("key-4", MiniK15ControlKind.Key, OrdinaryKeyWidth, "4"),
+        new("key-5", MiniK15ControlKind.Key, OrdinaryKeyWidth, "5"),
+        new("key-6", MiniK15ControlKind.Key, OrdinaryKeyWidth, "6")
+    ]);
+
+    private static readonly MiniK15Control[] MiddleRow = ComposeCenteredRow(MiniK15ControlBand.Middle, 39,
+    [
+        new("key-7", MiniK15ControlKind.Key, OrdinaryKeyWidth, "7"),
+        new("key-8", MiniK15ControlKind.Key, OrdinaryKeyWidth, "8"),
+        new("key-9", MiniK15ControlKind.Key, OrdinaryKeyWidth, "9"),
+        new("key-0", MiniK15ControlKind.Key, OrdinaryKeyWidth, "0"),
+        new("key-dot", MiniK15ControlKind.Key, OrdinaryKeyWidth, "."),
+        new("enter", MiniK15ControlKind.WideEnter, EnterWidth, "↵")
+    ]);
+
+    private static readonly MiniK15Control[] BottomRow = ComposeBottomRow();
 
     internal static IReadOnlyList<MiniK15Control> Controls { get; } =
-    [
-        new("rotary", MiniK15ControlBand.Top, MiniK15ControlKind.Rotary, 5, 8, 20, 22),
-        Key("key-1", MiniK15ControlBand.Top, 29, 10, "1"),
-        Key("key-2", MiniK15ControlBand.Top, 40, 10, "2"),
-        Key("key-3", MiniK15ControlBand.Top, 51, 10, "3"),
-        Key("key-4", MiniK15ControlBand.Top, 62, 10, "4"),
-        Key("key-5", MiniK15ControlBand.Top, 73, 10, "5"),
-        Key("key-6", MiniK15ControlBand.Top, 84, 10, "6"),
+        TopRow.Concat(MiddleRow).Concat(BottomRow).ToArray();
 
-        Key("key-7", MiniK15ControlBand.Middle, 8, 39, "7"),
-        Key("key-8", MiniK15ControlBand.Middle, 20, 39, "8"),
-        Key("key-9", MiniK15ControlBand.Middle, 32, 39, "9"),
-        Key("key-0", MiniK15ControlBand.Middle, 44, 39, "0"),
-        Key("key-dot", MiniK15ControlBand.Middle, 56, 39, "."),
-        new("enter", MiniK15ControlBand.Middle, MiniK15ControlKind.WideEnter, 68, 39, 17, 17, "↵"),
+    private static MiniK15Control[] ComposeCenteredRow(MiniK15ControlBand band, int y, IReadOnlyList<Track> tracks)
+    {
+        var rowWidth = tracks.Sum(track => track.Width) + RowGutter * (tracks.Count - 1);
+        return ComposeRow(band, y, tracks, (ChassisWidth - rowWidth) / 2);
+    }
 
-        Key("minus", MiniK15ControlBand.Bottom, 8, 67, "−"),
-        Key("plus", MiniK15ControlBand.Bottom, 20, 67, "+"),
-        new("long-bottom", MiniK15ControlBand.Bottom, MiniK15ControlKind.LongBottomKey, 34, 67, 33, 17, "SPACE"),
-        new("joystick", MiniK15ControlBand.Bottom, MiniK15ControlKind.Joystick, 81, 65, 15, 21)
-    ];
+    private static MiniK15Control[] ComposeRow(MiniK15ControlBand band, int y, IReadOnlyList<Track> tracks, int x)
+    {
+        var controls = new MiniK15Control[tracks.Count];
+        for (var index = 0; index < tracks.Count; index++)
+        {
+            var track = tracks[index];
+            controls[index] = new MiniK15Control(track.Id, band, track.Kind, x, y, track.Width,
+                track.Kind is MiniK15ControlKind.Rotary ? 22 : OrdinaryKeyHeight, track.Label);
+            x += track.Width + RowGutter;
+        }
+        return controls;
+    }
 
-    private static MiniK15Control Key(string id, MiniK15ControlBand band, int x, int y, string label) =>
-        new(id, band, MiniK15ControlKind.Key, x, y, OrdinaryKeyWidth, OrdinaryKeyHeight, label);
+    private static MiniK15Control[] ComposeBottomRow()
+    {
+        Track[] leftTracks =
+        [
+            new("minus", MiniK15ControlKind.Key, OrdinaryKeyWidth, "−"),
+            new("plus", MiniK15ControlKind.Key, OrdinaryKeyWidth, "+"),
+            new("long-bottom", MiniK15ControlKind.LongBottomKey, SpaceWidth, "SPACE")
+        ];
+        var leftWidth = leftTracks.Sum(track => track.Width) + RowGutter * (leftTracks.Length - 1);
+        var leftCluster = ComposeRow(MiniK15ControlBand.Bottom, 67, leftTracks, BottomOuterMargin);
+
+        // Keep joystick in its own right cell. The left cluster and outer edge
+        // share fixed row tokens, so the separation stays deliberate at all sizes.
+        var joystickX = BottomOuterMargin + leftWidth + BottomGroupSeparation;
+        var joystick = new MiniK15Control("joystick", MiniK15ControlBand.Bottom,
+            MiniK15ControlKind.Joystick, joystickX, 65, JoystickWidth, 21);
+        return [.. leftCluster, joystick];
+    }
 }

@@ -109,13 +109,44 @@ Require(ordinaryKeys.All(control => control.Kind == MiniK15ControlKind.Key &&
         ordinaryKeys.Select(control => (control.Width, control.Height)).Distinct().Count() == 1,
     "ALL_ORDINARY_KEYCAPS_SHARE_ONE_UNIT");
 Require(MiniK15ControlLayout.Controls.Single(control => control.Id == "enter") is
-            { Kind: MiniK15ControlKind.WideEnter, Width: > MiniK15ControlLayout.OrdinaryKeyWidth } &&
+            { Kind: MiniK15ControlKind.WideEnter, Width: MiniK15ControlLayout.EnterWidth } &&
         MiniK15ControlLayout.Controls.Single(control => control.Id == "long-bottom") is
-            { Kind: MiniK15ControlKind.LongBottomKey, Width: > MiniK15ControlLayout.OrdinaryKeyWidth } &&
-        MiniK15ControlLayout.Controls.Single(control => control.Id == "rotary").Kind == MiniK15ControlKind.Rotary &&
-        MiniK15ControlLayout.Controls.Single(control => control.Id == "joystick").Kind == MiniK15ControlKind.Joystick &&
+            { Kind: MiniK15ControlKind.LongBottomKey, Width: MiniK15ControlLayout.SpaceWidth } &&
+        MiniK15ControlLayout.Controls.Single(control => control.Id == "rotary") is
+            { Kind: MiniK15ControlKind.Rotary, Width: MiniK15ControlLayout.RotaryWidth } &&
+        MiniK15ControlLayout.Controls.Single(control => control.Id == "joystick") is
+            { Kind: MiniK15ControlKind.Joystick, Width: MiniK15ControlLayout.JoystickWidth } &&
         MiniK15ControlLayout.Controls.Count(control => control.Kind != MiniK15ControlKind.Key) == 4,
     "ONLY_FOUR_INTENTIONAL_SPECIAL_CONTROLS");
+
+var topRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Top)
+    .OrderBy(control => control.X).ToArray();
+var middleRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Middle)
+    .OrderBy(control => control.X).ToArray();
+var bottomRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Bottom)
+    .OrderBy(control => control.X).ToArray();
+static int Gap(MiniK15Control left, MiniK15Control right) => right.X - (left.X + left.Width);
+static bool UniformGutters(IReadOnlyList<MiniK15Control> row, int expectedGap) =>
+    row.Zip(row.Skip(1), Gap).All(gap => gap == expectedGap);
+static int RightEdge(IReadOnlyList<MiniK15Control> row) => row.Max(control => control.X + control.Width);
+Require(topRow.Length == 7 && middleRow.Length == 6 &&
+        UniformGutters(topRow, MiniK15ControlLayout.RowGutter) &&
+        UniformGutters(middleRow, MiniK15ControlLayout.RowGutter) &&
+        Math.Abs(topRow[0].X - middleRow[0].X) <= 1 &&
+        Math.Abs(RightEdge(topRow) - RightEdge(middleRow)) <= 1,
+    "TOP_MIDDLE_COMPOSED_ROWS_FILL_WITH_MATCHED_GUTTERS_AND_EDGES");
+Require(bottomRow.Length == 4 && Gap(bottomRow[0], bottomRow[1]) == MiniK15ControlLayout.RowGutter &&
+        Gap(bottomRow[1], bottomRow[2]) == MiniK15ControlLayout.RowGutter &&
+        bottomRow[0].X == MiniK15ControlLayout.BottomOuterMargin &&
+        Gap(bottomRow[2], bottomRow[3]) == MiniK15ControlLayout.BottomGroupSeparation &&
+        bottomRow[3].X + bottomRow[3].Width ==
+            MiniK15ControlLayout.ChassisWidth - MiniK15ControlLayout.BottomOuterMargin,
+    "BOTTOM_LEFT_CLUSTER_AND_DEDICATED_RIGHT_CELL");
+Require(Math.Abs(MiniK15ControlLayout.RotaryWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 1.4) < 0.01 &&
+        Math.Abs(MiniK15ControlLayout.JoystickWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 1.4) < 0.01 &&
+        Math.Abs(MiniK15ControlLayout.EnterWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 2.4) < 0.01 &&
+        Math.Abs(MiniK15ControlLayout.SpaceWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 3.2) < 0.01,
+    "SPECIAL_CONTROL_HARDWARE_RATIOS");
 foreach (var preset in Enum.GetValues<PetSizePreset>())
 {
     var geometry = CodexPetSizePolicy.Geometry(preset);
