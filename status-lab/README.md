@@ -14,7 +14,7 @@ PROFILE B = BLUE
 эффект -> что сейчас делает агент
 ```
 
-`NORMAL` не является notification-effect. Он восстанавливает exact onboard baseline. Status Lab наблюдает физический A/B и никогда не переключает hardware profile программно.
+`NORMAL` не является notification-effect. Он восстанавливает exact onboard baseline. Текущий Status Lab наблюдает физический A/B и не переключает hardware profile программно. Будущий clickable Mini-K15 исследуется отдельно; единственное планируемое исключение — явный пользовательский клик виртуального encoder с чтением текущего слота, выбором противоположного слота и точной проверкой readback. Это не реализовано и не меняет поведение текущего runtime. Автоматического или фонового выбора профиля не планируется. См. [clickable virtual K15 research contract](../devices/k15-pro/docs/clickable-virtual-k15.md).
 
 Текущие defaults:
 
@@ -192,7 +192,7 @@ lighting read  89
 active slot    82 selector 2
 ```
 
-Status Lab runtime не пишет firmware, reset, key mappings, macros или unknown power settings. Every touched lighting record основывается на exact rollback snapshot. Нет programmatic A/B switching.
+Status Lab runtime не пишет firmware, reset, key mappings, macros или unknown power settings. Every touched lighting record основывается на exact rollback snapshot. Current runtime has no programmatic A/B switching. The future explicit virtual-encoder gesture described above remains research/design only.
 
 Current physical K15 channel order:
 

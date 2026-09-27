@@ -2,6 +2,24 @@
 
 This backlog contains intentionally unresolved or deferred topics. Items here must not leak into release claims as if they were already proven.
 
+## P0 — clickable virtual K15 layout attestation
+
+Research the smallest read-only onboard attestation primitive that can prove the current hardware layout for a future clickable Mini-K15 in Codex Pet:
+
+- full relevant key-binding and macro readback; or
+- deterministic onboard configuration checksum/revision; or
+- equivalent hardware-derived token that changes when relevant bindings or macros change.
+
+Active hardware slot readback is proven, but it is separate from layout authority. Physical A/B switching does not modify local profile or macro files. An official single-profile `.KB.Config` export matched the corresponding live profile `KBconfig` for relevant controls in the observed state, with macro references resolved by exact GUIDs. These facts do not prove onboard layout readback or protect against reconfiguration elsewhere.
+
+Keep this research read-only until the exact protocol contract is proven. Do not probe unknown write commands. Arbitrary virtual dispatch remains blocked until onboard attestation can establish:
+
+```text
+VIRTUAL_ACTION(control,time) == PHYSICAL_K15_ACTION(control,hardware_active_slot_at_time)
+```
+
+See [clickable virtual K15 research contract](clickable-virtual-k15.md) for authority states, invalidation rules, explicit encoder-click boundary, and verification gates. This P0 item supersedes the earlier P1 question about whether encoder click/profile switching can be represented safely. It does not claim that implementation exists.
+
 ## P0 — usage-semantics analysis
 
 Goal: optimize future layouts from real conversation behavior rather than intuition alone.
@@ -77,7 +95,7 @@ Future questions:
 - should Profile B remain its current behavior permanently;
 - should scrolling be consistent across A/B for muscle memory;
 - is reasoning-level control useful enough to justify a host-side dispatcher later;
-- can encoder click/profile switching be represented and generated safely without destabilizing accepted profiles.
+- evaluate encoder rotation behavior by profile. The virtual encoder click transaction is covered by the P0 clickable virtual K15 research gate and is not current runtime behavior.
 
 ## P1 — combined two-profile package
 

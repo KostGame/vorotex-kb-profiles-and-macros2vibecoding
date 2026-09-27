@@ -22,6 +22,8 @@ K15 onboard state
 
 A physical control identity is not the same thing as its currently assigned output. For example, `TOP_2` is stored through `btn_KBKey_KeyPad2`, while one profile may assign Num 2 and another may assign B or a macro.
 
+For a future clickable Mini-K15 in Codex Pet, active hardware slot and local layout are separate authorities. Direct active-slot readback is proven, but full onboard binding/macro attestation is not. Local files alone cannot authorize virtual actions. See [Clickable virtual K15 research contract](clickable-virtual-k15.md) for the verified facts, fail-closed dispatch invariant, and first research gate.
+
 ## Proven apply path
 
 Controlled tests established the following practical path:
