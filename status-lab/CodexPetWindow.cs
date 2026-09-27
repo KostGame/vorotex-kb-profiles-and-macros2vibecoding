@@ -124,12 +124,7 @@ internal sealed class CodexPetWindow : Form
         return menu;
     }
 
-    private static string PetSizeLabel(PetSizePreset preset) => preset switch
-    {
-        PetSizePreset.Small => "Маленький",
-        PetSizePreset.Large => "Большой",
-        _ => "Средний"
-    };
+    private static string PetSizeLabel(PetSizePreset preset) => CodexPetSizePolicy.Label(preset);
 
     private static string TaskSurfaceLabel(PetTaskSurfaceState state) => state switch
     {
@@ -239,66 +234,18 @@ internal sealed class CodexPetWindow : Form
             var control = controls[index];
             var bounds = CodexPetSizePolicy.ControlBounds(body, control);
             var sample = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, index, controls.Count);
-            DrawControl(g, control, bounds, sample, palette);
+            CodexPetControlRenderer.Draw(g, control, bounds, KeyColor(sample, palette));
         }
 
-        DrawBadge(g, BadgeBounds(), _presentation.RelevantTaskCount, palette);
+        if (CodexPetBadgeRenderer.ShouldDraw(_presentation.RelevantTaskCount))
+        {
+            CodexPetBadgeRenderer.Draw(g, BadgeBounds(), CodexPetAdapter.FormatTaskCount(_presentation.RelevantTaskCount),
+                Color.FromArgb(palette.Primary.R, palette.Primary.G, palette.Primary.B));
+        }
 
     }
 
     internal Rectangle BadgeBounds() => CodexPetSizePolicy.Geometry(_sizePreset).BadgeBounds;
-
-    private static void DrawBadge(Graphics graphics, Rectangle bounds, int count, PetPalette palette)
-    {
-        if (count == 0) return;
-        var accent = palette.IsNeutral ? Color.FromArgb(103, 139, 153) :
-            Color.FromArgb(palette.Primary.R, palette.Primary.G, palette.Primary.B);
-        using var fill = new SolidBrush(Color.FromArgb(238, 31, 36, 45));
-        using var outline = new Pen(Color.FromArgb(210, accent), 1);
-        FillRounded(graphics, bounds, 8, fill);
-        DrawRounded(graphics, bounds, 8, outline);
-        using var text = new SolidBrush(Color.FromArgb(235, accent));
-        using var font = new Font("Segoe UI", 8f, FontStyle.Bold, GraphicsUnit.Pixel);
-        using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        graphics.DrawString(CodexPetAdapter.FormatTaskCount(count), font, text, bounds, format);
-    }
-
-    private static void DrawControl(Graphics graphics, MiniK15Control control, Rectangle bounds, VisualEffectSample sample,
-        PetPalette palette)
-    {
-        using var controlFill = new SolidBrush(KeyColor(sample, palette));
-        using var controlOutline = new Pen(Color.FromArgb(24, 28, 35), 1);
-        if (control.Kind is MiniK15ControlKind.Rotary or MiniK15ControlKind.Joystick)
-        {
-            var size = Math.Min(bounds.Width, bounds.Height);
-            bounds = new Rectangle(bounds.X + (bounds.Width - size) / 2, bounds.Y + (bounds.Height - size) / 2, size, size);
-            graphics.FillEllipse(controlFill, bounds);
-            graphics.DrawEllipse(controlOutline, bounds);
-            var inset = control.Kind == MiniK15ControlKind.Rotary ? 7 : 5;
-            using var detail = new Pen(Color.FromArgb(145, 180, 190, 198), 1);
-            graphics.DrawEllipse(detail, Rectangle.Inflate(bounds, -inset, -inset));
-            if (control.Kind == MiniK15ControlKind.Joystick)
-            {
-                var center = new Point(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
-                var arm = Math.Max(4, bounds.Width / 5);
-                graphics.DrawLine(detail, center.X - arm, center.Y, center.X + arm, center.Y);
-                graphics.DrawLine(detail, center.X, center.Y - arm, center.X, center.Y + arm);
-            }
-            return;
-        }
-
-        var radius = control.Kind == MiniK15ControlKind.LongBottomKey ? 4 : 3;
-        FillRounded(graphics, bounds, radius, controlFill);
-        DrawRounded(graphics, bounds, radius, controlOutline);
-        if (!string.IsNullOrWhiteSpace(control.Label))
-        {
-            using var label = new SolidBrush(Color.FromArgb(215, 235, 240, 244));
-            using var font = new Font("Segoe UI", control.Kind == MiniK15ControlKind.LongBottomKey ? 7f : 8f,
-                FontStyle.Bold, GraphicsUnit.Pixel);
-            using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            graphics.DrawString(control.Label, font, label, bounds, format);
-        }
-    }
 
     private static Color KeyColor(VisualEffectSample sample, PetPalette palette)
     {

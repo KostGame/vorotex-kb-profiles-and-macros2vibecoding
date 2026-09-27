@@ -4,9 +4,12 @@ namespace Vorotex.K15.StatusLab;
 
 internal enum PetSizePreset
 {
+    ExtraSmall,
     Small,
     Medium,
-    Large
+    Large,
+    ExtraLarge,
+    Huge
 }
 
 internal readonly record struct CodexPetSizeGeometry(
@@ -21,16 +24,63 @@ internal static class CodexPetSizePolicy
     internal static PetSizePreset Select(PetSizePreset preset) =>
         Enum.IsDefined(preset) ? preset : DefaultPreset;
 
-    internal static CodexPetSizeGeometry Geometry(PetSizePreset preset) => Select(preset) switch
+    private static readonly Rectangle ReferenceKeyboardBody = new(11, 26, 138, 122);
+    private static readonly Rectangle ReferenceBadge = new(121, 5, 33, 19);
+
+    internal static string Label(PetSizePreset preset) => Select(preset) switch
     {
-        PetSizePreset.Small => new(new Size(128, 128), new Rectangle(9, 22, 111, 97), new Rectangle(96, 3, 29, 18)),
-        PetSizePreset.Large => new(new Size(192, 192), new Rectangle(13, 31, 166, 146), new Rectangle(145, 6, 40, 23)),
-        _ => new(new Size(160, 160), new Rectangle(11, 26, 138, 122), new Rectangle(121, 5, 33, 19))
+        PetSizePreset.ExtraSmall => "Очень маленький",
+        PetSizePreset.Small => "Маленький",
+        PetSizePreset.Medium => "Средний",
+        PetSizePreset.Large => "Большой",
+        PetSizePreset.ExtraLarge => "Очень большой",
+        PetSizePreset.Huge => "Огромный",
+        _ => "Средний"
     };
 
-    internal static Rectangle ControlBounds(Rectangle body, MiniK15Control control) => new(
-        body.X + control.X * body.Width / 100,
-        body.Y + control.Y * body.Height / 100,
-        Math.Max(4, control.Width * body.Width / 100),
-        Math.Max(4, control.Height * body.Height / 100));
+    internal static CodexPetSizeGeometry Geometry(PetSizePreset preset)
+    {
+        var size = Select(preset) switch
+        {
+            PetSizePreset.ExtraSmall => 96,
+            PetSizePreset.Small => 128,
+            PetSizePreset.Medium => 160,
+            PetSizePreset.Large => 192,
+            PetSizePreset.ExtraLarge => 256,
+            PetSizePreset.Huge => 320,
+            _ => 160
+        };
+        return new(new Size(size, size), Scale(ReferenceKeyboardBody, size), Scale(ReferenceBadge, size));
+    }
+
+    private static Rectangle Scale(Rectangle bounds, int size) => new(
+        (int)Math.Round(bounds.X * size / 160d),
+        (int)Math.Round(bounds.Y * size / 160d),
+        (int)Math.Round(bounds.Width * size / 160d),
+        (int)Math.Round(bounds.Height * size / 160d));
+
+    internal static Rectangle ControlBounds(Rectangle body, MiniK15Control control)
+    {
+        var x = body.X + control.X * body.Width / 100;
+        var y = body.Y + control.Y * body.Height / 100;
+        var width = Math.Max(4, control.Width * body.Width / 100);
+        if (control.Kind == MiniK15ControlKind.SquareKey)
+        {
+            var rowCenterY = body.Y + (control.Y + control.Height / 2d) * body.Height / 100d;
+            return new Rectangle(x, (int)Math.Round(rowCenterY - width / 2d), width, width);
+        }
+
+        var rowCenter = body.Y + (control.Y + control.Height / 2d) * body.Height / 100d;
+        if (control.Kind is MiniK15ControlKind.Rotary or MiniK15ControlKind.Joystick)
+        {
+            var circleHeight = Math.Max(4, control.Height * body.Height / 100);
+            return new Rectangle(x, (int)Math.Round(rowCenter - circleHeight / 2d), width, circleHeight);
+        }
+
+        var keycapHeight = KeycapPixelHeight(body);
+        return new Rectangle(x, (int)Math.Round(rowCenter - keycapHeight / 2d), width, keycapHeight);
+    }
+
+    internal static int KeycapPixelHeight(Rectangle body) =>
+        Math.Max(4, MiniK15ControlLayout.OrdinaryKeyWidth * body.Width / MiniK15ControlLayout.ChassisWidth);
 }
