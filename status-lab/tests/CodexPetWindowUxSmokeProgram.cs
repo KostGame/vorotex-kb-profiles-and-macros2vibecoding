@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using Vorotex.K15.StatusLab;
 
 static void Require(bool condition, string name)
@@ -110,17 +111,28 @@ Require(expectedPetSizes.Keys.All(preset => !string.IsNullOrWhiteSpace(CodexPetS
         CodexPetSizePolicy.Label(PetSizePreset.ExtraLarge) == "Очень большой" &&
         CodexPetSizePolicy.Label(PetSizePreset.Huge) == "Огромный",
     "PET_SIZE_MENU_LABELS");
+var blueBadgeStyle = CodexPetBadgeVisualPolicy.Resolve(Color.Blue);
+var redBadgeStyle = CodexPetBadgeVisualPolicy.Resolve(Color.Red);
+Require(blueBadgeStyle.ContrastRatio >= 4.5 && redBadgeStyle.ContrastRatio >= 4.5 &&
+        Math.Abs(blueBadgeStyle.ContrastRatio - CodexPetBadgeVisualPolicy.ContrastRatio(
+            blueBadgeStyle.Foreground, blueBadgeStyle.Fill)) < 0.001 &&
+        Math.Abs(redBadgeStyle.ContrastRatio - CodexPetBadgeVisualPolicy.ContrastRatio(
+            redBadgeStyle.Foreground, redBadgeStyle.Fill)) < 0.001 &&
+        blueBadgeStyle.Fill != redBadgeStyle.Fill && blueBadgeStyle.Outline != redBadgeStyle.Outline,
+    $"TASK_BADGE_PROFILE_DERIVED_CONTRAST_BLUE_{blueBadgeStyle.ContrastRatio:F2}_RED_{redBadgeStyle.ContrastRatio:F2}");
 var ordinaryKeyIds = new[]
 {
     "key-1", "key-2", "key-3", "key-4", "key-5", "key-6",
     "key-7", "key-8", "key-9", "key-0", "key-dot", "minus", "plus"
 };
 var ordinaryKeys = ordinaryKeyIds.Select(id => MiniK15ControlLayout.Controls.Single(control => control.Id == id)).ToArray();
-Require(ordinaryKeys.All(control => control.Kind == MiniK15ControlKind.Key &&
-        control.Width == MiniK15ControlLayout.OrdinaryKeyWidth &&
-        control.Height == MiniK15ControlLayout.OrdinaryKeyHeight) &&
-        ordinaryKeys.Select(control => (control.Width, control.Height)).Distinct().Count() == 1,
-    "ALL_ORDINARY_KEYCAPS_SHARE_ONE_UNIT");
+var digitKeys = ordinaryKeys.Where(control => control.Id.StartsWith("key-", StringComparison.Ordinal)).ToArray();
+var modifierKeys = ordinaryKeys.Where(control => control.Id is "minus" or "plus").ToArray();
+Require(digitKeys.Length == 11 && digitKeys.All(control => control.Kind == MiniK15ControlKind.SquareKey) &&
+        modifierKeys.Length == 2 && modifierKeys.All(control => control.Kind == MiniK15ControlKind.RectangularKey) &&
+        ordinaryKeys.All(control => control.Width == MiniK15ControlLayout.OrdinaryKeyWidth &&
+            control.Height == MiniK15ControlLayout.OrdinaryKeyHeight),
+    "DIGITS_DOT_SQUARE_MODIFIERS_RECTANGULAR");
 Require(MiniK15ControlLayout.Controls.Single(control => control.Id == "enter") is
             { Kind: MiniK15ControlKind.WideEnter, Width: MiniK15ControlLayout.EnterWidth } &&
         MiniK15ControlLayout.Controls.Single(control => control.Id == "long-bottom") is
@@ -129,8 +141,9 @@ Require(MiniK15ControlLayout.Controls.Single(control => control.Id == "enter") i
             { Kind: MiniK15ControlKind.Rotary, Width: MiniK15ControlLayout.RotaryWidth } &&
         MiniK15ControlLayout.Controls.Single(control => control.Id == "joystick") is
             { Kind: MiniK15ControlKind.Joystick, Width: MiniK15ControlLayout.JoystickWidth } &&
-        MiniK15ControlLayout.Controls.Count(control => control.Kind != MiniK15ControlKind.Key) == 4,
-    "ONLY_FOUR_INTENTIONAL_SPECIAL_CONTROLS");
+        MiniK15ControlLayout.Controls.Count(control => control.Kind is MiniK15ControlKind.Rotary or
+            MiniK15ControlKind.Joystick or MiniK15ControlKind.WideEnter or MiniK15ControlKind.LongBottomKey) == 4,
+    "EXPLICIT_SPECIAL_CONTROL_KINDS");
 
 var topRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Top)
     .OrderBy(control => control.X).ToArray();
@@ -175,15 +188,63 @@ foreach (var preset in Enum.GetValues<PetSizePreset>())
             controlBounds.All(item => geometry.KeyboardBodyBounds.Contains(item.Bounds)) &&
             controlBounds.All(item => new Rectangle(Point.Empty, geometry.WindowSize).Contains(item.Bounds)),
         $"PET_SIZE_GEOMETRY_{preset}");
+    var squareBounds = controlBounds.Where(item => item.Control.Kind == MiniK15ControlKind.SquareKey).ToArray();
+    var rectangularBounds = controlBounds.Where(item => item.Control.Kind is MiniK15ControlKind.RectangularKey or
+        MiniK15ControlKind.WideEnter or MiniK15ControlKind.LongBottomKey).ToArray();
+    Require(squareBounds.Length == 11 && squareBounds.All(item =>
+            item.Bounds.Width == item.Bounds.Height &&
+            Math.Abs((item.Bounds.Top + item.Bounds.Height / 2d) -
+                (geometry.KeyboardBodyBounds.Top +
+                 (item.Control.Y + item.Control.Height / 2d) * geometry.KeyboardBodyBounds.Height / 100d)) <= 1d) &&
+        rectangularBounds.Length == 4 && rectangularBounds.All(item => item.Bounds.Width != item.Bounds.Height),
+        $"PET_PIXEL_KEYCAP_SHAPES_AND_ALL_RECTANGLES_{preset}");
+    var circleControls = controlBounds.Where(item => item.Control.Kind is MiniK15ControlKind.Rotary or
+        MiniK15ControlKind.Joystick).ToArray();
+    var circles = circleControls.Select(item => CodexPetControlVisualPolicy.CircleBounds(item.Bounds)).ToArray();
+    Require(circles.Length == 2 && circles.All(circle => circle.Width == circle.Height) &&
+        circles.Zip(circleControls, (circle, item) => Math.Abs((circle.Top + circle.Height / 2d) -
+            (geometry.KeyboardBodyBounds.Top +
+             (item.Control.Y + item.Control.Height / 2d) * geometry.KeyboardBodyBounds.Height / 100d)) <= 1d).All(aligned => aligned),
+        $"PET_CIRCULAR_BOUNDS_AND_ROW_CENTER_ALIGNMENT_{preset}");
+    var rings = circles.Select(circle =>
+        (Circle: circle, Inner: CodexPetControlVisualPolicy.InnerRingBounds(circle))).ToArray();
+    Require(rings.All(ring => ring.Circle.Left < ring.Inner.Left && ring.Inner.Top > ring.Circle.Top &&
+            ring.Inner.Width == ring.Inner.Height &&
+            ring.Inner.Left - ring.Circle.Left == ring.Circle.Right - ring.Inner.Right &&
+            ring.Inner.Top - ring.Circle.Top == ring.Circle.Bottom - ring.Inner.Bottom) &&
+        CodexPetControlVisualPolicy.RingInset(rings[0].Circle.Width) ==
+            CodexPetControlVisualPolicy.RingInset(rings[1].Circle.Width),
+        $"PET_CIRCLE_RING_INSETS_SYMMETRIC_{preset}");
     Require(controlBounds.SelectMany((left, index) => controlBounds.Skip(index + 1)
                 .Select(right => (left, right)))
             .All(pair => !pair.left.Bounds.IntersectsWith(pair.right.Bounds)),
         $"PET_CONTROL_BOUNDS_DO_NOT_OVERLAP_{preset}");
     Require(controlBounds.Where(item => !string.IsNullOrWhiteSpace(item.Control.Label)).All(item =>
-            item.Bounds.Width >= item.Control.Label!.Length * (item.Control.Kind == MiniK15ControlKind.LongBottomKey ? 4 : 5) + 2 &&
-            item.Bounds.Height >= 10),
-        $"PET_CONTROL_LABELS_FIT_{preset}");
+            CodexPetControlVisualPolicy.LabelFontSize(item.Control, item.Bounds) > 0 &&
+            CodexPetControlVisualPolicy.LabelFontSize(item.Control, item.Bounds) <=
+                Math.Max(1, item.Bounds.Height - 2) * (item.Control.Kind switch
+                {
+                    MiniK15ControlKind.SquareKey => 0.76f,
+                    MiniK15ControlKind.RectangularKey => 0.60f,
+                    MiniK15ControlKind.WideEnter => 0.54f,
+                    MiniK15ControlKind.LongBottomKey => 0.52f,
+                    _ => 0.5f
+                }) + 0.01f &&
+            CodexPetControlVisualPolicy.LabelFontSize(item.Control, item.Bounds) * item.Control.Label!.Length *
+                (item.Control.Kind == MiniK15ControlKind.LongBottomKey ? 0.62f : 0.70f) <=
+                Math.Max(1, item.Bounds.Width - 2) + 0.01f),
+        $"PET_CONTROL_LABEL_FONTS_FIT_{preset}");
 }
+var orderedPresets = Enum.GetValues<PetSizePreset>();
+var sampleSquare = MiniK15ControlLayout.Controls.Single(control => control.Id == "key-1");
+var sampleModifier = MiniK15ControlLayout.Controls.Single(control => control.Id == "plus");
+var squareFontSizes = orderedPresets.Select(preset => CodexPetControlVisualPolicy.LabelFontSize(sampleSquare,
+    CodexPetSizePolicy.ControlBounds(CodexPetSizePolicy.Geometry(preset).KeyboardBodyBounds, sampleSquare))).ToArray();
+var modifierFontSizes = orderedPresets.Select(preset => CodexPetControlVisualPolicy.LabelFontSize(sampleModifier,
+    CodexPetSizePolicy.ControlBounds(CodexPetSizePolicy.Geometry(preset).KeyboardBodyBounds, sampleModifier))).ToArray();
+Require(squareFontSizes.Zip(squareFontSizes.Skip(1), (a, b) => b > a).All(grows => grows) &&
+        modifierFontSizes.Zip(modifierFontSizes.Skip(1), (a, b) => b > a).All(grows => grows),
+    "PET_KEY_LABEL_FONT_POLICY_STRICTLY_GROWS_WITH_PRESET");
 Require(CodexPetSizePolicy.Select((PetSizePreset)99) == PetSizePreset.Medium, "PET_SIZE_INVALID_DEFAULTS");
 
 var legacy = CodexPetUiPreferenceStore.Deserialize("{\"presentationState\":\"Collapsed\"}");
@@ -251,3 +312,96 @@ finally
 }
 
 Console.WriteLine("CODEX_PET_WINDOW_UX_SMOKE_PASSED");
+
+if (args.Length > 0)
+{
+    if (args.Length != 2 || args[0] != "--render-proof")
+        throw new ArgumentException("Usage: CodexPetWindowUxSmoke --render-proof <output-directory>");
+    RenderVisualProof(Path.GetFullPath(args[1]));
+}
+
+static void RenderVisualProof(string outputDirectory)
+{
+    Directory.CreateDirectory(outputDirectory);
+    var presets = Enum.GetValues<PetSizePreset>();
+    var tileWidth = 644;
+    var tileHeight = 348;
+    using var montage = new Bitmap(tileWidth * 3, tileHeight * 2);
+    using var montageGraphics = Graphics.FromImage(montage);
+    montageGraphics.Clear(Color.FromArgb(22, 26, 32));
+    montageGraphics.SmoothingMode = SmoothingMode.AntiAlias;
+    using var titleFont = new Font("Segoe UI", 16f, FontStyle.Bold, GraphicsUnit.Pixel);
+    using var titleBrush = new SolidBrush(Color.Gainsboro);
+
+    for (var index = 0; index < presets.Length; index++)
+    {
+        var preset = presets[index];
+        var geometry = CodexPetSizePolicy.Geometry(preset);
+        using var blue = RenderPreset(geometry, Color.Blue);
+        using var red = RenderPreset(geometry, Color.Red);
+        blue.Save(Path.Combine(outputDirectory, $"{preset}-blue.png"), System.Drawing.Imaging.ImageFormat.Png);
+        red.Save(Path.Combine(outputDirectory, $"{preset}-red.png"), System.Drawing.Imaging.ImageFormat.Png);
+
+        using var pair = new Bitmap(geometry.WindowSize.Width * 2, geometry.WindowSize.Height);
+        using (var pairGraphics = Graphics.FromImage(pair))
+        {
+            pairGraphics.Clear(Color.FromArgb(22, 26, 32));
+            pairGraphics.DrawImageUnscaled(blue, 0, 0);
+            pairGraphics.DrawImageUnscaled(red, geometry.WindowSize.Width, 0);
+        }
+        pair.Save(Path.Combine(outputDirectory, $"{preset}.png"), System.Drawing.Imaging.ImageFormat.Png);
+
+        var tileX = index % 3 * tileWidth;
+        var tileY = index / 3 * tileHeight;
+        montageGraphics.DrawString($"{preset}: BLUE | RED", titleFont, titleBrush, tileX + 8, tileY + 5);
+        var pairScale = Math.Min(1d, Math.Min((tileWidth - 16d) / pair.Width, (tileHeight - 42d) / pair.Height));
+        var drawWidth = (int)Math.Round(pair.Width * pairScale);
+        var drawHeight = (int)Math.Round(pair.Height * pairScale);
+        montageGraphics.DrawImage(pair, tileX + 8, tileY + 34, drawWidth, drawHeight);
+    }
+
+    montage.Save(Path.Combine(outputDirectory, "all-presets.png"), System.Drawing.Imaging.ImageFormat.Png);
+    Console.WriteLine($"VISUAL_PROOF={outputDirectory}");
+}
+
+static Bitmap RenderPreset(CodexPetSizeGeometry geometry, Color accent)
+{
+    var bitmap = new Bitmap(geometry.WindowSize.Width, geometry.WindowSize.Height);
+    using var graphics = Graphics.FromImage(bitmap);
+    graphics.Clear(Color.FromArgb(22, 26, 32));
+    graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+    var body = geometry.KeyboardBodyBounds;
+    using var chassis = new SolidBrush(Color.FromArgb(40, 45, 54));
+    using var outline = new Pen(Color.FromArgb(112, 125, 140), 2);
+    using var bodyPath = RoundedPath(body, Math.Max(6, body.Width / 14));
+    graphics.FillPath(chassis, bodyPath);
+    graphics.DrawPath(outline, bodyPath);
+    using var divider = new Pen(Color.FromArgb(92, 112, 126, 136), 1);
+    graphics.DrawLine(divider, body.Left + 6, body.Top + body.Height * 35 / 100,
+        body.Right - 6, body.Top + body.Height * 35 / 100);
+    graphics.DrawLine(divider, body.Left + 6, body.Top + body.Height * 60 / 100,
+        body.Right - 6, body.Top + body.Height * 60 / 100);
+
+    var keyFill = Color.FromArgb(225,
+        (int)Math.Round(accent.R + (255 - accent.R) * 0.18),
+        (int)Math.Round(accent.G + (255 - accent.G) * 0.18),
+        (int)Math.Round(accent.B + (255 - accent.B) * 0.18));
+    foreach (var control in MiniK15ControlLayout.Controls)
+        CodexPetControlRenderer.Draw(graphics, control,
+            CodexPetSizePolicy.ControlBounds(body, control), keyFill);
+    CodexPetBadgeRenderer.Draw(graphics, geometry.BadgeBounds, "1", accent);
+    return bitmap;
+}
+
+static GraphicsPath RoundedPath(Rectangle rectangle, int radius)
+{
+    var diameter = Math.Min(radius * 2, Math.Min(rectangle.Width, rectangle.Height));
+    var path = new GraphicsPath();
+    path.AddArc(rectangle.X, rectangle.Y, diameter, diameter, 180, 90);
+    path.AddArc(rectangle.Right - diameter, rectangle.Y, diameter, diameter, 270, 90);
+    path.AddArc(rectangle.Right - diameter, rectangle.Bottom - diameter, diameter, diameter, 0, 90);
+    path.AddArc(rectangle.X, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
+    path.CloseFigure();
+    return path;
+}

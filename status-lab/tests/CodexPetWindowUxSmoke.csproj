@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
@@ -14,5 +15,9 @@
     <Compile Include="..\CodexPetSizePolicy.cs" Link="CodexPetSizePolicy.cs" />
     <Compile Include="..\LiveDashboardPathPolicy.cs" Link="LiveDashboardPathPolicy.cs" />
     <Compile Include="..\MiniK15ControlLayout.cs" Link="MiniK15ControlLayout.cs" />
+    <Compile Include="..\CodexPetControlVisualPolicy.cs" Link="CodexPetControlVisualPolicy.cs" />
+    <Compile Include="..\CodexPetBadgeVisualPolicy.cs" Link="CodexPetBadgeVisualPolicy.cs" />
+    <Compile Include="..\CodexPetControlRenderer.cs" Link="CodexPetControlRenderer.cs" />
+    <Compile Include="..\CodexPetBadgeRenderer.cs" Link="CodexPetBadgeRenderer.cs" />
   </ItemGroup>
 </Project>

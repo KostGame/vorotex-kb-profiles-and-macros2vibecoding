@@ -59,9 +59,19 @@ internal static class CodexPetSizePolicy
         (int)Math.Round(bounds.Width * size / 160d),
         (int)Math.Round(bounds.Height * size / 160d));
 
-    internal static Rectangle ControlBounds(Rectangle body, MiniK15Control control) => new(
-        body.X + control.X * body.Width / 100,
-        body.Y + control.Y * body.Height / 100,
-        Math.Max(4, control.Width * body.Width / 100),
-        Math.Max(4, control.Height * body.Height / 100));
+    internal static Rectangle ControlBounds(Rectangle body, MiniK15Control control)
+    {
+        var x = body.X + control.X * body.Width / 100;
+        var y = body.Y + control.Y * body.Height / 100;
+        var width = Math.Max(4, control.Width * body.Width / 100);
+        var height = Math.Max(4, control.Height * body.Height / 100);
+        if (control.Kind is MiniK15ControlKind.SquareKey or MiniK15ControlKind.Rotary or MiniK15ControlKind.Joystick)
+        {
+            var rowCenterY = body.Y + (control.Y + control.Height / 2d) * body.Height / 100d;
+            if (control.Kind == MiniK15ControlKind.SquareKey)
+                return new Rectangle(x, (int)Math.Round(rowCenterY - width / 2d), width, width);
+            y = (int)Math.Round(rowCenterY - height / 2d);
+        }
+        return new Rectangle(x, y, width, height);
+    }
 }

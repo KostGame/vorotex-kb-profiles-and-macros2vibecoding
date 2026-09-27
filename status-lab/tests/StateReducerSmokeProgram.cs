@@ -697,10 +697,10 @@ Require(k15Controls.Count(control => control.Band == MiniK15ControlBand.Bottom) 
 Require(k15Controls.Any(control => control.Kind == MiniK15ControlKind.Rotary), "HAS_ROTARY_CONTROL");
 Require(k15Controls.Any(control => control.Kind == MiniK15ControlKind.Joystick), "HAS_JOYSTICK_CONTROL");
 Require(k15Controls.Single(control => control.Kind == MiniK15ControlKind.WideEnter).Width >
-        k15Controls.Where(control => control.Band == MiniK15ControlBand.Middle && control.Kind == MiniK15ControlKind.Key).Max(control => control.Width),
+        k15Controls.Where(control => control.Band == MiniK15ControlBand.Middle && control.Kind == MiniK15ControlKind.SquareKey).Max(control => control.Width),
     "HAS_WIDE_ENTER");
 Require(k15Controls.Single(control => control.Kind == MiniK15ControlKind.LongBottomKey).Width >
-        k15Controls.Where(control => control.Band == MiniK15ControlBand.Bottom && control.Kind == MiniK15ControlKind.Key).Max(control => control.Width),
+        k15Controls.Where(control => control.Band == MiniK15ControlBand.Bottom && control.Kind == MiniK15ControlKind.RectangularKey).Max(control => control.Width),
     "HAS_LONG_BOTTOM_KEY");
 Console.WriteLine("MINI_K15_REFERENCE_LAYOUT_SMOKE=PASS");
 var customPetConfig = StatusLabConfig.CreateDefault();

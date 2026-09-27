@@ -6,7 +6,8 @@ namespace Vorotex.K15.StatusLab;
 internal enum MiniK15ControlKind
 {
     Rotary,
-    Key,
+    SquareKey,
+    RectangularKey,
     WideEnter,
     LongBottomKey,
     Joystick
@@ -44,21 +45,21 @@ internal static class MiniK15ControlLayout
     private static readonly MiniK15Control[] TopRow = ComposeCenteredRow(MiniK15ControlBand.Top, 10,
     [
         new("rotary", MiniK15ControlKind.Rotary, RotaryWidth),
-        new("key-1", MiniK15ControlKind.Key, OrdinaryKeyWidth, "1"),
-        new("key-2", MiniK15ControlKind.Key, OrdinaryKeyWidth, "2"),
-        new("key-3", MiniK15ControlKind.Key, OrdinaryKeyWidth, "3"),
-        new("key-4", MiniK15ControlKind.Key, OrdinaryKeyWidth, "4"),
-        new("key-5", MiniK15ControlKind.Key, OrdinaryKeyWidth, "5"),
-        new("key-6", MiniK15ControlKind.Key, OrdinaryKeyWidth, "6")
+        new("key-1", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "1"),
+        new("key-2", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "2"),
+        new("key-3", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "3"),
+        new("key-4", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "4"),
+        new("key-5", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "5"),
+        new("key-6", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "6")
     ]);
 
     private static readonly MiniK15Control[] MiddleRow = ComposeCenteredRow(MiniK15ControlBand.Middle, 39,
     [
-        new("key-7", MiniK15ControlKind.Key, OrdinaryKeyWidth, "7"),
-        new("key-8", MiniK15ControlKind.Key, OrdinaryKeyWidth, "8"),
-        new("key-9", MiniK15ControlKind.Key, OrdinaryKeyWidth, "9"),
-        new("key-0", MiniK15ControlKind.Key, OrdinaryKeyWidth, "0"),
-        new("key-dot", MiniK15ControlKind.Key, OrdinaryKeyWidth, "."),
+        new("key-7", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "7"),
+        new("key-8", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "8"),
+        new("key-9", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "9"),
+        new("key-0", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "0"),
+        new("key-dot", MiniK15ControlKind.SquareKey, OrdinaryKeyWidth, "."),
         new("enter", MiniK15ControlKind.WideEnter, EnterWidth, "↵")
     ]);
 
@@ -80,7 +81,7 @@ internal static class MiniK15ControlLayout
         {
             var track = tracks[index];
             controls[index] = new MiniK15Control(track.Id, band, track.Kind, x, y, track.Width,
-                track.Kind is MiniK15ControlKind.Rotary ? 22 : OrdinaryKeyHeight, track.Label);
+                OrdinaryKeyHeight, track.Label);
             x += track.Width + RowGutter;
         }
         return controls;
@@ -90,8 +91,8 @@ internal static class MiniK15ControlLayout
     {
         Track[] leftTracks =
         [
-            new("minus", MiniK15ControlKind.Key, OrdinaryKeyWidth, "−"),
-            new("plus", MiniK15ControlKind.Key, OrdinaryKeyWidth, "+"),
+            new("minus", MiniK15ControlKind.RectangularKey, OrdinaryKeyWidth, "−"),
+            new("plus", MiniK15ControlKind.RectangularKey, OrdinaryKeyWidth, "+"),
             new("long-bottom", MiniK15ControlKind.LongBottomKey, SpaceWidth, "SPACE")
         ];
         var leftWidth = leftTracks.Sum(track => track.Width) + RowGutter * (leftTracks.Length - 1);
@@ -101,7 +102,7 @@ internal static class MiniK15ControlLayout
         // share fixed row tokens, so the separation stays deliberate at all sizes.
         var joystickX = BottomOuterMargin + leftWidth + BottomJoystickGap;
         var joystick = new MiniK15Control("joystick", MiniK15ControlBand.Bottom,
-            MiniK15ControlKind.Joystick, joystickX, 65, JoystickWidth, 21);
+            MiniK15ControlKind.Joystick, joystickX, 67, JoystickWidth, OrdinaryKeyHeight);
         return [.. leftCluster, joystick];
     }
 }
