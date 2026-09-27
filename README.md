@@ -59,6 +59,8 @@ The notification path intentionally polls current toasts instead of subscribing 
 
 See [`status-lab/README.md`](status-lab/README.md) for the canary procedure.
 
+Research for a future clickable Mini-K15 in Codex Pet is documented in [`devices/k15-pro/docs/clickable-virtual-k15.md`](devices/k15-pro/docs/clickable-virtual-k15.md). Active hardware slot readback is proven; onboard layout attestation and clickable dispatch are not implemented.
+
 ## Legacy/research direct-file installation
 
 Direct mutation of live VOROTEX installation files is **not** the normal installation path anymore. It remains documented only as a research/recovery technique for old experiments.
@@ -91,7 +93,9 @@ The generated files preserve the serialized lighting banks from the canonical so
 
 VOROTEX Import is non-pruning: repeated imports can leave duplicate or stale macro groups. Remove duplicates deliberately in the native GUI rather than assuming import state is deterministic from file bytes alone.
 
-### Current V1.2 key maps
+### V1.2 RC1 release-baseline key map (reference only)
+
+This table describes the historical V1.2 RC1 release baseline. It is not an authority for a current live keyboard layout; individual devices may have different active bindings. See the [clickable virtual K15 research contract](devices/k15-pro/docs/clickable-virtual-k15.md) for the current attestation boundary.
 
 | Key | Profile A — TOOLS_AUTH | Profile B — MAIN_VIBECODING |
 |---|---|---|
