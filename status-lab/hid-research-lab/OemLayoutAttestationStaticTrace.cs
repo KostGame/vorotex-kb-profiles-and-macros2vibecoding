@@ -396,30 +396,42 @@ internal static partial class OemNdeviceAggregateCopyAnalyzer
         var get = transports.SingleOrDefault(x => x.ImportName == "HidD_GetFeature");
         if (get is null) return null;
 
+        // OEM semantic reads consistently call one internal helper with the
+        // five-argument feature-request ABI:
+        //   command, selector, address, length, data
+        // The five arguments are pushed contiguously immediately before the
+        // direct call. This excludes the security-cookie helper and the raw
+        // SetFeature transport wrapper that fooled the earlier frequency
+        // heuristic.
         var counts = new Dictionary<uint, int>();
-        foreach (var caller in get.DirectCallers)
+        foreach (var operation in RecoverReadOperations(pe, transports))
         {
-            foreach (var line in caller.Context)
+            var decoded = DecodeRange(pe, operation.FunctionRva, FindFunctionEndByPadding(pe, operation.FunctionRva));
+            for (var i = 5; i < decoded.Count; i++)
             {
-                var marker = " call ";
-                var at = line.IndexOf(marker, StringComparison.Ordinal);
-                if (at < 0) continue;
-                var targetText = line[(at + marker.Length)..].Trim();
-                if (!targetText.EndsWith('h') || targetText.Length != 9) continue;
-                if (!uint.TryParse(targetText[..^1], System.Globalization.NumberStyles.HexNumber,
-                        System.Globalization.CultureInfo.InvariantCulture, out var target)) continue;
-                if (target < pe.TextStart || target >= pe.TextEnd || target == get.FunctionStartRva) continue;
+                var ins = decoded[i].Instruction;
+                if (ins.Mnemonic != Mnemonic.Call || !IsDirectBranch(ins)) continue;
+
+                var args = decoded.Skip(i - 5).Take(5).ToArray();
+                if (args.Any(x => x.Instruction.Mnemonic != Mnemonic.Push)) continue;
+                var textArgs = args.Select(FormatDecoded).ToArray();
+                if (!textArgs.Any(x =>
+                        x.Contains(" push 8", StringComparison.OrdinalIgnoreCase) &&
+                        x.EndsWith('h'))) continue;
+
+                var target64 = ins.NearBranchTarget;
+                if (target64 > uint.MaxValue) continue;
+                var target = (uint)target64;
+                if (target < pe.TextStart || target >= pe.TextEnd) continue;
                 counts[target] = counts.TryGetValue(target, out var count) ? count + 1 : 1;
             }
         }
 
         var best = counts.OrderByDescending(x => x.Value).ThenBy(x => x.Key).FirstOrDefault();
-        if (best.Value < 2) return null;
+        if (best.Value == 0) return null;
 
-        var bodyDecoded = DecodeRange(pe, best.Key, Math.Min(pe.TextEnd, best.Key + 0x800u));
-        var retIndex = bodyDecoded.FindIndex(x => x.Instruction.Mnemonic is Mnemonic.Ret or Mnemonic.Retf);
-        if (retIndex < 0) retIndex = Math.Min(bodyDecoded.Count - 1, 96);
-        var body = bodyDecoded.Take(retIndex + 1).Select(FormatDecoded).ToArray();
+        var bodyDecoded = DecodeRange(pe, best.Key, FindFunctionEndByPadding(pe, best.Key));
+        var body = bodyDecoded.Select(FormatDecoded).ToArray();
         var callers = FindDirectRelativeCallers(pe, best.Key)
             .Select(call => TraceCallerContext(pe, call))
             .ToArray();
