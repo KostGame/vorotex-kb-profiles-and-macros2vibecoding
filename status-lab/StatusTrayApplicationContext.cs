@@ -12,6 +12,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private readonly CodexUnreadSourceRegistry _unreadSources;
     private readonly CodexPetController _codexPet;
     private readonly K15DeviceManager _deviceManager;
+    private readonly K15LayoutAuthoritySession _layoutAuthority;
     private readonly K15RgbCanary _rgbCanary;
     private readonly NotifyIcon _trayIcon;
     private readonly Icon _trackingOnIcon;
@@ -41,6 +42,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds,
             _unreadSources);
         _deviceManager = new K15DeviceManager(Path.Combine(EventJournal.DirectoryPath, "preferred-device.json"));
+        _layoutAuthority = new K15LayoutAuthoritySession(_deviceManager);
         _rgbCanary = new K15RgbCanary(_config, _deviceManager);
         _codexPet = new CodexPetController(_stateNormalizer, _unreadSources, _config);
         _codexPet.SetProfileHint(_rgbCanary.CurrentProfileHint);
@@ -96,6 +98,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         };
         _rgbCanary.StatusChanged += UpdateRgbStatus;
         _deviceManager.StateChanged += UpdateDeviceStatus;
+        _codexPet.ControlClicked += HandlePetControlClicked;
         _rgbCanary.ProfileHintChanged += _codexPet.SetProfileHint;
         RefreshDeviceMenu();
 
@@ -307,6 +310,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
                     operation: () => _deviceManager.Select(candidate) && _deviceManager.Connect())))
             throw new InvalidOperationException("Не удалось подтвердить выбранное K15 устройство.");
         UpdateDeviceStatus(_deviceManager.ConnectionState);
+        RefreshLayoutAuthority("device_connect");
     }
 
     private async Task ReconnectDeviceAsync()
@@ -314,6 +318,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         if (!await RunDeviceOperationWithRgbAsync("device_reconnect", _deviceManager.Reconnect))
             throw new InvalidOperationException("Выбранное K15 устройство недоступно для reconnect.");
         UpdateDeviceStatus(_deviceManager.ConnectionState);
+        RefreshLayoutAuthority("device_reconnect");
     }
 
     private async Task<bool> RunDeviceOperationWithRgbAsync(string reason, Func<bool> operation)
@@ -350,6 +355,86 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         await _rgbCanary.DisableAsync("device_disconnect");
         _deviceManager.Disconnect();
         UpdateDeviceStatus(_deviceManager.ConnectionState);
+    }
+
+    private void RefreshLayoutAuthority(string reason)
+    {
+        try
+        {
+            var result = _layoutAuthority.Refresh();
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "k15_layout_authority",
+                @event = "layout_authority_refreshed",
+                reason,
+                state = _layoutAuthority.State.ToString(),
+                verified = result.IsVerified,
+                differences = result.Differences
+            });
+        }
+        catch (Exception ex)
+        {
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "k15_layout_authority",
+                @event = "layout_authority_refresh_failed",
+                reason,
+                state = _layoutAuthority.State.ToString(),
+                exception = ex.GetType().Name,
+                message = ex.Message
+            });
+        }
+    }
+
+    private void HandlePetControlClicked(string controlId)
+    {
+        try
+        {
+            if (_layoutAuthority.State != K15LayoutAuthorityState.ReadyVerified)
+                RefreshLayoutAuthority("pet_control_click");
+
+            if (_layoutAuthority.State != K15LayoutAuthorityState.ReadyVerified)
+            {
+                EventJournal.Append(new
+                {
+                    timestampUtc = DateTimeOffset.UtcNow,
+                    source = "codex_pet",
+                    @event = "virtual_control_blocked",
+                    controlId,
+                    authorityState = _layoutAuthority.State.ToString(),
+                    reason = "layout_not_verified"
+                });
+                return;
+            }
+
+            var prepared = _layoutAuthority.PrepareDispatch(controlId);
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "codex_pet",
+                @event = "virtual_control_dispatch_planned",
+                controlId,
+                activeSlot = prepared.ActiveSlot,
+                planKind = prepared.Plan.Kind.ToString(),
+                stepCount = prepared.Plan.Steps.Count,
+                backend = "DISCONNECTED"
+            });
+        }
+        catch (Exception ex)
+        {
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "codex_pet",
+                @event = "virtual_control_blocked",
+                controlId,
+                authorityState = _layoutAuthority.State.ToString(),
+                reason = ex.GetType().Name,
+                message = ex.Message
+            });
+        }
     }
 
     private void UpdateDeviceStatus(K15DeviceConnectionState state)
@@ -771,9 +856,11 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _ipcCancellation.Cancel();
         await _notificationPoller.DisposeAsync();
         await _stateNormalizer.DisposeAsync();
+        _codexPet.ControlClicked -= HandlePetControlClicked;
         _codexPet.Dispose();
         await _rgbCanary.DisposeAsync();
         _rgbCanary.ProfileHintChanged -= _codexPet.SetProfileHint;
+        _layoutAuthority.Dispose();
         _deviceManager.Dispose();
         ExitThread();
     }

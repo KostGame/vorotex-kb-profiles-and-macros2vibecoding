@@ -151,6 +151,29 @@ Require(MiniK15ControlLayout.Controls.Single(control => control.Id == "enter") i
             MiniK15ControlKind.Joystick or MiniK15ControlKind.WideEnter or MiniK15ControlKind.LongBottomKey) == 4,
     "EXPLICIT_SPECIAL_CONTROL_KINDS");
 
+foreach (var preset in Enum.GetValues<PetSizePreset>())
+{
+    var geometry = CodexPetSizePolicy.Geometry(preset);
+    foreach (var control in MiniK15ControlLayout.Controls)
+    {
+        var bounds = CodexPetSizePolicy.ControlBounds(geometry.KeyboardBodyBounds, control);
+        var center = new Point(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
+        Require(CodexPetControlHitTest.HitTest(geometry.KeyboardBodyBounds, center)?.Id == control.Id,
+            $"PET_CONTROL_HIT_CENTER_{preset}_{control.Id}");
+    }
+
+    var rotary = MiniK15ControlLayout.Controls.Single(control => control.Id == "rotary");
+    var rotaryBounds = CodexPetSizePolicy.ControlBounds(geometry.KeyboardBodyBounds, rotary);
+    Require(CodexPetControlHitTest.HitTest(
+                geometry.KeyboardBodyBounds,
+                new Point(rotaryBounds.Left + 1, rotaryBounds.Top + 1))?.Id != "rotary",
+        $"PET_ROTARY_CORNER_NOT_CLICKABLE_{preset}");
+}
+Require(CodexPetControlHitTest.HitTest(
+            CodexPetSizePolicy.Geometry(PetSizePreset.Medium).KeyboardBodyBounds,
+            Point.Empty) is null,
+    "PET_OUTSIDE_CONTROLS_NOT_CLICKABLE");
+
 var expectedBindingCells = new Dictionary<string, int>(StringComparer.Ordinal)
 {
     ["key-6"] = 0, ["enter"] = 1, ["key-5"] = 8, ["key-dot"] = 9, ["minus"] = 10,

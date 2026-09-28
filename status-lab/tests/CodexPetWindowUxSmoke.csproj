@@ -15,6 +15,7 @@
     <Compile Include="..\CodexPetSizePolicy.cs" Link="CodexPetSizePolicy.cs" />
     <Compile Include="..\LiveDashboardPathPolicy.cs" Link="LiveDashboardPathPolicy.cs" />
     <Compile Include="..\MiniK15ControlLayout.cs" Link="MiniK15ControlLayout.cs" />
+    <Compile Include="..\CodexPetControlHitTest.cs" Link="CodexPetControlHitTest.cs" />
     <Compile Include="..\K15LayoutAuthorityModel.cs" Link="K15LayoutAuthorityModel.cs" />
     <Compile Include="..\K15LocalLayoutSemanticModel.cs" Link="K15LocalLayoutSemanticModel.cs" />
     <Compile Include="..\K15LayoutAttestation.cs" Link="K15LayoutAttestation.cs" />

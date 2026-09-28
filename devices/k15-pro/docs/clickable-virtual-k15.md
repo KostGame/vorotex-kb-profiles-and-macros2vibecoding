@@ -81,7 +81,7 @@ No startup, reconnect, RGB repair, synchronization, or background process may se
 3. **Local semantic model:** IMPLEMENTED locally; parses profile bindings, resolves exact GUID macros, encodes the active `macSta/macVal/macDly` prefix, and rejects unsupported storage/action values.
 4. **Authority synchronization:** IMPLEMENTED locally as an equality evaluator plus readiness session. The session binds readiness to device connection generation, identity, active slot, profile/macro file hashes, and file-mutation generation. Before every future dispatch it re-reads the selected control's live `0x84` binding and, for macros, the live `0x88` payload. Any difference invalidates readiness.
 5. **Encoded-action dispatcher:** PLANNER IMPLEMENTED; verified actions are converted to fail-closed `KeyDown` / `KeyUp` / exact-millisecond `Delay` steps, while profile switching remains a separate action. No Windows input backend is connected yet.
-6. **Pet interaction:** reuse rendered geometry; verify click/drag separation and no focus steal.
+6. **Pet interaction:** IMPLEMENTED locally in dry-run mode. Hit-testing reuses the rendered bounds (including ellipse-aware rotary/joystick checks), key presses are separated from drag gestures, and the Pet uses `WS_EX_NOACTIVATE` plus `MA_NOACTIVATE`. Clicks route through fresh authority and produce a dispatch plan, but the backend remains explicitly disconnected.
 7. **Explicit encoder transaction:** allow only the user gesture above, with fresh read, opposite-slot selection, exact readback, refresh, and verified rollback.
 
 No implementation slice may bypass the attestation gate for arbitrary clickable controls.
@@ -98,4 +98,4 @@ No implementation slice may bypass the attestation gate for arbitrary clickable 
 
 ## Next implementation gate
 
-Wire the readiness session into the Pet and add mouse hit-testing that reuses the rendered control bounds without stealing foreground focus. Keep the Windows input backend disconnected while click-vs-drag behavior, `READY_VERIFIED` gating, and profile-switch routing are tested with fake dispatch. Real `SendInput` acceptance remains a separate owner gate.
+Implement the Windows input backend behind the existing verified dispatch-plan boundary, using physical-key scan-code semantics and exact macro delays. Keep that backend disconnected from Pet clicks while it is tested with a fake/capture executor. Real `SendInput` acceptance and the explicit virtual profile-switch canary remain separate owner gates.
