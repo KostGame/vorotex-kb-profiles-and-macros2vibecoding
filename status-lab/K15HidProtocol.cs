@@ -11,6 +11,13 @@ internal static class K15HidProtocol
     public const byte DeviceReadCommand = 0x82;
     public const byte ActiveSlotSelector = 2;
 
+    public const byte BindingReadCommand = 0x84;
+    public const byte EncoderBindingReadCommand = 0x85;
+    public const byte MacroReadCommand = 0x88;
+    public const int BindingCellSize = 4;
+    public const int MainBindingCellCount = 160;
+    public const int MacroPayloadLimit = 0x16D0;
+
     public const byte ConstantMode = 0x81;
     public const byte FlowingWaterMode = 0x82;
     public const byte HorseRaceMode = 0x83;

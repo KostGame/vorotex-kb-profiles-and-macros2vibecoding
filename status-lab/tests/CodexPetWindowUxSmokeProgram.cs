@@ -150,6 +150,28 @@ Require(MiniK15ControlLayout.Controls.Single(control => control.Id == "enter") i
             MiniK15ControlKind.Joystick or MiniK15ControlKind.WideEnter or MiniK15ControlKind.LongBottomKey) == 4,
     "EXPLICIT_SPECIAL_CONTROL_KINDS");
 
+var expectedBindingCells = new Dictionary<string, int>(StringComparer.Ordinal)
+{
+    ["key-6"] = 0, ["enter"] = 1, ["key-5"] = 8, ["key-dot"] = 9, ["minus"] = 10,
+    ["key-4"] = 16, ["key-0"] = 17, ["plus"] = 18, ["key-3"] = 24, ["key-9"] = 25,
+    ["long-bottom"] = 26, ["key-2"] = 32, ["key-8"] = 33, ["rotary"] = 34,
+    ["key-1"] = 40, ["key-7"] = 41, ["joystick"] = 42
+};
+Require(K15LayoutAuthorityModel.BindingCells.Count == expectedBindingCells.Count &&
+        expectedBindingCells.All(pair =>
+            K15LayoutAuthorityModel.BindingCellForControl(pair.Key) == pair.Value) &&
+        K15LayoutAuthorityModel.BindingCells.Keys.All(id =>
+            MiniK15ControlLayout.Controls.Any(control => control.Id == id)),
+    "K15_HARDWARE_BINDING_CELL_MAP");
+
+var macroBinding = K15LayoutAuthorityModel.DecodeBindingCell(18, new byte[] { 0x0A, 0x00, 0x0E, 0x00 });
+var nativeBinding = K15LayoutAuthorityModel.DecodeBindingCell(1, new byte[] { 0x02, 0x28, 0x00, 0x00 });
+var profileBinding = K15LayoutAuthorityModel.DecodeBindingCell(34, new byte[] { 0x09, 0x03, 0x00, 0x00 });
+Require(macroBinding.IsMacro && macroBinding.MacroMemorySlot == 14 &&
+        nativeBinding.IsNative && nativeBinding.NativeUsage == 40 &&
+        profileBinding.IsProfileLoop,
+    "K15_HARDWARE_BINDING_DECODER");
+
 var topRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Top)
     .OrderBy(control => control.X).ToArray();
 var middleRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Middle)
