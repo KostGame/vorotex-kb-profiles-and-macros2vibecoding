@@ -291,9 +291,66 @@ var currentProfileUsages = new byte[]
     4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,29,
     30,31,35,40,43,44,51,53,54,55,56,224,225,226
 };
-Require(currentProfileUsages.All(usage => K15HidUsageMap.TryVirtualKey(usage, out _)) &&
-        !K15HidUsageMap.TryVirtualKey(0x7F, out _),
+Require(currentProfileUsages.All(usage => K15HidUsageMap.TryScanCode(usage, out _)) &&
+        !K15HidUsageMap.TryScanCode(0x7F, out _),
     "K15_WINDOWS_HID_USAGE_ALLOWLIST");
+Require(K15HidUsageMap.TryScanCode(0x04, out var aScan) && aScan.Code == 0x1E &&
+        K15HidUsageMap.TryScanCode(0x28, out var enterScan) && enterScan.Code == 0x1C &&
+        K15HidUsageMap.TryScanCode(0xE0, out var ctrlScan) && ctrlScan.Code == 0x1D,
+    "K15_WINDOWS_SCAN_CODE_PHYSICAL_SEMANTICS");
+
+var recordingInput = new RecordingScanCodeInput();
+var recordingDelay = new RecordingDispatchDelay();
+var executor = new K15WindowsInputExecutor(recordingInput, recordingDelay);
+await executor.ExecuteAsync(macroPlan);
+Require(recordingInput.Events.SequenceEqual(new[] { "DOWN:001E", "UP:001E" }) &&
+        recordingDelay.Delays.SequenceEqual(new[] { 5, 7 }),
+    "K15_WINDOWS_EXECUTOR_FAKE_MACRO_SEQUENCE");
+
+var cleanupInput = new RecordingScanCodeInput();
+var failingDelay = new RecordingDispatchDelay { ThrowOnCall = 1 };
+var cleanupExecutor = new K15WindowsInputExecutor(cleanupInput, failingDelay);
+var cleanupPlan = new K15DispatchPlan(
+    K15DispatchPlanKind.Macro,
+    new[]
+    {
+        new K15DispatchStep(K15DispatchStepKind.KeyDown, 0xE0),
+        new K15DispatchStep(K15DispatchStepKind.Delay, DelayMilliseconds: 5)
+    });
+try
+{
+    await cleanupExecutor.ExecuteAsync(cleanupPlan);
+    Require(false, "K15_WINDOWS_EXECUTOR_FAILURE_EXPECTED");
+}
+catch (InvalidOperationException)
+{
+    Require(cleanupInput.Events.SequenceEqual(new[] { "DOWN:001D", "UP:001D" }),
+        "K15_WINDOWS_EXECUTOR_RELEASES_PRESSED_KEYS_ON_FAILURE");
+}
+
+var switchControl = new RecordingProfileSlotControl(1);
+var switchResult = K15ProfileSwitchTransaction.Execute(
+    switchControl,
+    slot => slot == 0);
+Require(switchResult == new K15ProfileSwitchResult(1, 0) &&
+        switchControl.CurrentSlot == 0 &&
+        switchControl.SelectedSlots.SequenceEqual(new byte[] { 0 }),
+    "K15_PROFILE_SWITCH_TRANSACTION_EXACT_TARGET");
+
+var rollbackControl = new RecordingProfileSlotControl(1);
+try
+{
+    K15ProfileSwitchTransaction.Execute(
+        rollbackControl,
+        slot => slot == 1);
+    Require(false, "K15_PROFILE_SWITCH_ROLLBACK_EXPECTED_FAILURE");
+}
+catch (InvalidOperationException)
+{
+    Require(rollbackControl.CurrentSlot == 1 &&
+            rollbackControl.SelectedSlots.SequenceEqual(new byte[] { 0, 1 }),
+        "K15_PROFILE_SWITCH_TRANSACTION_ROLLBACK_VERIFIED");
+}
 
 var layoutTemp = Path.Combine(Path.GetTempPath(), "k15-layout-authority-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(layoutTemp);
@@ -586,4 +643,48 @@ static GraphicsPath RoundedPath(Rectangle rectangle, int radius)
     path.AddArc(rectangle.X, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
     path.CloseFigure();
     return path;
+}
+
+internal sealed class RecordingScanCodeInput : IK15ScanCodeInput
+{
+    internal List<string> Events { get; } = new();
+
+    public void KeyDown(K15WindowsScanCode scanCode) =>
+        Events.Add($"DOWN:{scanCode.Code:X4}{(scanCode.Extended ? ":E" : string.Empty)}");
+
+    public void KeyUp(K15WindowsScanCode scanCode) =>
+        Events.Add($"UP:{scanCode.Code:X4}{(scanCode.Extended ? ":E" : string.Empty)}");
+}
+
+internal sealed class RecordingDispatchDelay : IK15DispatchDelay
+{
+    private int _calls;
+    internal List<int> Delays { get; } = new();
+    internal int? ThrowOnCall { get; init; }
+
+    public Task DelayAsync(int milliseconds, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _calls++;
+        Delays.Add(milliseconds);
+        if (ThrowOnCall == _calls)
+            throw new InvalidOperationException("synthetic delay failure");
+        return Task.CompletedTask;
+    }
+}
+internal sealed class RecordingProfileSlotControl : IK15ProfileSlotControl
+{
+    internal RecordingProfileSlotControl(byte initialSlot) => CurrentSlot = initialSlot;
+
+    internal byte CurrentSlot { get; private set; }
+    internal List<byte> SelectedSlots { get; } = new();
+
+    public byte ReadActiveSlot() => CurrentSlot;
+
+    public void SelectActiveSlot(byte slot)
+    {
+        if (slot > 1) throw new ArgumentOutOfRangeException(nameof(slot));
+        SelectedSlots.Add(slot);
+        CurrentSlot = slot;
+    }
 }

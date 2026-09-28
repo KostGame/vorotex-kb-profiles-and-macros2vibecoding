@@ -5,7 +5,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Vorotex.K15.StatusLab;
 
-internal sealed class K15HidLightingController : IDisposable
+internal sealed class K15HidLightingController : IDisposable, IK15ProfileSlotControl
 {
     private const uint DigcfPresent = 0x00000002;
     private const uint DigcfDeviceInterface = 0x00000010;
