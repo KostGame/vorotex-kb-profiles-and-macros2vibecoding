@@ -148,7 +148,31 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
             }
         }
 
+        var finalSlot = controller.ReadActiveSlot();
+        if (finalSlot != activeSlot)
+        {
+            Invalidate(K15LayoutAuthorityState.Stale);
+            throw new K15HidLightingController.K15ProfileChangedException(activeSlot, finalSlot);
+        }
+
         return new K15PreparedDispatch(activeSlot, controlId, action, K15DispatchPlanner.Create(action));
+    }
+
+    internal K15ProfileSwitchResult SwitchProfileExplicitly()
+    {
+        var prepared = PrepareDispatch("rotary");
+        if (prepared.Plan.Kind != K15DispatchPlanKind.ProfileSwitch)
+            throw new InvalidOperationException("Rotary click is not verified as a profile-switch action.");
+
+        var controller = RequireConnectedController();
+        return K15ProfileSwitchTransaction.Execute(controller, expectedSlot =>
+        {
+            Invalidate(K15LayoutAuthorityState.Stale);
+            var result = Refresh();
+            return result.IsVerified &&
+                   _hardware?.ActiveSlot == expectedSlot &&
+                   _local?.Slot == expectedSlot;
+        });
     }
 
     internal void Invalidate(K15LayoutAuthorityState state = K15LayoutAuthorityState.Stale)

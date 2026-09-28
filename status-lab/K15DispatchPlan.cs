@@ -35,6 +35,7 @@ internal static class K15DispatchPlanner
                 throw new InvalidDataException($"Macro payload for {action.ControlId} is invalid.");
 
             var steps = new List<K15DispatchStep>(action.MacroPayload.Length);
+            var pressed = new Dictionary<byte, int>();
             for (var offset = 0; offset < action.MacroPayload.Length; offset += 2)
             {
                 var usage = action.MacroPayload[offset];
@@ -42,9 +43,23 @@ internal static class K15DispatchPlanner
                 var isKeyUp = (encodedDelay & 0x80) != 0;
                 var delay = encodedDelay & 0x7F;
 
-                if (!K15HidUsageMap.TryVirtualKey(usage, out _))
+                if (!K15HidUsageMap.TryScanCode(usage, out _))
                     throw new InvalidDataException(
                         $"Macro {action.ControlId} contains unsupported HID usage 0x{usage:X2}.");
+
+                pressed.TryGetValue(usage, out var count);
+                if (isKeyUp)
+                {
+                    if (count == 0)
+                        throw new InvalidDataException(
+                            $"Macro {action.ControlId} releases HID usage 0x{usage:X2} before it is pressed.");
+                    if (count == 1) pressed.Remove(usage);
+                    else pressed[usage] = count - 1;
+                }
+                else
+                {
+                    pressed[usage] = count + 1;
+                }
 
                 steps.Add(new K15DispatchStep(
                     isKeyUp ? K15DispatchStepKind.KeyUp : K15DispatchStepKind.KeyDown,
@@ -52,6 +67,11 @@ internal static class K15DispatchPlanner
                 if (delay > 0)
                     steps.Add(new K15DispatchStep(K15DispatchStepKind.Delay, DelayMilliseconds: delay));
             }
+
+            if (pressed.Count != 0)
+                throw new InvalidDataException(
+                    $"Macro {action.ControlId} leaves HID usages pressed: " +
+                    string.Join(", ", pressed.Keys.Order().Select(usage => $"0x{usage:X2}")));
 
             return new K15DispatchPlan(K15DispatchPlanKind.Macro, steps);
         }
@@ -66,7 +86,7 @@ internal static class K15DispatchPlanner
             action.ExpectedBindingRaw[3] == 0x00)
         {
             var usage = action.ExpectedBindingRaw[1];
-            if (!K15HidUsageMap.TryVirtualKey(usage, out _))
+            if (!K15HidUsageMap.TryScanCode(usage, out _))
                 throw new InvalidDataException(
                     $"Native action {action.ControlId} contains unsupported HID usage 0x{usage:X2}.");
 

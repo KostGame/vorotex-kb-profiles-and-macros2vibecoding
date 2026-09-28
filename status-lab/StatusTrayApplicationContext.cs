@@ -13,6 +13,9 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private readonly CodexPetController _codexPet;
     private readonly K15DeviceManager _deviceManager;
     private readonly K15LayoutAuthoritySession _layoutAuthority;
+    private readonly K15WindowsInputExecutor _petInputExecutor =
+        new(new K15SendInputScanCodeTransport());
+    private readonly SemaphoreSlim _petDispatchGate = new(1, 1);
     private readonly K15RgbCanary _rgbCanary;
     private readonly NotifyIcon _trayIcon;
     private readonly Icon _trackingOnIcon;
@@ -388,8 +391,22 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         }
     }
 
-    private void HandlePetControlClicked(string controlId)
+    private async void HandlePetControlClicked(string controlId)
     {
+        if (!await _petDispatchGate.WaitAsync(0))
+        {
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "codex_pet",
+                @event = "virtual_control_blocked",
+                controlId,
+                authorityState = _layoutAuthority.State.ToString(),
+                reason = "dispatch_busy"
+            });
+            return;
+        }
+
         try
         {
             if (_layoutAuthority.State != K15LayoutAuthorityState.ReadyVerified)
@@ -410,16 +427,34 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             }
 
             var prepared = _layoutAuthority.PrepareDispatch(controlId);
+            if (prepared.Plan.Kind == K15DispatchPlanKind.ProfileSwitch)
+            {
+                var switched = _layoutAuthority.SwitchProfileExplicitly();
+                EventJournal.Append(new
+                {
+                    timestampUtc = DateTimeOffset.UtcNow,
+                    source = "codex_pet",
+                    @event = "virtual_control_dispatched",
+                    controlId,
+                    activeSlot = prepared.ActiveSlot,
+                    selectedSlot = switched.SelectedSlot,
+                    planKind = prepared.Plan.Kind.ToString(),
+                    backend = "K15_PROFILE_SWITCH"
+                });
+                return;
+            }
+
+            await _petInputExecutor.ExecuteAsync(prepared.Plan);
             EventJournal.Append(new
             {
                 timestampUtc = DateTimeOffset.UtcNow,
                 source = "codex_pet",
-                @event = "virtual_control_dispatch_planned",
+                @event = "virtual_control_dispatched",
                 controlId,
                 activeSlot = prepared.ActiveSlot,
                 planKind = prepared.Plan.Kind.ToString(),
                 stepCount = prepared.Plan.Steps.Count,
-                backend = "DISCONNECTED"
+                backend = "SENDINPUT_SCANCODE"
             });
         }
         catch (Exception ex)
@@ -434,6 +469,10 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
                 reason = ex.GetType().Name,
                 message = ex.Message
             });
+        }
+        finally
+        {
+            _petDispatchGate.Release();
         }
     }
 

@@ -274,6 +274,18 @@ Require(macroPlan.Kind == K15DispatchPlanKind.Macro &&
             new K15DispatchStep(K15DispatchStepKind.Delay, DelayMilliseconds: 7)
         }),
     "K15_DISPATCH_PLAN_MACRO_EVENT_TIMING");
+try
+{
+    K15DispatchPlanner.Create(semantic.Actions["key-1"] with
+    {
+        MacroPayload = new byte[] { 0xE0, 0x05 }
+    });
+    Require(false, "K15_DISPATCH_PLAN_UNBALANCED_MACRO_EXPECTED_FAILURE");
+}
+catch (InvalidDataException)
+{
+    Require(true, "K15_DISPATCH_PLAN_UNBALANCED_MACRO_FAILS_CLOSED");
+}
 var nativePlan = K15DispatchPlanner.Create(semantic.Actions["key-2"]);
 var profilePlan = K15DispatchPlanner.Create(semantic.Actions["rotary"]);
 Require(nativePlan.Kind == K15DispatchPlanKind.NativeTap &&
