@@ -241,6 +241,60 @@ Require(K15LayoutAttestation.Compare(
         syntheticHardware with { Bindings = staleHardwareBindings }, semantic).State == K15LayoutVerificationState.Stale,
     "K15_LAYOUT_ATTESTATION_BINDING_MISMATCH_FAILS_CLOSED");
 
+var macroPlan = K15DispatchPlanner.Create(semantic.Actions["key-1"]);
+Require(macroPlan.Kind == K15DispatchPlanKind.Macro &&
+        macroPlan.Steps.SequenceEqual(new[]
+        {
+            new K15DispatchStep(K15DispatchStepKind.KeyDown, 0x04),
+            new K15DispatchStep(K15DispatchStepKind.Delay, DelayMilliseconds: 5),
+            new K15DispatchStep(K15DispatchStepKind.KeyUp, 0x04),
+            new K15DispatchStep(K15DispatchStepKind.Delay, DelayMilliseconds: 7)
+        }),
+    "K15_DISPATCH_PLAN_MACRO_EVENT_TIMING");
+var nativePlan = K15DispatchPlanner.Create(semantic.Actions["key-2"]);
+var profilePlan = K15DispatchPlanner.Create(semantic.Actions["rotary"]);
+Require(nativePlan.Kind == K15DispatchPlanKind.NativeTap &&
+        nativePlan.Steps.SequenceEqual(new[]
+        {
+            new K15DispatchStep(K15DispatchStepKind.KeyDown, 0x28),
+            new K15DispatchStep(K15DispatchStepKind.KeyUp, 0x28)
+        }) &&
+        profilePlan.Kind == K15DispatchPlanKind.ProfileSwitch &&
+        profilePlan.Steps.Count == 0,
+    "K15_DISPATCH_PLAN_NATIVE_AND_PROFILE_SWITCH");
+
+var currentProfileUsages = new byte[]
+{
+    4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,29,
+    30,31,35,40,43,44,51,53,54,55,56,224,225,226
+};
+Require(currentProfileUsages.All(usage => K15HidUsageMap.TryVirtualKey(usage, out _)) &&
+        !K15HidUsageMap.TryVirtualKey(0x7F, out _),
+    "K15_WINDOWS_HID_USAGE_ALLOWLIST");
+
+var layoutTemp = Path.Combine(Path.GetTempPath(), "k15-layout-authority-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(layoutTemp);
+try
+{
+    var profile0Path = Path.Combine(layoutTemp, "Profile0.json");
+    var profile1Path = Path.Combine(layoutTemp, "Profile1.json");
+    var macroConfigPath = Path.Combine(layoutTemp, "macroConfig.json");
+    File.WriteAllText(profile0Path, syntheticProfileJson);
+    File.WriteAllText(profile1Path, syntheticProfileJson);
+    File.WriteAllText(macroConfigPath, syntheticMacroJson);
+    var paths = new K15LayoutFilePaths(profile0Path, profile1Path, macroConfigPath);
+    var localRead = K15LayoutFileAuthority.Read(paths, 1);
+    Require(K15LayoutFileAuthority.Matches(paths, localRead.Stamp),
+        "K15_LAYOUT_FILE_STAMP_MATCHES_UNCHANGED");
+    File.AppendAllText(macroConfigPath, " ");
+    Require(!K15LayoutFileAuthority.Matches(paths, localRead.Stamp),
+        "K15_LAYOUT_FILE_STAMP_MUTATION_INVALIDATES");
+}
+finally
+{
+    Directory.Delete(layoutTemp, recursive: true);
+}
+
 var topRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Top)
     .OrderBy(control => control.X).ToArray();
 var middleRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Middle)

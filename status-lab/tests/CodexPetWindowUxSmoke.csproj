@@ -18,6 +18,9 @@
     <Compile Include="..\K15LayoutAuthorityModel.cs" Link="K15LayoutAuthorityModel.cs" />
     <Compile Include="..\K15LocalLayoutSemanticModel.cs" Link="K15LocalLayoutSemanticModel.cs" />
     <Compile Include="..\K15LayoutAttestation.cs" Link="K15LayoutAttestation.cs" />
+    <Compile Include="..\K15DispatchPlan.cs" Link="K15DispatchPlan.cs" />
+    <Compile Include="..\K15HidUsageMap.cs" Link="K15HidUsageMap.cs" />
+    <Compile Include="..\K15LayoutFileAuthority.cs" Link="K15LayoutFileAuthority.cs" />
     <Compile Include="..\CodexPetControlVisualPolicy.cs" Link="CodexPetControlVisualPolicy.cs" />
     <Compile Include="..\CodexPetBadgeVisualPolicy.cs" Link="CodexPetBadgeVisualPolicy.cs" />
     <Compile Include="..\CodexPetControlRenderer.cs" Link="CodexPetControlRenderer.cs" />

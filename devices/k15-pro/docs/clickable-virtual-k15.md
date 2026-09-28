@@ -79,8 +79,8 @@ No startup, reconnect, RGB repair, synchronization, or background process may se
 1. **Attestation research:** COMPLETE for the clickable Mini-K15 physical-control to main binding-cell map on the tested K15.
 2. **Hardware layout model:** IMPLEMENTED locally; captures active slot, proven `0x84` binding cells, and required `0x88` macro payloads with a slot-before/slot-after consistency gate.
 3. **Local semantic model:** IMPLEMENTED locally; parses profile bindings, resolves exact GUID macros, encodes the active `macSta/macVal/macDly` prefix, and rejects unsupported storage/action values.
-4. **Authority synchronization:** IMPLEMENTED as a pure equality evaluator. Saved current hardware snapshots for both slots independently evaluated to `ReadyVerified` against current Profile0/Profile1 + macroConfig. Runtime Pet wiring and invalidation lifecycle remain pending.
-5. **Encoded-action dispatcher:** replay only proven native/HID sequences with their active timings. Add explicit support before enabling each action family.
+4. **Authority synchronization:** IMPLEMENTED locally as an equality evaluator plus readiness session. The session binds readiness to device connection generation, identity, active slot, profile/macro file hashes, and file-mutation generation. Before every future dispatch it re-reads the selected control's live `0x84` binding and, for macros, the live `0x88` payload. Any difference invalidates readiness.
+5. **Encoded-action dispatcher:** PLANNER IMPLEMENTED; verified actions are converted to fail-closed `KeyDown` / `KeyUp` / exact-millisecond `Delay` steps, while profile switching remains a separate action. No Windows input backend is connected yet.
 6. **Pet interaction:** reuse rendered geometry; verify click/drag separation and no focus steal.
 7. **Explicit encoder transaction:** allow only the user gesture above, with fresh read, opposite-slot selection, exact readback, refresh, and verified rollback.
 
@@ -90,7 +90,7 @@ No implementation slice may bypass the attestation gate for arbitrary clickable 
 
 - Do not probe a new HID command live until its exact static read contract is understood and the owner approves that read family.
 - Current owner-approved live read families are the already-tested `0x84`, `0x85`, and `0x88`; active-slot `0x82/selector 2` is separately production-proven.
-- The physical-control mapping is now proven for Mini-K15, but hardware-only evidence still must not authorize arbitrary virtual actions until the local semantic equality gate is implemented.
+- The physical-control mapping and local semantic equality gate are implemented. Arbitrary virtual actions remain disabled until Pet lifecycle wiring, non-activating hit testing, and the separately tested Windows input backend are complete.
 - Test both hardware slots, exact GUID resolution, live macro payload equality, active-prefix behavior, missing references, unsupported action families, reconnect, identity change, and local-file mutation.
 - Test that every virtual dispatch uses a fresh hardware slot read, and that encoder selection requires an explicit click plus exact readback and rollback.
 - Test all Pet sizes against the rendered hit bounds, click versus drag, and unchanged foreground focus.
@@ -98,4 +98,4 @@ No implementation slice may bypass the attestation gate for arbitrary clickable 
 
 ## Next implementation gate
 
-Wire the implemented hardware capture + local semantic parser + equality evaluator into the Pet lifecycle. `READY_VERIFIED` must be ephemeral: reconnect, profile-file/macro-file mutation, device identity change, active-slot change, or any equality failure invalidates it before dispatch. Only after that lifecycle is tested should encoded-action dispatch and mouse hit-testing be enabled.
+Wire the readiness session into the Pet and add mouse hit-testing that reuses the rendered control bounds without stealing foreground focus. Keep the Windows input backend disconnected while click-vs-drag behavior, `READY_VERIFIED` gating, and profile-switch routing are tested with fake dispatch. Real `SendInput` acceptance remains a separate owner gate.
