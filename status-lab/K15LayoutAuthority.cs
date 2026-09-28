@@ -1,10 +1,5 @@
 namespace Vorotex.K15.StatusLab;
 
-internal sealed record K15HardwareLayoutSnapshot(
-    byte ActiveSlot,
-    IReadOnlyDictionary<string, K15OnboardBindingCell> Bindings,
-    IReadOnlyDictionary<byte, byte[]> MacroPayloads);
-
 internal static class K15LayoutAuthority
 {
     internal static K15HardwareLayoutSnapshot Capture(K15HidLightingController controller)

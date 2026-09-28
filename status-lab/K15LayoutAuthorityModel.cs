@@ -28,6 +28,11 @@ internal sealed record K15OnboardBindingCell(
         Raw.AsSpan().SequenceEqual(new byte[] { 0x09, 0x03, 0x00, 0x00 });
 }
 
+internal sealed record K15HardwareLayoutSnapshot(
+    byte ActiveSlot,
+    IReadOnlyDictionary<string, K15OnboardBindingCell> Bindings,
+    IReadOnlyDictionary<byte, byte[]> MacroPayloads);
+
 internal static class K15LayoutAuthorityModel
 {
     internal const int BindingCellSize = 4;
@@ -55,13 +60,35 @@ internal static class K15LayoutAuthorityModel
             ["joystick"] = 42
         };
 
+    private static readonly IReadOnlyDictionary<string, string> ControlStorageFields =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["key-1"] = "btn_KBKey_KeyPad1", ["key-2"] = "btn_KBKey_KeyPad2",
+            ["key-3"] = "btn_KBKey_KeyPad3", ["key-4"] = "btn_KBKey_KeyPad4",
+            ["key-5"] = "btn_KBKey_KeyPad5", ["key-6"] = "btn_KBKey_KeyPad6",
+            ["key-7"] = "btn_KBKey_KeyPad7", ["key-8"] = "btn_KBKey_KeyPad8",
+            ["key-9"] = "btn_KBKey_KeyPad9", ["key-0"] = "btn_KBKey_KeyPad0",
+            ["key-dot"] = "btn_KBKey_KeyPadPoint", ["enter"] = "btn_KBKey_KeyPadEnter",
+            ["minus"] = "btn_KBKey_KeyPadSub", ["plus"] = "btn_KBKey_KeyPadAdd",
+            ["long-bottom"] = "btn_KBKey_Space", ["joystick"] = "btn_KBKey_Enter",
+            ["rotary"] = "btn_KBKey_ProfileLoop"
+        };
+
     internal static IReadOnlyDictionary<string, int> BindingCells => ControlBindingCells;
+    internal static IReadOnlyDictionary<string, string> StorageFields => ControlStorageFields;
 
     internal static int BindingCellForControl(string controlId)
     {
         if (!ControlBindingCells.TryGetValue(controlId, out var cell))
             throw new KeyNotFoundException($"Mini-K15 control '{controlId}' has no proven onboard binding cell.");
         return cell;
+    }
+
+    internal static string StorageFieldForControl(string controlId)
+    {
+        if (!ControlStorageFields.TryGetValue(controlId, out var field))
+            throw new KeyNotFoundException($"Mini-K15 control '{controlId}' has no proven profile storage field.");
+        return field;
     }
 
     internal static K15OnboardBindingCell DecodeBindingCell(int cellIndex, ReadOnlySpan<byte> raw)

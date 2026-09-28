@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Text.Json;
 using Vorotex.K15.StatusLab;
 
 static void Require(bool condition, string name)
@@ -171,6 +172,74 @@ Require(macroBinding.IsMacro && macroBinding.MacroMemorySlot == 14 &&
         nativeBinding.IsNative && nativeBinding.NativeUsage == 40 &&
         profileBinding.IsProfileLoop,
     "K15_HARDWARE_BINDING_DECODER");
+
+var groupGuid = "11111111-1111-1111-1111-111111111111";
+var macroGuid = "22222222-2222-2222-2222-222222222222";
+var syntheticKeys = K15LayoutAuthorityModel.StorageFields.Values
+    .ToDictionary(field => field, _ => 40, StringComparer.Ordinal);
+syntheticKeys[K15LayoutAuthorityModel.StorageFieldForControl("key-1")] = 700;
+syntheticKeys[K15LayoutAuthorityModel.StorageFieldForControl("rotary")] = 312;
+var syntheticMacroBindings = K15LayoutAuthorityModel.StorageFields.Values
+    .ToDictionary<string, string, object>(
+        field => field,
+        field => field == K15LayoutAuthorityModel.StorageFieldForControl("key-1")
+            ? new { MemMacId = 7, grpGuid = groupGuid, macGuid = macroGuid }
+            : new { MemMacId = 0, grpGuid = "", macGuid = "" },
+        StringComparer.Ordinal);
+var syntheticProfileJson = JsonSerializer.Serialize(new
+{
+    KBconfig = new { KBKey = syntheticKeys, KBKeyMacro = syntheticMacroBindings }
+});
+var syntheticMacroJson = JsonSerializer.Serialize(new
+{
+    MacroGrpInfo = new[]
+    {
+        new
+        {
+            GrpGuid = groupGuid,
+            MacroInfo = new[]
+            {
+                new
+                {
+                    MacroGuid = macroGuid,
+                    macData = new
+                    {
+                        num = 2,
+                        macSta = new[] { 1, 2 },
+                        macVal = new[] { 4, 4 },
+                        macDly = new[] { 5, 7 }
+                    }
+                }
+            }
+        }
+    }
+});
+var semantic = K15LocalLayoutSemanticModel.Parse(syntheticProfileJson, syntheticMacroJson, 1);
+Require(semantic.Actions["key-1"].ExpectedBindingRaw.SequenceEqual(new byte[] { 0x0A, 0x00, 0x07, 0x00 }) &&
+        semantic.Actions["key-1"].MacroPayload!.SequenceEqual(new byte[] { 0x04, 0x05, 0x04, 0x87 }) &&
+        semantic.Actions["key-2"].ExpectedBindingRaw.SequenceEqual(new byte[] { 0x02, 0x28, 0x00, 0x00 }) &&
+        semantic.Actions["rotary"].ExpectedBindingRaw.SequenceEqual(new byte[] { 0x09, 0x03, 0x00, 0x00 }),
+    "K15_LOCAL_SEMANTIC_WIRE_ENCODING");
+
+var syntheticHardwareBindings = semantic.Actions.ToDictionary(
+    pair => pair.Key,
+    pair => K15LayoutAuthorityModel.DecodeBindingCell(
+        K15LayoutAuthorityModel.BindingCellForControl(pair.Key),
+        pair.Value.ExpectedBindingRaw),
+    StringComparer.Ordinal);
+var syntheticHardware = new K15HardwareLayoutSnapshot(
+    1,
+    syntheticHardwareBindings,
+    new Dictionary<byte, byte[]> { [7] = semantic.Actions["key-1"].MacroPayload! });
+Require(K15LayoutAttestation.Compare(syntheticHardware, semantic).IsVerified,
+    "K15_LAYOUT_ATTESTATION_READY_VERIFIED");
+var staleHardwareBindings = new Dictionary<string, K15OnboardBindingCell>(syntheticHardwareBindings, StringComparer.Ordinal)
+{
+    ["key-1"] = K15LayoutAuthorityModel.DecodeBindingCell(40, new byte[] { 0x0A, 0x00, 0x08, 0x00 })
+};
+Require(K15LayoutAttestation.Compare(
+        syntheticHardware with { Bindings = staleHardwareBindings }, semantic).State == K15LayoutVerificationState.Stale,
+    "K15_LAYOUT_ATTESTATION_BINDING_MISMATCH_FAILS_CLOSED");
 
 var topRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Top)
     .OrderBy(control => control.X).ToArray();
