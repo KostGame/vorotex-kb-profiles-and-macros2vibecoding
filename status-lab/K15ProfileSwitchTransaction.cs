@@ -17,14 +17,28 @@ internal static class K15ProfileSwitchTransaction
         Func<byte, bool> attestSlot) =>
         ExecuteAsync(control, attestSlot).GetAwaiter().GetResult();
 
-    internal static async Task<K15ProfileSwitchResult> ExecuteAsync(
+    internal static Task<K15ProfileSwitchResult> ExecuteAsync(
         IK15ProfileSlotControl control,
         Func<byte, bool> attestSlot,
         Func<byte, Task>? onSlotConfirmed = null,
         byte? expectedOriginalSlot = null)
     {
-        ArgumentNullException.ThrowIfNull(control);
         ArgumentNullException.ThrowIfNull(attestSlot);
+        return ExecuteAsync(
+            control,
+            slot => Task.FromResult(attestSlot(slot)),
+            onSlotConfirmed,
+            expectedOriginalSlot);
+    }
+
+    internal static async Task<K15ProfileSwitchResult> ExecuteAsync(
+        IK15ProfileSlotControl control,
+        Func<byte, Task<bool>> attestSlotAsync,
+        Func<byte, Task>? onSlotConfirmed = null,
+        byte? expectedOriginalSlot = null)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        ArgumentNullException.ThrowIfNull(attestSlotAsync);
 
         var original = control.ReadActiveSlot();
         if (original > 1)
@@ -45,7 +59,7 @@ internal static class K15ProfileSwitchTransaction
             if (onSlotConfirmed is not null)
                 await onSlotConfirmed(target);
 
-            if (!attestSlot(target))
+            if (!await attestSlotAsync(target))
                 throw new InvalidOperationException(
                     $"K15 profile switch selected slot {target}, but layout attestation failed.");
 
@@ -64,7 +78,7 @@ internal static class K15ProfileSwitchTransaction
                 if (onSlotConfirmed is not null)
                     await onSlotConfirmed(original);
 
-                if (!attestSlot(original))
+                if (!await attestSlotAsync(original))
                     throw new InvalidOperationException(
                         $"K15 rollback restored slot {original}, but layout attestation failed.");
             }
