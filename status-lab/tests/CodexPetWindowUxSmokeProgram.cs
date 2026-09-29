@@ -413,13 +413,43 @@ catch (InvalidOperationException)
         "K15_PROFILE_SWITCH_TRANSACTION_ROLLBACK_VERIFIED");
 }
 
+var cooperativeTrace = new List<string>();
+var cooperativeMacroCell = K15LayoutAuthorityModel.BindingCells.First().Value;
+var cooperativeControl = new RecordingLayoutReadControl(
+    initialSlot: 1,
+    macroCellIndex: cooperativeMacroCell,
+    cooperativeTrace);
+var cooperativeSnapshot = await K15LayoutAuthority.CaptureCooperativelyAsync(
+    cooperativeControl,
+    async () =>
+    {
+        cooperativeTrace.Add("yield");
+        await Task.Yield();
+    });
+var cooperativeReadIndices = cooperativeTrace
+    .Select((value, index) => (value, index))
+    .Where(item => item.value.StartsWith("binding:", StringComparison.Ordinal) ||
+                   item.value.StartsWith("macro:", StringComparison.Ordinal))
+    .Select(item => item.index)
+    .ToArray();
+Require(cooperativeSnapshot.ActiveSlot == 1 &&
+        cooperativeSnapshot.MacroPayloads.ContainsKey(0) &&
+        cooperativeTrace.Count(value => value == "yield") ==
+            K15LayoutAuthorityModel.BindingCells.Count + 1 &&
+        cooperativeReadIndices.All(index =>
+            index + 1 < cooperativeTrace.Count &&
+            cooperativeTrace[index + 1] == "yield"),
+    "K15_LAYOUT_CAPTURE_COOPERATIVE_YIELD_BETWEEN_HID_READ_UNITS");
+
 var asyncOrder = new List<string>();
 var asyncSwitchControl = new RecordingProfileSlotControl(1);
 var asyncSwitchResult = await K15ProfileSwitchTransaction.ExecuteAsync(
     asyncSwitchControl,
-    slot =>
+    async slot =>
     {
-        asyncOrder.Add($"attest:{slot}");
+        asyncOrder.Add($"attest-start:{slot}");
+        await Task.Yield();
+        asyncOrder.Add($"attest-finish:{slot}");
         return slot == 0;
     },
     async slot =>
@@ -429,8 +459,11 @@ var asyncSwitchResult = await K15ProfileSwitchTransaction.ExecuteAsync(
     },
     expectedOriginalSlot: 1);
 Require(asyncSwitchResult == new K15ProfileSwitchResult(1, 0) &&
-        asyncOrder.SequenceEqual(new[] { "readback:0", "attest:0" }),
-    "K15_PROFILE_SWITCH_READBACK_PRECEDES_ATTESTATION");
+        asyncOrder.SequenceEqual(new[]
+        {
+            "readback:0", "attest-start:0", "attest-finish:0"
+        }),
+    "K15_PROFILE_SWITCH_READBACK_PRECEDES_COOPERATIVE_ATTESTATION");
 
 var asyncRollbackOrder = new List<string>();
 var asyncRollbackControl = new RecordingProfileSlotControl(1);
@@ -438,9 +471,11 @@ try
 {
     await K15ProfileSwitchTransaction.ExecuteAsync(
         asyncRollbackControl,
-        slot =>
+        async slot =>
         {
-            asyncRollbackOrder.Add($"attest:{slot}");
+            asyncRollbackOrder.Add($"attest-start:{slot}");
+            await Task.Yield();
+            asyncRollbackOrder.Add($"attest-finish:{slot}");
             return slot == 1;
         },
         async slot =>
@@ -456,9 +491,10 @@ catch (InvalidOperationException)
     Require(asyncRollbackControl.CurrentSlot == 1 &&
             asyncRollbackOrder.SequenceEqual(new[]
             {
-                "readback:0", "attest:0", "readback:1", "attest:1"
+                "readback:0", "attest-start:0", "attest-finish:0",
+                "readback:1", "attest-start:1", "attest-finish:1"
             }),
-        "K15_PROFILE_SWITCH_ROLLBACK_UI_READBACK_ORDER");
+        "K15_PROFILE_SWITCH_ROLLBACK_COOPERATIVE_ATTESTATION_ORDER");
 }
 
 var stalePreparedControl = new RecordingProfileSlotControl(0);
@@ -820,6 +856,51 @@ internal sealed class RecordingDispatchDelay : IK15DispatchDelay
         return Task.CompletedTask;
     }
 }
+internal sealed class RecordingLayoutReadControl : IK15LayoutReadControl
+{
+    private readonly int _macroCellIndex;
+    private readonly List<string> _trace;
+
+    internal RecordingLayoutReadControl(
+        byte initialSlot,
+        int macroCellIndex,
+        List<string> trace)
+    {
+        CurrentSlot = initialSlot;
+        _macroCellIndex = macroCellIndex;
+        _trace = trace;
+    }
+
+    internal byte CurrentSlot { get; private set; }
+
+    public byte ReadActiveSlot()
+    {
+        _trace.Add("slot");
+        return CurrentSlot;
+    }
+
+    public void SelectActiveSlot(byte slot)
+    {
+        if (slot > 1) throw new ArgumentOutOfRangeException(nameof(slot));
+        _trace.Add($"select:{slot}");
+        CurrentSlot = slot;
+    }
+
+    public byte[] ReadBindingCell(int cellIndex)
+    {
+        _trace.Add($"binding:{cellIndex}");
+        return cellIndex == _macroCellIndex
+            ? new byte[] { 0x0A, 0x00, 0x00, 0x00 }
+            : new byte[] { 0x02, 0x00, 0x00, 0x00 };
+    }
+
+    public byte[] ReadMacroPayload(byte memorySlot)
+    {
+        _trace.Add($"macro:{memorySlot}");
+        return new byte[] { 0x01, 0x02, 0x03 };
+    }
+}
+
 internal sealed class RecordingProfileSlotControl : IK15ProfileSlotControl
 {
     internal RecordingProfileSlotControl(byte initialSlot) => CurrentSlot = initialSlot;

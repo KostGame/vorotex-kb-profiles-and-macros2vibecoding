@@ -101,6 +101,64 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
         }
     }
 
+    internal async Task<K15LayoutAttestationResult> RefreshCooperativelyAsync()
+    {
+        var controller = RequireConnectedController();
+        SetState(K15LayoutAuthorityState.SyncingLayout);
+
+        try
+        {
+            var generation = _deviceManager.ConnectionGeneration;
+            var fileGeneration = Interlocked.Read(ref _fileMutationGeneration);
+            var identity = _deviceManager.SelectedDevice?.IdentityFingerprint
+                ?? throw new InvalidOperationException("Connected K15 identity is unavailable.");
+
+            var slot = controller.ReadActiveSlot();
+            SetState(K15LayoutAuthorityState.SlotOnly);
+
+            var localBefore = K15LayoutFileAuthority.Read(_paths, slot);
+            var hardware = await K15LayoutAuthority.CaptureCooperativelyAsync(controller);
+            var localAfter = K15LayoutFileAuthority.Read(_paths, slot);
+
+            if (generation != _deviceManager.ConnectionGeneration ||
+                !string.Equals(identity, _deviceManager.SelectedDevice?.IdentityFingerprint, StringComparison.Ordinal) ||
+                hardware.ActiveSlot != slot ||
+                localBefore.Stamp != localAfter.Stamp ||
+                fileGeneration != Interlocked.Read(ref _fileMutationGeneration))
+            {
+                Invalidate(K15LayoutAuthorityState.Stale);
+                return new K15LayoutAttestationResult(
+                    K15LayoutVerificationState.Stale,
+                    new[] { "authority changed during synchronization" });
+            }
+
+            var result = K15LayoutAttestation.Compare(hardware, localAfter.Semantic);
+            if (!result.IsVerified)
+            {
+                Invalidate(K15LayoutAuthorityState.Stale);
+                return result;
+            }
+
+            _hardware = hardware;
+            _local = localAfter.Semantic;
+            _stamp = localAfter.Stamp;
+            _connectionGeneration = generation;
+            _identityFingerprint = identity;
+            SetState(K15LayoutAuthorityState.ReadyVerified);
+            return result;
+        }
+        catch (InvalidDataException)
+        {
+            Invalidate(K15LayoutAuthorityState.Unsupported);
+            throw;
+        }
+        catch
+        {
+            Invalidate(K15LayoutAuthorityState.Error);
+            throw;
+        }
+    }
+
     internal K15PreparedDispatch PrepareDispatch(string controlId)
     {
         if (State != K15LayoutAuthorityState.ReadyVerified ||
@@ -172,9 +230,9 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
         var controller = RequireConnectedController();
         return await K15ProfileSwitchTransaction.ExecuteAsync(
             controller,
-            expectedSlot =>
+            async expectedSlot =>
             {
-                var result = Refresh();
+                var result = await RefreshCooperativelyAsync();
                 return result.IsVerified &&
                        _hardware?.ActiveSlot == expectedSlot &&
                        _local?.Slot == expectedSlot;
