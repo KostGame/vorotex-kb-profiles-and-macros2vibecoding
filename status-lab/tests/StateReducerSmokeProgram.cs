@@ -645,6 +645,91 @@ Require(replayLedger.Snapshot.RunningCount == 1 && replayLedger.Snapshot.DoneUnr
         replayLedger.Snapshot.ApprovalWaitingCount == 1 && replayLedger.State == K15NormalizedState.Waiting,
     "Scenario L: journal replay must restore multi-session aggregate attention.");
 
+var livenessRunning = new StateReducer();
+livenessRunning.Apply(Hook(t, "UserPromptSubmit", "ghost-running", turn: "ghost-turn", thread: "ghost-thread"));
+var livenessRunningTransition = livenessRunning.ReconcileLiveness(
+    CodexLivenessState.NotRunning, t.AddSeconds(10));
+Require(livenessRunningTransition?.Reason == "codex_desktop_not_running" &&
+        livenessRunning.State == K15NormalizedState.Normal &&
+        livenessRunning.SessionSnapshots.Count == 0 &&
+        livenessRunning.ActiveTaskSessionCount == 0 &&
+        livenessRunning.Liveness == CodexLivenessState.NotRunning,
+    "CODEX_DESKTOP_EXIT_CLEARS_STALE_RUNNING");
+
+var livenessWaiting = new StateReducer();
+livenessWaiting.Apply(Hook(t, "UserPromptSubmit", "ghost-waiting", turn: "wait-turn", thread: "wait-thread"));
+livenessWaiting.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "ghost-waiting",
+    turn: "wait-turn", thread: "wait-thread"));
+livenessWaiting.ReconcileLiveness(CodexLivenessState.NotRunning, t.AddSeconds(10));
+Require(livenessWaiting.State == K15NormalizedState.Normal &&
+        livenessWaiting.SessionSnapshots.Count == 0 &&
+        livenessWaiting.Snapshot.ApprovalWaitingCount == 0,
+    "CODEX_DESKTOP_EXIT_CLEARS_STALE_WAITING");
+
+var livenessDone = new StateReducer();
+livenessDone.Apply(Hook(t, "UserPromptSubmit", "ghost-done", turn: "done-turn", thread: "done-thread"));
+livenessDone.Apply(Completion(t.AddSeconds(1), "done-thread", "done-turn"));
+livenessDone.ReconcileLiveness(CodexLivenessState.NotRunning, t.AddSeconds(10));
+Require(livenessDone.State == K15NormalizedState.Normal &&
+        livenessDone.SessionSnapshots.Count == 0 &&
+        livenessDone.Snapshot.DoneUnreadCount == 0 &&
+        CodexPetAdapter.Map(livenessDone.SessionSnapshots,
+            new Dictionary<string, CodexUnreadState>()).State == CodexPetVisualState.Idle,
+    "CODEX_DESKTOP_EXIT_CLEARS_STALE_DONE_AND_PET_TASK");
+
+var livenessUnknown = new StateReducer();
+livenessUnknown.Apply(Hook(t, "UserPromptSubmit", "unknown-running",
+    turn: "unknown-turn", thread: "unknown-thread"));
+livenessUnknown.ReconcileLiveness(CodexLivenessState.Unknown, t.AddSeconds(10));
+Require(livenessUnknown.State == K15NormalizedState.Running &&
+        livenessUnknown.SessionSnapshots.Count == 1 &&
+        livenessUnknown.Liveness == CodexLivenessState.Unknown,
+    "CODEX_LIVENESS_UNKNOWN_FAILS_CONSERVATIVELY");
+
+var livenessAliveDone = new StateReducer();
+livenessAliveDone.Apply(Hook(t, "UserPromptSubmit", "alive-done", turn: "alive-turn", thread: "alive-thread"));
+livenessAliveDone.Apply(Completion(t.AddSeconds(1), "alive-thread", "alive-turn"));
+livenessAliveDone.ReconcileLiveness(CodexLivenessState.Alive, t.AddSeconds(10));
+Require(livenessAliveDone.State == K15NormalizedState.DonePendingAttention &&
+        livenessAliveDone.Snapshot.DoneUnreadCount == 1 &&
+        livenessAliveDone.SessionSnapshots.Count == 1,
+    "CODEX_LIVENESS_ALIVE_PRESERVES_DONE_UNREAD");
+
+var livenessReplay = new StateReducer();
+livenessReplay.Rehydrate(new[]
+{
+    Hook(t, "UserPromptSubmit", "rehydrated-ghost", turn: "replay-turn", thread: "replay-thread")
+});
+livenessReplay.ReconcileLiveness(CodexLivenessState.NotRunning, t.AddSeconds(10));
+Require(livenessReplay.State == K15NormalizedState.Normal &&
+        livenessReplay.SessionSnapshots.Count == 0,
+    "CODEX_STARTUP_REHYDRATE_CANNOT_RESURRECT_DEAD_RUNTIME");
+
+var primaryCodexPath =
+    @"C:\Program Files\WindowsApps\OpenAI.Codex_99.0.0.0_x64__fixture\app\ChatGPT.exe";
+var primaryCodexAltPath =
+    @"C:\Program Files\WindowsApps\OpenAI.Codex_99.0.0.0_x64__fixture\app\Codex.exe";
+var codexHelperPath =
+    @"C:\Program Files\WindowsApps\OpenAI.Codex_99.0.0.0_x64__fixture\app\resources\codex.exe";
+var chatGptDesktopPath =
+    @"C:\Program Files\WindowsApps\OpenAI.ChatGPT-Desktop_99.0.0.0_x64__fixture\app\ChatGPT.exe";
+Require(WindowsCodexLivenessProvider.Classify(new[]
+        { new CodexProcessCandidate("ChatGPT", primaryCodexPath) }) == CodexLivenessState.Alive &&
+        WindowsCodexLivenessProvider.Classify(new[]
+        { new CodexProcessCandidate("Codex", primaryCodexAltPath) }) == CodexLivenessState.Alive,
+    "CODEX_LIVENESS_PRIMARY_PACKAGE_PROCESS_ALIVE");
+Require(WindowsCodexLivenessProvider.Classify(new[]
+        { new CodexProcessCandidate("Codex", codexHelperPath) }) == CodexLivenessState.NotRunning &&
+        WindowsCodexLivenessProvider.Classify(new[]
+        { new CodexProcessCandidate("ChatGPT", chatGptDesktopPath) }) == CodexLivenessState.NotRunning &&
+        WindowsCodexLivenessProvider.Classify(Array.Empty<CodexProcessCandidate>()) == CodexLivenessState.NotRunning,
+    "CODEX_LIVENESS_HELPERS_AND_CHATGPT_DESKTOP_NOT_PRIMARY");
+Require(WindowsCodexLivenessProvider.Classify(new[]
+        { new CodexProcessCandidate("ChatGPT", null, InspectionFailed: true) }) == CodexLivenessState.Unknown,
+    "CODEX_LIVENESS_INSPECTION_FAILURE_IS_UNKNOWN");
+
+Console.WriteLine("CODEX_DESKTOP_LIVENESS_RECONCILIATION_SMOKE=PASS");
+
 var config = StatusLabConfig.CreateDefault();
 config.Validate();
 Require(config.SchemaVersion == 6, "Canonical TOML schema must be v6.");

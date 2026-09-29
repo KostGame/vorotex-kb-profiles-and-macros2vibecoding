@@ -6,6 +6,7 @@ namespace Vorotex.K15.StatusLab;
 internal sealed class JournalStateNormalizer : IAsyncDisposable
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan LivenessPollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan ReorderDelay = TimeSpan.FromMilliseconds(400);
     private static readonly TimeSpan StartupReplayWindow = TimeSpan.FromMinutes(30);
     private const int StartupReplayMaxLines = 5000;
@@ -21,16 +22,28 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private string _tailRemainder = string.Empty;
     private readonly object _sync = new();
     private readonly CodexReadAckObserver? _readAckObserver;
+    private readonly ICodexLivenessProvider? _livenessProvider;
+    private DateTimeOffset _nextLivenessProbeUtc = DateTimeOffset.MinValue;
 
     public JournalStateNormalizer(double staleAttentionTimeoutSeconds = 18000, ICodexUnreadStateReader? unreadReader = null)
         : this(staleAttentionTimeoutSeconds,
-            unreadReader is null ? null : new SingleCodexUnreadSourceRegistry(unreadReader))
+            unreadReader is null ? null : new SingleCodexUnreadSourceRegistry(unreadReader),
+            null)
     {
     }
 
     public JournalStateNormalizer(double staleAttentionTimeoutSeconds, ICodexUnreadSourceRegistry? unreadSources)
+        : this(staleAttentionTimeoutSeconds, unreadSources, null)
+    {
+    }
+
+    internal JournalStateNormalizer(
+        double staleAttentionTimeoutSeconds,
+        ICodexUnreadSourceRegistry? unreadSources,
+        ICodexLivenessProvider? livenessProvider)
     {
         _reducer = new StateReducer(staleAttentionTimeoutSeconds);
+        _livenessProvider = livenessProvider;
         if (unreadSources is not null) _readAckObserver = new(unreadSources, "local");
     }
 
@@ -54,6 +67,11 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 
         foreach (var transition in replayTransitions)
             PublishSessionTransition(transition);
+
+        // Journal replay is historical evidence, not proof that the desktop
+        // which emitted it is still alive. Reconcile before publishing the
+        // startup snapshot so a closed Codex cannot resurrect stale tasks.
+        ReconcileLiveness(DateTimeOffset.UtcNow, force: true);
 
         EventJournal.Append(new
         {
@@ -120,7 +138,20 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 {
                     CollectNewEvents();
                     var nowUtc = DateTimeOffset.UtcNow;
-                    FlushReadyEvents(nowUtc - ReorderDelay);
+                    var forceLivenessProbe = _pending.Count > 0 &&
+                        _reducer.Liveness == CodexLivenessState.NotRunning;
+                    var liveness = ReconcileLiveness(nowUtc, forceLivenessProbe);
+                    if (liveness == CodexLivenessState.NotRunning)
+                    {
+                        // A confirmed desktop exit supersedes queued events
+                        // from that runtime. Do not let the reorder buffer
+                        // resurrect a ghost session after cleanup.
+                        _pending.Clear();
+                    }
+                    else
+                    {
+                        FlushReadyEvents(nowUtc - ReorderDelay);
+                    }
                     var timedTransition = _reducer.Tick(nowUtc);
                     if (timedTransition is not null)
                         PublishTransition(timedTransition);
@@ -149,7 +180,42 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             }
         }
 
-        lock (_sync) FlushReadyEvents(DateTimeOffset.MaxValue);
+        lock (_sync)
+        {
+            if (_reducer.Liveness == CodexLivenessState.NotRunning)
+                _pending.Clear();
+            else
+                FlushReadyEvents(DateTimeOffset.MaxValue);
+        }
+    }
+
+    private CodexLivenessState ReconcileLiveness(DateTimeOffset nowUtc, bool force = false)
+    {
+        if (_livenessProvider is null)
+            return _reducer.Liveness;
+        if (!force && nowUtc < _nextLivenessProbeUtc)
+            return _reducer.Liveness;
+
+        _nextLivenessProbeUtc = nowUtc + LivenessPollInterval;
+
+        CodexLivenessState liveness;
+        try
+        {
+            liveness = _livenessProvider.GetLiveness();
+        }
+        catch
+        {
+            // A probe failure is never evidence that Codex exited. Preserve
+            // the ledger and retry on the next bounded poll.
+            liveness = CodexLivenessState.Unknown;
+        }
+
+        var transition = _reducer.ReconcileLiveness(liveness, nowUtc);
+        foreach (var sessionTransition in _reducer.LastSessionTransitions)
+            PublishSessionTransition(sessionTransition);
+        if (transition is not null)
+            PublishTransition(transition);
+        return _reducer.Liveness;
     }
 
     private void PollReadAcknowledgments(DateTimeOffset nowUtc)

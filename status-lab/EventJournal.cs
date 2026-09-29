@@ -180,7 +180,7 @@ internal static class EventJournal
     }
 
     private static bool IsSafeState(string? value) => value is "NORMAL" or "RUNNING" or "WAITING" or "DONE_PENDING_ATTENTION" or "ERROR" or "ENDED";
-    private static bool IsSafeReason(string? value) => value is "codex_read_ack" or "codex_user_prompt_submit" or "codex_permission_request" or "codex_pre_tool_use" or "codex_post_tool_use" or "codex_stop" or "codex_session_end" or "codex_approval_resolved" or "codex_turn_completed" or "state_rehydrated" or "stale_attention_timeout" or "aggregate_precedence_normal" or "aggregate_precedence_running" or "aggregate_precedence_waiting" or "aggregate_precedence_donependingattention";
+    private static bool IsSafeReason(string? value) => value is "codex_read_ack" or "codex_user_prompt_submit" or "codex_permission_request" or "codex_pre_tool_use" or "codex_post_tool_use" or "codex_stop" or "codex_session_end" or "codex_approval_resolved" or "codex_turn_completed" or "state_rehydrated" or "stale_attention_timeout" or "codex_desktop_not_running" or "aggregate_precedence_normal" or "aggregate_precedence_running" or "aggregate_precedence_waiting" or "aggregate_precedence_donependingattention";
     private static bool IsSafeReadAckEvidence(JsonElement root)
     {
         var allowed = new[] { "timestampUtc", "source", "event", "reason", "host", "sessionId", "threadId", "turnId", "runtimeEpoch", "completionGeneration", "completedUtc", "hasUnreadUtc", "firstNoUnreadUtc", "secondNoUnreadUtc" };
