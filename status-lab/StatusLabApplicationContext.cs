@@ -31,7 +31,10 @@ internal sealed class StatusLabApplicationContext : ApplicationContext
     {
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
-        _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds);
+        _stateNormalizer = new JournalStateNormalizer(
+            _config.StaleAttentionTimeoutSeconds,
+            unreadSources: null,
+            livenessProvider: new WindowsCodexLivenessProvider());
         _rgbCanary = new K15RgbCanary(_config);
         _trackingOnIcon = TrayIconFactory.Create(trackingEnabled: true);
         _trackingOffIcon = TrayIconFactory.Create(trackingEnabled: false);

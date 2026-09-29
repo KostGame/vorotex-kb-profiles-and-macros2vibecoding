@@ -22,6 +22,17 @@ internal static class CodexReadAckTests
         reducer.Apply(Hook("Stop", 2, session, thread, turn));
         return reducer;
     }
+    private sealed class MutableLiveness : ICodexLivenessProvider
+    {
+        public CodexLivenessState State;
+        public int Calls;
+        public CodexLivenessState GetLiveness()
+        {
+            Calls++;
+            return State;
+        }
+    }
+
     private sealed class Reader : ICodexUnreadStateReader
     {
         public string[]? Ids = ["T"];
@@ -49,6 +60,7 @@ internal static class CodexReadAckTests
     public static void Run()
     {
         SourceIdentityTests();
+        NormalizerLivenessTests();
         Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[\"T\"]}}")) == CodexUnreadState.HasUnread, "CANONICAL_SINGLE_IDENTITY_HAS_UNREAD");
         Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[]}}")) == CodexUnreadState.NoUnread, "CANONICAL_SINGLE_IDENTITY_NO_UNREAD");
         Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[\"T\"]},\"identity-b\":{\"host-a\":[]}}")) == CodexUnreadState.Unknown, "CANONICAL_MULTIPLE_IDENTITIES_UNKNOWN");
@@ -230,6 +242,112 @@ internal static class CodexReadAckTests
         ArchitectRegressions();
         NormalizerTests();
         Console.WriteLine($"READ_ACK_SCENARIOS_PASSED={_passed}");
+    }
+
+    private static void NormalizerLivenessTests()
+    {
+        var directory = Path.Combine(Path.GetTempPath(),
+            "k15-liveness-normalizer-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        EventJournal.SetTestDirectoryPath(directory);
+        JournalStateNormalizer? normalizer = null;
+        try
+        {
+            EventJournal.EnsureExists();
+            var provider = new MutableLiveness { State = CodexLivenessState.NotRunning };
+            var now = DateTimeOffset.UtcNow;
+
+            void AppendPrompt(string session, string thread, string turn)
+            {
+                var line = JsonSerializer.Serialize(new
+                {
+                    timestampUtc = DateTimeOffset.UtcNow,
+                    source = "codex_hook",
+                    @event = "UserPromptSubmit",
+                    sessionId = session,
+                    threadId = thread,
+                    turnId = turn,
+                    cwd = @"C:\synthetic"
+                });
+                File.AppendAllText(EventJournal.FilePath, line + Environment.NewLine);
+            }
+
+            // Historical replay says RUNNING, but authoritative desktop
+            // liveness says the runtime is already gone.
+            File.AppendAllText(EventJournal.FilePath, JsonSerializer.Serialize(new
+            {
+                timestampUtc = now.AddSeconds(-2),
+                source = "codex_hook",
+                @event = "UserPromptSubmit",
+                sessionId = "startup-ghost",
+                threadId = "startup-thread",
+                turnId = "startup-turn",
+                cwd = @"C:\synthetic"
+            }) + Environment.NewLine);
+
+            normalizer = new JournalStateNormalizer(0, unreadSources: null, livenessProvider: provider);
+            normalizer.Start();
+
+            Check(provider.Calls >= 1 &&
+                  normalizer.State == K15NormalizedState.Normal &&
+                  normalizer.SessionSnapshots.Count == 0 &&
+                  normalizer.AttentionSnapshot.ActiveTaskSessionCount == 0,
+                "NORMALIZER_STARTUP_DEAD_DESKTOP_CLEARS_REHYDRATED_GHOST");
+
+            // A delayed hook from the dead runtime must not get through the
+            // 400 ms reorder buffer after the liveness boundary.
+            AppendPrompt("late-ghost", "late-thread", "late-turn");
+            var deadline = DateTime.UtcNow.AddSeconds(2);
+            while (DateTime.UtcNow < deadline && provider.Calls < 2)
+                Thread.Sleep(30);
+            Thread.Sleep(650);
+            Check(normalizer.State == K15NormalizedState.Normal &&
+                  normalizer.SessionSnapshots.Count == 0,
+                "NORMALIZER_DEAD_DESKTOP_DROPS_PENDING_OLD_RUNTIME_EVENT");
+
+            // A real new desktop start must not lose its first hook merely
+            // because the previous observed state was NotRunning.
+            provider.State = CodexLivenessState.Alive;
+            AppendPrompt("new-runtime", "new-thread", "new-turn");
+            deadline = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < deadline &&
+                   (normalizer.State != K15NormalizedState.Running ||
+                    normalizer.SessionSnapshots.All(row => row.SessionId != "new-runtime")))
+            {
+                Thread.Sleep(30);
+            }
+            Check(normalizer.State == K15NormalizedState.Running &&
+                  normalizer.SessionSnapshots.Count == 1 &&
+                  normalizer.SessionSnapshots[0].SessionId == "new-runtime",
+                "NORMALIZER_NEW_DESKTOP_FIRST_EVENT_SURVIVES_PRIOR_NOTRUNNING");
+
+            provider.State = CodexLivenessState.NotRunning;
+            deadline = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < deadline &&
+                   (normalizer.State != K15NormalizedState.Normal ||
+                    normalizer.SessionSnapshots.Count != 0))
+            {
+                Thread.Sleep(30);
+            }
+            Check(normalizer.State == K15NormalizedState.Normal &&
+                  normalizer.SessionSnapshots.Count == 0 &&
+                  normalizer.AttentionSnapshot.ActiveTaskSessionCount == 0,
+                "NORMALIZER_RUNTIME_EXIT_CLEARS_LIVE_LEDGER_WITHOUT_RESTART");
+
+            var journal = File.ReadAllText(EventJournal.FilePath);
+            Check(journal.Contains("runtime_liveness_reconciled", StringComparison.Ordinal) &&
+                  journal.Contains("codex_desktop_not_running", StringComparison.Ordinal) &&
+                  journal.Contains("\"clearedSessionCount\":1", StringComparison.Ordinal),
+                "NORMALIZER_DESKTOP_EXIT_REASON_PERSISTED");
+        }
+        finally
+        {
+            if (normalizer is not null)
+                normalizer.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            EventJournal.SetTestDirectoryPath(null);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, true);
+        }
     }
 
     private static void SourceIdentityTests()

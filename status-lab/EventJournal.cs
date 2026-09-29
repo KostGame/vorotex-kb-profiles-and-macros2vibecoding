@@ -141,13 +141,14 @@ internal static class EventJournal
     {
         var name = GetString(root, "event");
         if (name == "read_ack_evidence") return IsSafeReadAckEvidence(root);
-        if (name is not ("normalized_state_changed" or "session_state_changed" or "state_rehydrated" or "normalizer_error"))
+        if (name is not ("normalized_state_changed" or "session_state_changed" or "state_rehydrated" or "runtime_liveness_reconciled" or "normalizer_error"))
             return false;
         var allowed = name switch
         {
             "normalized_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "previous", "current", "reason", "sourceTimestampUtc", "focusedSessionId", "focusedCwd", "activeTaskSessions", "attention", "aggregatePrevious", "aggregateCurrent", "driverSessionId", "driverReason", "runningCount", "waitingCount", "doneUnreadCount" },
             "session_state_changed" => new[] { "timestampUtc", "source", "event", "plane", "sessionId", "sourceInstanceId", "previous", "current", "reason", "sourceTimestampUtc", "isRehydrated", "correlation", "permissionEvidence" },
             "state_rehydrated" => new[] { "timestampUtc", "source", "event", "current", "focusedSessionId", "focusedCwd", "activeTaskSessions", "attention", "replayWindowMinutes" },
+            "runtime_liveness_reconciled" => new[] { "timestampUtc", "source", "event", "reason", "previous", "current", "clearedSessionCount" },
             _ => new[] { "timestampUtc", "source", "event", "exception", "hresult" }
         };
         if (!root.EnumerateObject().All(p => allowed.Contains(p.Name, StringComparer.Ordinal)) ||
@@ -173,6 +174,12 @@ internal static class EventJournal
         foreach (var property in root.EnumerateObject())
         {
             if (property.Name is "timestampUtc" or "sourceTimestampUtc" or "correlation" or "attention" or "permissionEvidence") continue;
+            if (property.Name == "clearedSessionCount")
+            {
+                if (property.Value.ValueKind != JsonValueKind.Number ||
+                    !property.Value.TryGetInt32(out var cleared) || cleared < 1 || cleared > 100000) return false;
+                continue;
+            }
             if (property.Value.ValueKind == JsonValueKind.String && Encoding.UTF8.GetByteCount(property.Value.GetString() ?? string.Empty) > 256) return false;
             if (property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array) return false;
         }
@@ -180,7 +187,7 @@ internal static class EventJournal
     }
 
     private static bool IsSafeState(string? value) => value is "NORMAL" or "RUNNING" or "WAITING" or "DONE_PENDING_ATTENTION" or "ERROR" or "ENDED";
-    private static bool IsSafeReason(string? value) => value is "codex_read_ack" or "codex_user_prompt_submit" or "codex_permission_request" or "codex_pre_tool_use" or "codex_post_tool_use" or "codex_stop" or "codex_session_end" or "codex_approval_resolved" or "codex_turn_completed" or "state_rehydrated" or "stale_attention_timeout" or "aggregate_precedence_normal" or "aggregate_precedence_running" or "aggregate_precedence_waiting" or "aggregate_precedence_donependingattention";
+    private static bool IsSafeReason(string? value) => value is "codex_read_ack" or "codex_user_prompt_submit" or "codex_permission_request" or "codex_pre_tool_use" or "codex_post_tool_use" or "codex_stop" or "codex_session_end" or "codex_approval_resolved" or "codex_turn_completed" or "state_rehydrated" or "stale_attention_timeout" or "codex_desktop_not_running" or "aggregate_precedence_normal" or "aggregate_precedence_running" or "aggregate_precedence_waiting" or "aggregate_precedence_donependingattention";
     private static bool IsSafeReadAckEvidence(JsonElement root)
     {
         var allowed = new[] { "timestampUtc", "source", "event", "reason", "host", "sessionId", "threadId", "turnId", "runtimeEpoch", "completionGeneration", "completedUtc", "hasUnreadUtc", "firstNoUnreadUtc", "secondNoUnreadUtc" };

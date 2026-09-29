@@ -15,6 +15,7 @@
     <Compile Include="..\CodexUnreadStateReader.cs" Link="CodexUnreadStateReader.cs" />
     <Compile Include="..\CodexUnreadSourceRegistry.cs" Link="CodexUnreadSourceRegistry.cs" />
     <Compile Include="..\CodexSourceIdentity.cs" Link="CodexSourceIdentity.cs" />
+    <Compile Include="..\CodexDesktopLiveness.cs" Link="CodexDesktopLiveness.cs" />
     <Compile Include="..\StateReducer.cs" Link="StateReducer.cs" />
     <Compile Include="..\K15HidProtocol.cs" Link="K15HidProtocol.cs" />
     <Compile Include="..\StatusLabConfig.cs" Link="StatusLabConfig.cs" />

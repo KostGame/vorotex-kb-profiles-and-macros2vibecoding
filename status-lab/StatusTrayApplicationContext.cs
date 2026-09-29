@@ -42,8 +42,10 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         EventJournal.EnsureExists();
         _config = StatusLabConfig.LoadOrCreate();
         _unreadSources = CodexUnreadSourceRegistry.Detect();
-        _stateNormalizer = new JournalStateNormalizer(_config.StaleAttentionTimeoutSeconds,
-            _unreadSources);
+        _stateNormalizer = new JournalStateNormalizer(
+            _config.StaleAttentionTimeoutSeconds,
+            _unreadSources,
+            new WindowsCodexLivenessProvider());
         _deviceManager = new K15DeviceManager(Path.Combine(EventJournal.DirectoryPath, "preferred-device.json"));
         _layoutAuthority = new K15LayoutAuthoritySession(_deviceManager);
         _rgbCanary = new K15RgbCanary(_config, _deviceManager);

@@ -16,8 +16,8 @@ internal enum CodexLivenessState
     Unknown
 }
 
-// Reserved for a future proven Codex host signal. Unknown deliberately has no
-// destructive effect on the attention ledger.
+// Desktop liveness is an authority separate from the event ledger.
+// Unknown deliberately has no destructive effect on the attention ledger.
 internal interface ICodexLivenessProvider
 {
     CodexLivenessState GetLiveness();
@@ -147,8 +147,10 @@ internal sealed class StateReducer
     private DateTimeOffset? _noRunningSinceUtc;
     private Guid _runtimeEpoch = Guid.NewGuid();
     private readonly DateTimeOffset _runtimeStartedUtc;
+    private CodexLivenessState _liveness = CodexLivenessState.Unknown;
 
     public IReadOnlyList<SessionStateTransition> LastSessionTransitions { get; private set; } = Array.Empty<SessionStateTransition>();
+    public int LastLivenessClearedSessionCount { get; private set; }
 
     public StateReducer(double staleAttentionTimeoutSeconds = 18000, DateTimeOffset? runtimeStartedUtc = null)
     {
@@ -172,7 +174,7 @@ internal sealed class StateReducer
         ? session.Cwd
         : string.Empty;
     public int ActiveTaskSessionCount => _sessions.Values.Count(session => !session.Internal && !session.Ended);
-    public CodexLivenessState Liveness => CodexLivenessState.Unknown;
+    public CodexLivenessState Liveness => _liveness;
 
     public CodexAttentionSnapshot Snapshot => CreateSnapshot();
 
@@ -252,6 +254,15 @@ internal sealed class StateReducer
     public StateTransition? Apply(StatusInputEvent input)
     {
         LastSessionTransitions = Array.Empty<SessionStateTransition>();
+        if (input.Source.Equals("codex_hook", StringComparison.Ordinal) ||
+            input.Source.Equals("codex_stdio_bridge", StringComparison.Ordinal))
+        {
+            // Fresh trusted runtime activity is stronger evidence than a stale
+            // previous negative probe. The periodic OS probe will reconcile
+            // again if the desktop subsequently exits.
+            _liveness = CodexLivenessState.Alive;
+        }
+
         if (input.Source.Equals("codex_hook", StringComparison.Ordinal))
             return ApplyCodex(input);
 
@@ -278,6 +289,49 @@ internal sealed class StateReducer
             replayTransitions.AddRange(LastSessionTransitions.Select(transition => transition with { IsRehydrated = true }));
         }
         LastSessionTransitions = replayTransitions;
+    }
+
+    public StateTransition? ReconcileLiveness(CodexLivenessState liveness, DateTimeOffset timestampUtc)
+    {
+        LastSessionTransitions = Array.Empty<SessionStateTransition>();
+        LastLivenessClearedSessionCount = 0;
+        _liveness = liveness;
+        if (liveness != CodexLivenessState.NotRunning)
+            return null;
+
+        if (_sessions.Count == 0)
+            return null;
+
+        LastLivenessClearedSessionCount = _sessions.Count;
+        var externalSessions = _sessions.Values.Where(session => !session.Internal).ToArray();
+        var previous = State;
+        foreach (var session in externalSessions)
+        {
+            SetSessionState(session, K15NormalizedState.Normal, "codex_desktop_not_running", timestampUtc);
+            session.Ended = true;
+            session.LastPermissionUtc = null;
+            session.LastStopUtc = null;
+            session.DoneEnteredUtc = null;
+            session.AcknowledgedUtc = timestampUtc;
+            session.Completion = null;
+            session.ReadAcknowledgedCompletion = null;
+            session.CompletionEnteredUtc = null;
+            session.CompletionCorrelationRejected = false;
+        }
+
+        // A confirmed desktop exit is a runtime boundary. Drop the complete
+        // ledger, including internal/background rows, so a later Codex start
+        // cannot inherit stale focus, completion, or active-task identity.
+        _runtimeEpoch = Guid.NewGuid();
+        _sessions.Clear();
+        _focusedSessionKey = null;
+        _noRunningSinceUtc = null;
+        State = K15NormalizedState.Normal;
+
+        return previous == K15NormalizedState.Normal
+            ? null
+            : new StateTransition(previous, K15NormalizedState.Normal,
+                "codex_desktop_not_running", timestampUtc);
     }
 
     public StateTransition? Tick(DateTimeOffset nowUtc)
@@ -617,6 +671,7 @@ internal sealed class StateReducer
         _focusedSessionKey = null;
         State = K15NormalizedState.Normal;
         _noRunningSinceUtc = null;
+        _liveness = CodexLivenessState.Unknown;
         LastSessionTransitions = Array.Empty<SessionStateTransition>();
     }
 
