@@ -112,6 +112,44 @@ Require(expectedPetSizes.Keys.All(preset => !string.IsNullOrWhiteSpace(CodexPetS
         CodexPetSizePolicy.Label(PetSizePreset.ExtraLarge) == "Очень большой" &&
         CodexPetSizePolicy.Label(PetSizePreset.Huge) == "Огромный",
     "PET_SIZE_MENU_LABELS");
+Require(Enum.GetValues<PetSizePreset>().All(preset =>
+    {
+        var geometry = CodexPetSizePolicy.Geometry(preset);
+        var window = new Rectangle(Point.Empty, geometry.WindowSize);
+        return window.Contains(geometry.ProfileBadgeBounds) &&
+               !geometry.ProfileBadgeBounds.IntersectsWith(geometry.BadgeBounds);
+    }),
+    "PROFILE_BADGE_BOUNDED_AND_SEPARATE_FROM_TASK_BADGE");
+var feedbackNow = DateTimeOffset.UtcNow;
+var dispatchFeedback = new CodexPetControlFeedback(
+    "key-1", CodexPetControlFeedbackPhase.Dispatching, feedbackNow);
+var dispatchRender = CodexPetControlFeedbackPolicy.RenderState(
+    "key-1", "key-1", null, dispatchFeedback, feedbackNow.AddMilliseconds(80));
+var pressedRender = CodexPetControlFeedbackPolicy.RenderState(
+    "key-1", null, "key-1", CodexPetControlFeedback.None(feedbackNow), feedbackNow);
+Require(dispatchRender.Hovered && !dispatchRender.Pressed &&
+        dispatchRender.FeedbackPhase == CodexPetControlFeedbackPhase.Dispatching &&
+        dispatchRender.Pulse is >= 0.5 and <= 1.01 &&
+        pressedRender.Pressed &&
+        pressedRender.FeedbackPhase == CodexPetControlFeedbackPhase.None,
+    "PET_CONTROL_FEEDBACK_RENDER_PHASES");
+var successFeedback = new CodexPetControlFeedback(
+    "key-1", CodexPetControlFeedbackPhase.Success, feedbackNow);
+var blockedFeedback = new CodexPetControlFeedback(
+    "key-1", CodexPetControlFeedbackPhase.Blocked, feedbackNow);
+Require(CodexPetControlFeedbackPolicy.Normalize(
+            successFeedback, feedbackNow + CodexPetControlFeedbackPolicy.SuccessDuration -
+                             TimeSpan.FromMilliseconds(1)).Phase ==
+        CodexPetControlFeedbackPhase.Success &&
+        CodexPetControlFeedbackPolicy.Normalize(
+            successFeedback, feedbackNow + CodexPetControlFeedbackPolicy.SuccessDuration +
+                             TimeSpan.FromMilliseconds(1)).Phase ==
+        CodexPetControlFeedbackPhase.None &&
+        CodexPetControlFeedbackPolicy.Normalize(
+            blockedFeedback, feedbackNow + CodexPetControlFeedbackPolicy.BlockedDuration +
+                             TimeSpan.FromMilliseconds(1)).Phase ==
+        CodexPetControlFeedbackPhase.None,
+    "PET_CONTROL_FEEDBACK_TERMINAL_TTL");
 var blueBadgeStyle = CodexPetBadgeVisualPolicy.Resolve(Color.Blue);
 var redBadgeStyle = CodexPetBadgeVisualPolicy.Resolve(Color.Red);
 Require(!CodexPetBadgeRenderer.ShouldDraw(0) &&
@@ -362,6 +400,70 @@ catch (InvalidOperationException)
     Require(rollbackControl.CurrentSlot == 1 &&
             rollbackControl.SelectedSlots.SequenceEqual(new byte[] { 0, 1 }),
         "K15_PROFILE_SWITCH_TRANSACTION_ROLLBACK_VERIFIED");
+}
+
+var asyncOrder = new List<string>();
+var asyncSwitchControl = new RecordingProfileSlotControl(1);
+var asyncSwitchResult = await K15ProfileSwitchTransaction.ExecuteAsync(
+    asyncSwitchControl,
+    slot =>
+    {
+        asyncOrder.Add($"attest:{slot}");
+        return slot == 0;
+    },
+    async slot =>
+    {
+        asyncOrder.Add($"readback:{slot}");
+        await Task.Yield();
+    },
+    expectedOriginalSlot: 1);
+Require(asyncSwitchResult == new K15ProfileSwitchResult(1, 0) &&
+        asyncOrder.SequenceEqual(new[] { "readback:0", "attest:0" }),
+    "K15_PROFILE_SWITCH_READBACK_PRECEDES_ATTESTATION");
+
+var asyncRollbackOrder = new List<string>();
+var asyncRollbackControl = new RecordingProfileSlotControl(1);
+try
+{
+    await K15ProfileSwitchTransaction.ExecuteAsync(
+        asyncRollbackControl,
+        slot =>
+        {
+            asyncRollbackOrder.Add($"attest:{slot}");
+            return slot == 1;
+        },
+        async slot =>
+        {
+            asyncRollbackOrder.Add($"readback:{slot}");
+            await Task.Yield();
+        },
+        expectedOriginalSlot: 1);
+    Require(false, "K15_PROFILE_SWITCH_ASYNC_ROLLBACK_EXPECTED_FAILURE");
+}
+catch (InvalidOperationException)
+{
+    Require(asyncRollbackControl.CurrentSlot == 1 &&
+            asyncRollbackOrder.SequenceEqual(new[]
+            {
+                "readback:0", "attest:0", "readback:1", "attest:1"
+            }),
+        "K15_PROFILE_SWITCH_ROLLBACK_UI_READBACK_ORDER");
+}
+
+var stalePreparedControl = new RecordingProfileSlotControl(0);
+try
+{
+    await K15ProfileSwitchTransaction.ExecuteAsync(
+        stalePreparedControl,
+        _ => true,
+        expectedOriginalSlot: 1);
+    Require(false, "K15_PROFILE_SWITCH_STALE_PREPARED_SLOT_EXPECTED_FAILURE");
+}
+catch (InvalidOperationException)
+{
+    Require(stalePreparedControl.CurrentSlot == 0 &&
+            stalePreparedControl.SelectedSlots.Count == 0,
+        "K15_PROFILE_SWITCH_STALE_PREPARED_SLOT_FAILS_BEFORE_SWITCH");
 }
 
 var layoutTemp = Path.Combine(Path.GetTempPath(), "k15-layout-authority-" + Guid.NewGuid().ToString("N"));
@@ -640,7 +742,9 @@ static Bitmap RenderPreset(CodexPetSizeGeometry geometry, Color accent)
         (int)Math.Round(accent.B + (255 - accent.B) * 0.18));
     foreach (var control in MiniK15ControlLayout.Controls)
         CodexPetControlRenderer.Draw(graphics, control,
-            CodexPetSizePolicy.ControlBounds(body, control), keyFill);
+            CodexPetSizePolicy.ControlBounds(body, control), keyFill,
+            new CodexPetControlRenderState(false, false,
+                CodexPetControlFeedbackPhase.None, 1d));
     CodexPetBadgeRenderer.Draw(graphics, geometry.BadgeBounds, "1", accent);
     return bitmap;
 }

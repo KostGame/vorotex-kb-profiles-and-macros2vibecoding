@@ -13,6 +13,13 @@ internal readonly record struct ProfileColorHint(
     internal static ProfileColorHint Unknown(DateTimeOffset now) =>
         new(K15Profile.Unknown, ProfileColorConfidence.Unknown, ProfileColorSource.None, now);
 
+    internal static ProfileColorHint FromReadback(byte slot, DateTimeOffset observedUtc) => slot switch
+    {
+        0 => new(K15Profile.A, ProfileColorConfidence.Exact, ProfileColorSource.DeviceReadback, observedUtc),
+        1 => new(K15Profile.B, ProfileColorConfidence.Exact, ProfileColorSource.DeviceReadback, observedUtc),
+        _ => Unknown(observedUtc)
+    };
+
     internal bool IsExact => Confidence == ProfileColorConfidence.Exact &&
                               Source == ProfileColorSource.DeviceReadback &&
                               Profile is K15Profile.A or K15Profile.B;
@@ -58,12 +65,7 @@ internal sealed class ProfileColorHintTracker
             : ProfileColorHint.Unknown(now);
 
     internal ProfileColorHint Observe(byte slot, DateTimeOffset observedUtc) =>
-        _hint = slot switch
-        {
-            0 => new(K15Profile.A, ProfileColorConfidence.Exact, ProfileColorSource.DeviceReadback, observedUtc),
-            1 => new(K15Profile.B, ProfileColorConfidence.Exact, ProfileColorSource.DeviceReadback, observedUtc),
-            _ => ProfileColorHint.Unknown(observedUtc)
-        };
+        _hint = ProfileColorHint.FromReadback(slot, observedUtc);
 
     internal ProfileColorHint Invalidate(DateTimeOffset now) =>
         _hint = ProfileColorHint.Unknown(now);

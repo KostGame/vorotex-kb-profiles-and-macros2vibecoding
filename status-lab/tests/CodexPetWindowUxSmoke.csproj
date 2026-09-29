@@ -25,6 +25,7 @@
     <Compile Include="..\K15ProfileSwitchTransaction.cs" Link="K15ProfileSwitchTransaction.cs" />
     <Compile Include="..\K15LayoutFileAuthority.cs" Link="K15LayoutFileAuthority.cs" />
     <Compile Include="..\CodexPetControlVisualPolicy.cs" Link="CodexPetControlVisualPolicy.cs" />
+    <Compile Include="..\CodexPetControlFeedback.cs" Link="CodexPetControlFeedback.cs" />
     <Compile Include="..\CodexPetBadgeVisualPolicy.cs" Link="CodexPetBadgeVisualPolicy.cs" />
     <Compile Include="..\CodexPetControlRenderer.cs" Link="CodexPetControlRenderer.cs" />
     <Compile Include="..\CodexPetBadgeRenderer.cs" Link="CodexPetBadgeRenderer.cs" />

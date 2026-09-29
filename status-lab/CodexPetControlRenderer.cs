@@ -4,10 +4,28 @@ namespace Vorotex.K15.StatusLab;
 
 internal static class CodexPetControlRenderer
 {
-    internal static void Draw(Graphics graphics, MiniK15Control control, Rectangle bounds, Color fillColor)
+    internal static void Draw(
+        Graphics graphics,
+        MiniK15Control control,
+        Rectangle bounds,
+        Color fillColor,
+        CodexPetControlRenderState interaction)
     {
+        if (interaction.Pressed)
+        {
+            bounds.Offset(0, Math.Max(1, bounds.Height / 12));
+            fillColor = Blend(fillColor, Color.Black, 0.22d);
+        }
+        else if (interaction.Hovered)
+        {
+            fillColor = Blend(fillColor, Color.White, 0.10d);
+        }
+
         using var controlFill = new SolidBrush(fillColor);
-        using var controlOutline = new Pen(Color.FromArgb(24, 28, 35), 1);
+        using var controlOutline = new Pen(
+            OutlineColor(interaction),
+            OutlineWidth(bounds, interaction));
+
         if (control.Kind is MiniK15ControlKind.Rotary or MiniK15ControlKind.Joystick)
         {
             bounds = CodexPetControlVisualPolicy.CircleBounds(bounds);
@@ -41,6 +59,41 @@ internal static class CodexPetControlRenderer
             };
             graphics.DrawString(control.Label, font, label, bounds, format);
         }
+    }
+
+    private static Color OutlineColor(CodexPetControlRenderState state)
+    {
+        var alpha = (int)Math.Round(150 + 105 * Math.Clamp(state.Pulse, 0d, 1d));
+        return state.FeedbackPhase switch
+        {
+            CodexPetControlFeedbackPhase.Dispatching => Color.FromArgb(alpha, 82, 196, 255),
+            CodexPetControlFeedbackPhase.Switching => Color.FromArgb(alpha, 255, 196, 78),
+            CodexPetControlFeedbackPhase.Reattesting => Color.FromArgb(alpha, 255, 221, 112),
+            CodexPetControlFeedbackPhase.Success => Color.FromArgb(245, 82, 224, 142),
+            CodexPetControlFeedbackPhase.Blocked => Color.FromArgb(245, 255, 96, 88),
+            _ when state.Pressed => Color.FromArgb(235, 246, 250, 252),
+            _ when state.Hovered => Color.FromArgb(185, 210, 230, 242),
+            _ => Color.FromArgb(24, 28, 35)
+        };
+    }
+
+    private static float OutlineWidth(Rectangle bounds, CodexPetControlRenderState state)
+    {
+        if (state.FeedbackPhase != CodexPetControlFeedbackPhase.None || state.Pressed)
+            return Math.Max(1.5f, bounds.Width / 14f);
+        return state.Hovered ? Math.Max(1.25f, bounds.Width / 20f) : 1f;
+    }
+
+    private static Color Blend(Color value, Color target, double amount)
+    {
+        amount = Math.Clamp(amount, 0d, 1d);
+        static int Channel(byte from, byte to, double a) =>
+            (int)Math.Round(from + (to - from) * a);
+        return Color.FromArgb(
+            value.A,
+            Channel(value.R, target.R, amount),
+            Channel(value.G, target.G, amount),
+            Channel(value.B, target.B, amount));
     }
 
     private static void FillRounded(Graphics graphics, Rectangle rectangle, int radius, Brush brush)
