@@ -6,10 +6,19 @@ namespace Vorotex.K15.StatusLab;
 
 internal interface ICodexLocalThreadTitleProvider
 {
-    Task<IReadOnlyDictionary<string, string>> ReadTitlesAsync(
+    Task<CodexLocalThreadMetadata> ReadTitlesAsync(
         IReadOnlyList<CodexSessionSnapshot> sessions,
         IReadOnlyList<CodexUnreadSource> trustedSources,
         CancellationToken cancellationToken);
+}
+
+internal sealed record CodexLocalThreadMetadata(
+    IReadOnlyDictionary<string, string> NamesBySourceAndThread,
+    IReadOnlySet<string> PersistedThreadKeys)
+{
+    internal static CodexLocalThreadMetadata Empty { get; } = new(
+        new Dictionary<string, string>(StringComparer.Ordinal),
+        new HashSet<string>(StringComparer.Ordinal));
 }
 
 internal sealed record CodexLocalThreadTitleSource(
@@ -65,21 +74,41 @@ internal sealed class CodexAppServerLocalThreadTitleProvider : ICodexLocalThread
     private const int MaxLineBytes = 128 * 1024;
     private const int MaxMessagesPerResponse = 64;
 
-    public async Task<IReadOnlyDictionary<string, string>> ReadTitlesAsync(
+    public async Task<CodexLocalThreadMetadata> ReadTitlesAsync(
         IReadOnlyList<CodexSessionSnapshot> sessions,
         IReadOnlyList<CodexUnreadSource> trustedSources,
         CancellationToken cancellationToken)
     {
         var requests = CodexLocalThreadTitleSourceResolver.Resolve(sessions, trustedSources);
         var titles = new Dictionary<string, string>(StringComparer.Ordinal);
+        var persistedThreadKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var request in requests)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var sourceTitles = await ReadSourceTitlesAsync(request, cancellationToken).ConfigureAwait(false);
-            foreach (var (threadId, name) in sourceTitles)
-                titles[CodexSourceIdentity.CompositeKey(request.SourceInstanceId, threadId)] = name;
+            var index = CodexLocalSessionIndexReader.Read(request.CodexHomePath,
+                request.ThreadIds.ToHashSet(StringComparer.Ordinal));
+            foreach (var threadId in index.PersistedThreadIds)
+                persistedThreadKeys.Add(CodexSourceIdentity.CompositeKey(request.SourceInstanceId, threadId));
+            foreach (var (threadId, name) in index.NamesByThreadId)
+            {
+                var key = CodexSourceIdentity.CompositeKey(request.SourceInstanceId, threadId);
+                if (!titles.ContainsKey(key)) titles[key] = name;
+            }
+
+            try
+            {
+                var sourceTitles = await ReadSourceTitlesAsync(request, cancellationToken).ConfigureAwait(false);
+                foreach (var (threadId, name) in sourceTitles)
+                    titles[CodexSourceIdentity.CompositeKey(request.SourceInstanceId, threadId)] = name;
+            }
+            catch (OperationCanceledException)
+            {
+                // The persisted exact-home result remains useful when the
+                // optional app-server enrichment times out or is cancelled.
+                break;
+            }
         }
-        return titles;
+        return new(titles, persistedThreadKeys);
     }
 
     private static async Task<IReadOnlyDictionary<string, string>> ReadSourceTitlesAsync(
@@ -203,6 +232,101 @@ internal sealed class CodexAppServerLocalThreadTitleProvider : ICodexLocalThread
 
     private static bool IsBoundedId(string value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 && !value.Any(char.IsControl);
+}
+
+internal sealed record CodexLocalSessionIndex(
+    IReadOnlySet<string> PersistedThreadIds,
+    IReadOnlyDictionary<string, string> NamesByThreadId);
+
+// Reads only exact identity and optional user-visible name from the registered
+// home's persisted session index. Other session metadata is ignored.
+internal static class CodexLocalSessionIndexReader
+{
+    private const int MaxBytes = 4 * 1024 * 1024;
+    private const int MaxEntries = 8192;
+    private const int MaxLineBytes = 64 * 1024;
+
+    internal static CodexLocalSessionIndex Read(string exactCodexHome, IReadOnlySet<string> requestedThreadIds)
+    {
+        var empty = new CodexLocalSessionIndex(new HashSet<string>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal));
+        if (CodexSourceIdentity.CanonicalizeHome(exactCodexHome) is not { } canonicalHome ||
+            !string.Equals(canonicalHome, exactCodexHome, StringComparison.Ordinal) ||
+            requestedThreadIds.Count == 0)
+            return empty;
+
+        var path = Path.Combine(canonicalHome, "session_index.jsonl");
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length <= 0 || stream.Length > MaxBytes) return empty;
+            using var memory = new MemoryStream((int)stream.Length);
+            var buffer = new byte[16 * 1024];
+            while (true)
+            {
+                var read = stream.Read(buffer, 0, buffer.Length);
+                if (read == 0) break;
+                if (memory.Length + read > MaxBytes) return empty;
+                memory.Write(buffer, 0, read);
+            }
+
+            var persisted = new HashSet<string>(StringComparer.Ordinal);
+            var names = new Dictionary<string, string>(StringComparer.Ordinal);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var duplicates = new HashSet<string>(StringComparer.Ordinal);
+            using var reader = new StringReader(Encoding.UTF8.GetString(memory.ToArray()));
+            var entries = 0;
+            while (reader.ReadLine() is { } line)
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (++entries > MaxEntries || Encoding.UTF8.GetByteCount(line) > MaxLineBytes ||
+                    !TryReadEntry(line, out var id, out var name)) return empty;
+                if (!seen.Add(id)) duplicates.Add(id);
+                if (!requestedThreadIds.Contains(id)) continue;
+                persisted.Add(id);
+                if (name is not null) names[id] = name;
+            }
+
+            foreach (var id in duplicates)
+            {
+                names.Remove(id);
+            }
+            return new(persisted, names);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   ArgumentException or NotSupportedException)
+        {
+            return empty;
+        }
+    }
+
+    private static bool TryReadEntry(string line, out string id, out string? name)
+    {
+        id = string.Empty;
+        name = null;
+        try
+        {
+            using var document = JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 16 });
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("id", out var idElement) || idElement.ValueKind != JsonValueKind.String)
+                return false;
+            id = idElement.GetString() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(id) || id.Length > 256 || id.Any(char.IsControl)) return false;
+            if (root.TryGetProperty("thread_name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String)
+            {
+                var candidate = nameElement.GetString()?.Trim();
+                if (!string.IsNullOrEmpty(candidate) && Encoding.UTF8.GetByteCount(candidate) <= 256 &&
+                    !candidate.Any(char.IsControl)) name = candidate;
+            }
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 }
 
 internal static class CodexThreadReadTitleParser

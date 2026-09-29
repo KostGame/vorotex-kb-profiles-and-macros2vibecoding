@@ -1,19 +1,22 @@
 using System.Drawing.Drawing2D;
+using System.Diagnostics;
 
 namespace Vorotex.K15.StatusLab;
 
 internal sealed class CodexPetTaskPopup : Form
 {
     private const int CardWidth = 296;
-    private const int CardHeight = 54;
+    private const int CardHeight = 68;
 
     private readonly CodexPetWindow _pet;
     private readonly StatusLabConfig _config;
     private IReadOnlyList<CodexPetTaskRow> _tasks = Array.Empty<CodexPetTaskRow>();
     private ProfileColorHint _profileHint;
     private PetTaskSurfaceState _surfaceState = CodexPetTaskSurfacePolicy.DefaultState;
+    private readonly Action<string> _launchThreadLink;
 
-    internal CodexPetTaskPopup(CodexPetWindow pet, StatusLabConfig config)
+    internal CodexPetTaskPopup(CodexPetWindow pet, StatusLabConfig config,
+        Action<string>? launchThreadLink = null)
     {
         _pet = pet;
         _config = config;
@@ -23,8 +26,13 @@ internal sealed class CodexPetTaskPopup : Form
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
         BackColor = Color.FromArgb(24, 24, 30);
+        TransparencyKey = BackColor;
         DoubleBuffered = true;
         Cursor = Cursors.Default;
+        _launchThreadLink = launchThreadLink ?? LaunchThreadLink;
+        MouseMove += HandleMouseMove;
+        MouseLeave += (_, _) => Cursor = Cursors.Default;
+        MouseClick += HandleMouseClick;
     }
 
     internal void SetPresentation(CodexPetPresentation presentation)
@@ -85,11 +93,6 @@ internal sealed class CodexPetTaskPopup : Form
     {
         base.OnPaint(e);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        using var background = new SolidBrush(Color.FromArgb(245, 31, 36, 45));
-        using var border = new Pen(Color.FromArgb(180, 92, 112, 126), 1);
-        e.Graphics.FillRectangle(background, ClientRectangle);
-        e.Graphics.DrawRectangle(border, 0, 0, Math.Max(0, Width - 1), Math.Max(0, Height - 1));
-
         var layout = CodexPetTaskSurfacePolicy.Layout(_surfaceState, _tasks.Count,
             new Size(CardWidth, CardHeight));
         var palette = PetPaletteResolver.Resolve(_config, _profileHint, DateTimeOffset.UtcNow);
@@ -108,6 +111,40 @@ internal sealed class CodexPetTaskPopup : Form
         }
     }
 
+    private void HandleMouseMove(object? sender, MouseEventArgs e) =>
+        Cursor = FindOpenTarget(e.Location) is null ? Cursors.Default : Cursors.Hand;
+
+    private void HandleMouseClick(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left || FindOpenTarget(e.Location) is not { } target) return;
+        try
+        {
+            CodexPetTaskLinkPolicy.TryLaunch(target.DeepLink, target.CanFocus, _launchThreadLink);
+        }
+        catch
+        {
+            // A missing or failed protocol handler is presentation-only.
+        }
+    }
+
+    private CodexActivityOpenTarget? FindOpenTarget(Point point)
+    {
+        var layout = CodexPetTaskSurfacePolicy.Layout(_surfaceState, _tasks.Count,
+            new Size(CardWidth, CardHeight));
+        foreach (var card in layout.Cards)
+        {
+            if (!card.ShowsText || !card.Bounds.Contains(point) ||
+                card.TaskIndex < 0 || card.TaskIndex >= _tasks.Count) continue;
+            var target = _tasks[card.TaskIndex].Activity.OpenTarget;
+            if (target.Source == CodexActivitySource.Local && target.CanFocus &&
+                CodexPetTaskLinkPolicy.IsExactCodexThreadLink(target.DeepLink)) return target;
+        }
+        return null;
+    }
+
+    private static void LaunchThreadLink(string deepLink) =>
+        Process.Start(new ProcessStartInfo { FileName = deepLink, UseShellExecute = true });
+
     private static void DrawCard(Graphics graphics, TaskCardLayout card, CodexPetTaskRow? row,
         PetPalette palette)
     {
@@ -124,7 +161,7 @@ internal sealed class CodexPetTaskPopup : Form
         if (!card.ShowsText || row is null) return;
 
         var glyph = CodexPetPopupPolicy.GlyphFor(row.VisualState);
-        DrawGlyph(graphics, glyph, new Point(card.Bounds.Left + 17, card.Bounds.Top + 27));
+        DrawGlyph(graphics, glyph, new Point(card.Bounds.Left + 17, card.Bounds.Top + 34));
         var textBounds = CodexPetTaskTypography.TitleBounds(card.Bounds);
         using var title = new SolidBrush(Color.FromArgb(240, 235, 240, 244));
         using var titleFont = new Font("Segoe UI", CodexPetTaskTypography.TitlePixelSize,

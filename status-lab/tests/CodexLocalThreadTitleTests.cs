@@ -34,6 +34,10 @@ internal static class CodexLocalThreadTitleTests
             var sourceB = CodexSourceIdentity.ForHome(homeB)!;
             var registeredA = Source(sourceA, homeA);
             var registeredB = Source(sourceB, homeB);
+            var persistedThreadId = "thread-shared";
+            File.WriteAllText(Path.Combine(homeA, "session_index.jsonl"),
+                "{\"id\":\"thread-shared\",\"thread_name\":\"Index title\",\"preview\":\"PRIVATE_INDEX_CONTENT\"}\n" +
+                "{\"id\":\"thread-done\",\"thread_name\":\"Done title\"}\n");
             var sessions = new[]
             {
                 new CodexSessionSnapshot("session-a", K15NormalizedState.Running, true, true,
@@ -66,6 +70,28 @@ internal static class CodexLocalThreadTitleTests
                   CodexLocalThreadTitleSourceResolver.Resolve(sessions, Array.Empty<CodexUnreadSource>()).Count == 0,
                 "MISSING_UNKNOWN_OR_DUPLICATE_SOURCE_FAILS_CLOSED");
 
+            var index = CodexLocalSessionIndexReader.Read(CodexSourceIdentity.CanonicalizeHome(homeA)!,
+                new HashSet<string>(["thread-shared", "thread-done", "wrong-thread"], StringComparer.Ordinal));
+            Check(index.PersistedThreadIds.SetEquals(["thread-shared", "thread-done"]) &&
+                  index.NamesByThreadId["thread-shared"] == "Index title" &&
+                  !index.NamesByThreadId.Values.Any(name => name.Contains("PRIVATE_INDEX_CONTENT", StringComparison.Ordinal)),
+                "EXACT_HOME_SESSION_INDEX_RETURNS_ONLY_REQUESTED_ID_AND_SAFE_NAME");
+            Check(CodexLocalSessionIndexReader.Read(CodexSourceIdentity.CanonicalizeHome(homeB)!,
+                    new HashSet<string>([persistedThreadId], StringComparer.Ordinal)).PersistedThreadIds.Count == 0,
+                "SESSION_INDEX_DOES_NOT_CROSS_CODEX_HOME");
+            File.WriteAllText(Path.Combine(homeA, "session_index.jsonl"),
+                "{\"id\":\"thread-shared\",\"thread_name\":\"First\"}\n" +
+                "{\"id\":\"thread-shared\",\"thread_name\":\"Duplicate\"}\n");
+            Check(CodexLocalSessionIndexReader.Read(CodexSourceIdentity.CanonicalizeHome(homeA)!,
+                    new HashSet<string>(["thread-shared"], StringComparer.Ordinal)) is { } duplicateIndex &&
+                  duplicateIndex.PersistedThreadIds.Contains("thread-shared") &&
+                  !duplicateIndex.NamesByThreadId.ContainsKey("thread-shared"),
+                "DUPLICATE_SESSION_INDEX_ID_RETAINS_IDENTITY_WITHOUT_TITLE");
+            File.WriteAllText(Path.Combine(homeA, "session_index.jsonl"), "{malformed}\n");
+            Check(CodexLocalSessionIndexReader.Read(CodexSourceIdentity.CanonicalizeHome(homeA)!,
+                    new HashSet<string>(["thread-shared"], StringComparer.Ordinal)).PersistedThreadIds.Count == 0,
+                "MALFORMED_SESSION_INDEX_FAILS_CLOSED");
+
             var names = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [CodexSourceIdentity.CompositeKey(sourceA, "thread-shared")] = exactNameA!,
@@ -83,14 +109,52 @@ internal static class CodexLocalThreadTitleTests
             };
             var isolated = CodexActivityNormalizer.EnrichLocalTitles(rows, onlyA);
             Check(isolated.Single(row => row.SessionId == "session-a").Title == "Source A title" &&
-                  isolated.Single(row => row.SessionId == "session-b").Title == "Codex task session-" &&
-                  isolated.Single(row => row.SessionId == "session-missing").Title == "Codex task session-" &&
-                  isolated.Single(row => row.SessionId == "session-unknown").Title == "Codex task session-",
+                  isolated.Single(row => row.SessionId == "session-b").Title == "Codex task session-b" &&
+                  isolated.Single(row => row.SessionId == "session-missing").Title == "Codex task session-missing" &&
+                  isolated.Single(row => row.SessionId == "session-unknown").Title == "Codex task session-unknown",
                 "SOURCE_A_TITLE_CANNOT_ENRICH_SOURCE_B_OR_UNBOUND_ROW");
             Check(enriched.Single(row => row.SessionId == "session-a").Cwd == "C:/secondary-context-a" &&
                   enriched.Single(row => row.SessionId == "session-a").Title != "C:/secondary-context-a" &&
                   enriched.Single(row => row.SessionId == "session-a").OpenTarget.CanFocus == false,
                 "CWD_REMAINS_SECONDARY_CONTEXT");
+
+            var ownerThread = "01a0eeda-4e2c-7af1-8187-746b97136e43";
+            var helperThread = "01a0eeda-c27c-7643-9860-c8a9f2e4f56f";
+            var forensicSessions = new[]
+            {
+                new CodexSessionSnapshot(ownerThread, K15NormalizedState.Running, true, false,
+                    ThreadId: ownerThread, SourceInstanceId: sourceA),
+                new CodexSessionSnapshot(helperThread, K15NormalizedState.Running, true, false,
+                    ThreadId: helperThread, SourceInstanceId: sourceA)
+            };
+            var forensicRows = CodexActivityNormalizer.Normalize(forensicSessions,
+                new Dictionary<string, CodexUnreadState>());
+            var visibleRows = CodexActivityNormalizer.ApplyLocalMetadata(forensicRows,
+                new Dictionary<string, string>
+                {
+                    [CodexSourceIdentity.CompositeKey(sourceA, ownerThread)] = "Continue Issue #186"
+                }, new HashSet<string>([CodexSourceIdentity.CompositeKey(sourceA, ownerThread)], StringComparer.Ordinal));
+            Check(visibleRows.Count == 1 && visibleRows[0].SessionId == ownerThread &&
+                  visibleRows[0].Title == "Continue Issue #186" &&
+                  visibleRows[0].OpenTarget.CanFocus &&
+                  visibleRows[0].OpenTarget.DeepLink == "codex://threads/" + Uri.EscapeDataString(ownerThread),
+                "PERSISTED_OWNER_EXEC_TASK_VISIBLE_EXACT_LINK_HELPER_SESSION_FILTERED");
+            var titleFallback = CodexActivityNormalizer.ApplyLocalMetadata(
+                CodexActivityNormalizer.Normalize([forensicSessions[0]], new Dictionary<string, CodexUnreadState>()),
+                new Dictionary<string, string>
+                {
+                    [CodexSourceIdentity.CompositeKey(sourceA, "different-thread")] = "Wrong thread name"
+                }, new HashSet<string>([CodexSourceIdentity.CompositeKey(sourceA, ownerThread)], StringComparer.Ordinal));
+            Check(titleFallback.Single().Title == CodexActivityNormalizer.FallbackTitle(ownerThread),
+                "MISSING_OR_MISMATCHED_LOCAL_TITLE_USES_STABLE_FALLBACK");
+            Check(CodexActivityNormalizer.FallbackTitle(ownerThread) !=
+                      CodexActivityNormalizer.FallbackTitle(helperThread) &&
+                  visibleRows[0].ThreadId == ownerThread && visibleRows[0].SessionId == ownerThread,
+                "UUIDV7_FALLBACK_USES_SUFFIX_ENTROPY_AND_RETAINS_FULL_IDENTITY");
+            Check(CodexActivityNormalizer.BuildLocalThreadDeepLink("thread id/one") ==
+                      "codex://threads/thread%20id%2Fone" &&
+                  CodexActivityNormalizer.BuildLocalThreadDeepLink("\n") is null,
+                "LOCAL_THREAD_LINK_ESCAPES_EXACT_ID_AND_REJECTS_INVALID_ID");
 
             var failedProvider = CodexPetAdapter.MapPresentation(sessions, unread,
                 new Dictionary<string, string>(StringComparer.Ordinal));

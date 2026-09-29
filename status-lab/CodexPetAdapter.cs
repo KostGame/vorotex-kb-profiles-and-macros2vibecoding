@@ -122,6 +122,37 @@ internal static class CodexPetAdapter
         IReadOnlyDictionary<string, string> namesBySourceAndThread) =>
         WithLocalTitles(MapPresentation(sessions, sources), namesBySourceAndThread);
 
+    internal static CodexPetPresentation MapPresentation(
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        ICodexUnreadSourceRegistry sources,
+        CodexLocalThreadMetadata localMetadata)
+    {
+        var unreadByIdentity = new Dictionary<string, CodexUnreadState>(StringComparer.Ordinal);
+        foreach (var sourceGroup in sessions
+            .Where(session => session.State == K15NormalizedState.DonePendingAttention &&
+                              !string.IsNullOrWhiteSpace(session.ThreadId))
+            .GroupBy(session => session.SourceInstanceId, StringComparer.Ordinal))
+        {
+            var snapshot = sources.Read(sourceGroup.Key, DateTimeOffset.UtcNow);
+            foreach (var session in sourceGroup)
+                unreadByIdentity[CodexSourceIdentity.CompositeKey(sourceGroup.Key, session.ThreadId!)] =
+                    snapshot.ForThread(session.ThreadId!);
+        }
+
+        var activityRows = CodexActivityNormalizer.ApplyLocalMetadata(
+            CodexActivityNormalizer.Normalize(sessions, unreadByIdentity),
+            localMetadata.NamesBySourceAndThread, localMetadata.PersistedThreadKeys);
+        var tasks = activityRows
+            .Select(ToTaskRow)
+            .Where(row => row is not null)
+            .Select(row => row!)
+            .OrderBy(row => Priority(row.VisualState))
+            .ThenByDescending(row => row.LastActivityUtc ?? DateTimeOffset.MinValue)
+            .ThenBy(row => row.SessionId, StringComparer.Ordinal)
+            .ToArray();
+        return new(Map(sessions, unreadByIdentity), tasks);
+    }
+
     private static CodexPetPresentation WithLocalTitles(CodexPetPresentation presentation,
         IReadOnlyDictionary<string, string> namesBySourceAndThread)
     {
@@ -201,7 +232,7 @@ internal static class CodexPetAdapter
         _ => 3
     };
 
-    private static string ShortId(string id) => id.Length <= 8 ? id : id[..8];
+    private static string ShortId(string id) => CodexActivityNormalizer.CompactStableId(id);
 
     internal static CodexPetVisualSnapshot Map(
         IReadOnlyList<CodexSessionSnapshot> sessions,

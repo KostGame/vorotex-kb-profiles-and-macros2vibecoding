@@ -226,10 +226,13 @@ internal static class CodexActivityNormalizer
 
     internal static string FallbackTitle(string stableId)
     {
-        var shortId = Bounded(stableId, 256) ? stableId.Trim() : "unknown";
-        if (shortId.Length > 8) shortId = shortId[..8];
-        return "Codex task " + shortId;
+        var id = Bounded(stableId, 256) ? stableId.Trim() : "unknown";
+        return "Codex task " + CompactStableId(id);
     }
+
+    internal static string CompactStableId(string stableId) => stableId.Length > 16
+        ? stableId[..8] + "…" + stableId[^6..]
+        : stableId;
 
     internal static string? SanitizeLabel(string? value)
     {
@@ -254,6 +257,42 @@ internal static class CodexActivityNormalizer
             var name = SanitizeLabel(candidate);
             return row with { Title = name ?? FallbackTitle(row.SessionId) };
         }).ToArray();
+    }
+
+    internal static IReadOnlyList<CodexActivityRow> ApplyLocalMetadata(
+        IReadOnlyList<CodexActivityRow> rows,
+        IReadOnlyDictionary<string, string> namesBySourceAndThread,
+        IReadOnlySet<string> persistedThreadKeys)
+    {
+        return rows.Select(row =>
+        {
+            if (row.Source != CodexActivitySource.Local) return row;
+            if (row.ThreadId is null || !CodexSourceIdentity.IsValid(row.SourceInstanceId)) return null;
+            var key = CodexSourceIdentity.CompositeKey(row.SourceInstanceId, row.ThreadId);
+            if (!persistedThreadKeys.Contains(key)) return null;
+
+            var title = namesBySourceAndThread.TryGetValue(key, out var candidate)
+                ? SanitizeLabel(candidate)
+                : null;
+            var deepLink = BuildLocalThreadDeepLink(row.ThreadId);
+            var openTarget = deepLink is null
+                ? CodexActivityOpenTarget.Unavailable(CodexActivitySource.Local, row.ThreadId,
+                    row.SessionId, ThreadIdUnavailable)
+                : new CodexActivityOpenTarget(CodexActivitySource.Local, row.ThreadId, row.SessionId,
+                    deepLink, true, null);
+            return row with
+            {
+                Title = title ?? FallbackTitle(row.ThreadId),
+                OpenTarget = openTarget
+            };
+        }).Where(row => row is not null).Select(row => row!).ToArray();
+    }
+
+    internal static string? BuildLocalThreadDeepLink(string threadId)
+    {
+        if (!Bounded(threadId, 256)) return null;
+        var escaped = Uri.EscapeDataString(threadId);
+        return "codex://threads/" + escaped;
     }
 
     private static bool TryMapRemoteState(string status, IReadOnlySet<string>? flags,
