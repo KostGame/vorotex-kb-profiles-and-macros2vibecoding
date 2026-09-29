@@ -673,9 +673,28 @@ livenessDone.ReconcileLiveness(CodexLivenessState.NotRunning, t.AddSeconds(10));
 Require(livenessDone.State == K15NormalizedState.Normal &&
         livenessDone.SessionSnapshots.Count == 0 &&
         livenessDone.Snapshot.DoneUnreadCount == 0 &&
+        livenessDone.LastLivenessClearedSessionCount == 1 &&
         CodexPetAdapter.Map(livenessDone.SessionSnapshots,
             new Dictionary<string, CodexUnreadState>()).State == CodexPetVisualState.Idle,
     "CODEX_DESKTOP_EXIT_CLEARS_STALE_DONE_AND_PET_TASK");
+
+var livenessNormalResidue = new StateReducer();
+livenessNormalResidue.Apply(Hook(t, "UserPromptSubmit", "normal-residue",
+    turn: "residue-turn", thread: "residue-thread"));
+livenessNormalResidue.Apply(Completion(t.AddSeconds(1), "residue-thread", "residue-turn"));
+livenessNormalResidue.Acknowledge(t.AddSeconds(2), "test_ack");
+Require(livenessNormalResidue.State == K15NormalizedState.Normal &&
+        livenessNormalResidue.SessionSnapshots.Count == 1 &&
+        livenessNormalResidue.ActiveTaskSessionCount == 1,
+    "CODEX_NORMAL_SESSION_RESIDUE_PRECONDITION");
+var normalResidueTransition = livenessNormalResidue.ReconcileLiveness(
+    CodexLivenessState.NotRunning, t.AddSeconds(10));
+Require(normalResidueTransition is null &&
+        livenessNormalResidue.State == K15NormalizedState.Normal &&
+        livenessNormalResidue.SessionSnapshots.Count == 0 &&
+        livenessNormalResidue.ActiveTaskSessionCount == 0 &&
+        livenessNormalResidue.LastLivenessClearedSessionCount == 1,
+    "CODEX_DESKTOP_EXIT_CLEARS_NORMAL_LEDGER_RESIDUE");
 
 var livenessUnknown = new StateReducer();
 livenessUnknown.Apply(Hook(t, "UserPromptSubmit", "unknown-running",

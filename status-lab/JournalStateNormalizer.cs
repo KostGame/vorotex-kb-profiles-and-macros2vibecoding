@@ -210,11 +210,27 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             liveness = CodexLivenessState.Unknown;
         }
 
+        var previousState = _reducer.State;
         var transition = _reducer.ReconcileLiveness(liveness, nowUtc);
         foreach (var sessionTransition in _reducer.LastSessionTransitions)
             PublishSessionTransition(sessionTransition);
         if (transition is not null)
             PublishTransition(transition);
+
+        if (_reducer.LastLivenessClearedSessionCount > 0)
+        {
+            EventJournal.Append(new
+            {
+                timestampUtc = nowUtc,
+                source = "state_normalizer",
+                @event = "runtime_liveness_reconciled",
+                reason = "codex_desktop_not_running",
+                previous = previousState.ToString().ToUpperInvariant(),
+                current = _reducer.State.ToString().ToUpperInvariant(),
+                clearedSessionCount = _reducer.LastLivenessClearedSessionCount
+            });
+        }
+
         return _reducer.Liveness;
     }
 

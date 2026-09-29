@@ -335,7 +335,9 @@ internal static class CodexReadAckTests
                 "NORMALIZER_RUNTIME_EXIT_CLEARS_LIVE_LEDGER_WITHOUT_RESTART");
 
             var journal = File.ReadAllText(EventJournal.FilePath);
-            Check(journal.Contains("codex_desktop_not_running", StringComparison.Ordinal),
+            Check(journal.Contains("runtime_liveness_reconciled", StringComparison.Ordinal) &&
+                  journal.Contains("codex_desktop_not_running", StringComparison.Ordinal) &&
+                  journal.Contains("\"clearedSessionCount\":1", StringComparison.Ordinal),
                 "NORMALIZER_DESKTOP_EXIT_REASON_PERSISTED");
         }
         finally

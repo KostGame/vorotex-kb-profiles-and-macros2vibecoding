@@ -150,6 +150,7 @@ internal sealed class StateReducer
     private CodexLivenessState _liveness = CodexLivenessState.Unknown;
 
     public IReadOnlyList<SessionStateTransition> LastSessionTransitions { get; private set; } = Array.Empty<SessionStateTransition>();
+    public int LastLivenessClearedSessionCount { get; private set; }
 
     public StateReducer(double staleAttentionTimeoutSeconds = 18000, DateTimeOffset? runtimeStartedUtc = null)
     {
@@ -293,6 +294,7 @@ internal sealed class StateReducer
     public StateTransition? ReconcileLiveness(CodexLivenessState liveness, DateTimeOffset timestampUtc)
     {
         LastSessionTransitions = Array.Empty<SessionStateTransition>();
+        LastLivenessClearedSessionCount = 0;
         _liveness = liveness;
         if (liveness != CodexLivenessState.NotRunning)
             return null;
@@ -300,6 +302,7 @@ internal sealed class StateReducer
         if (_sessions.Count == 0)
             return null;
 
+        LastLivenessClearedSessionCount = _sessions.Count;
         var externalSessions = _sessions.Values.Where(session => !session.Internal).ToArray();
         var previous = State;
         foreach (var session in externalSessions)
