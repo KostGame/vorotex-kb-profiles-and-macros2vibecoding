@@ -90,12 +90,28 @@ No implementation slice may bypass the attestation gate for arbitrary clickable 
 
 - Do not probe a new HID command live until its exact static read contract is understood and the owner approves that read family.
 - Current owner-approved live read families are the already-tested `0x84`, `0x85`, and `0x88`; active-slot `0x82/selector 2` is separately production-proven.
-- The physical-control mapping, local semantic equality gate, Pet lifecycle wiring, non-activating hit testing, and Windows input backend are implemented locally. General live use remains gated on the non-installed owner acceptance canaries below.
+- The physical-control mapping, local semantic equality gate, Pet lifecycle wiring, non-activating hit testing, and Windows input backend are implemented locally and passed the non-installed owner acceptance canary. Live installation/promotion remains a separate owner gate.
 - Test both hardware slots, exact GUID resolution, live macro payload equality, active-prefix behavior, missing references, unsupported action families, reconnect, identity change, and local-file mutation.
 - Test that every virtual dispatch uses a fresh hardware slot read, and that encoder selection requires an explicit click plus exact readback and rollback.
 - Test all Pet sizes against the rendered hit bounds, click versus drag, and unchanged foreground focus.
-- A separate non-installed candidate and harmless input-capture target are required before any owner acceptance canary. Physical-device and real-application dispatch canaries remain separate owner gates.
+- Owner acceptance used a separate non-installed candidate and harmless input-capture target. No real-application dispatch canary and no live installation/promotion were performed.
+
+## Owner acceptance
+
+The non-installed owner acceptance canary passed on 2026-09-29 against a harmless input-capture target.
+
+- Native virtual Enter produced injected Windows scan code `0x1C` down/up with unchanged foreground window.
+- A short verified Profile0 macro (`key-6 -> TOOLS_06_SELECT_ALL`) produced exactly `Ctrl down -> A down -> A up -> Ctrl up` as injected scan-code input, with unchanged foreground window.
+- Explicit virtual rotary switching passed `slot 0 -> 1 -> 0`, with full target re-attestation after each switch, no keyboard injection, connection preserved, and final slot restored to the original value.
+- The disconnected setup path also demonstrated fail-closed behavior: authority refresh failed as `Disconnected` and no input was dispatched.
+- The candidate was not installed or copied over the live StatusTray. The original live executable was restarted after the canary with its pre-canary SHA-256 unchanged.
+
+OWNER_ACCEPTANCE_NATIVE_INPUT=PASS  
+OWNER_ACCEPTANCE_MACRO_INPUT=PASS  
+OWNER_ACCEPTANCE_NO_FOCUS_STEAL=PASS  
+OWNER_ACCEPTANCE_PROFILE_SWITCH=PASS  
+OWNER_ACCEPTANCE_ROLLBACK=PASS
 
 ## Next implementation gate
 
-Run a non-installed owner acceptance canary against a harmless input-capture target. First prove one native key and one short macro through the real scan-code `SendInput` transport while the Pet remains `WS_EX_NOACTIVATE`; separately prove one explicit virtual rotary click with exact target-slot readback and re-attestation. Do not promote/install or enable general Pet dispatch until both canaries pass.
+The local implementation is now acceptance-proven but still unpublished and uninstalled. The next owner gate is repository publication/review (push + PR) and, separately, any promotion of the candidate into the live StatusTray path. Neither gate is implied by the acceptance result.
