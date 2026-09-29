@@ -39,6 +39,17 @@ Require(CodexPetTaskSurfacePolicy.DefaultState == PetTaskSurfaceState.Stacked &&
         CodexPetTaskSurfacePolicy.IsVisible(PetTaskSurfaceState.Stacked, 1),
     "TASK_SURFACE_ZERO_COUNT_HIDES");
 
+var typographyCard = new Rectangle(12, 12, 296, 54);
+var typographyTitleBounds = CodexPetTaskTypography.TitleBounds(typographyCard);
+var typographySubtitleBounds = CodexPetTaskTypography.SubtitleBounds(typographyCard);
+Require(CodexPetTaskTypography.TitlePixelSize >= 14f &&
+        CodexPetTaskTypography.TitlePixelSize >= CodexPetTaskTypography.SubtitlePixelSize * 1.5f,
+    "TASK_TITLE_TYPOGRAPHY_PRIMARY_HIERARCHY");
+Require(typographyCard.Contains(typographyTitleBounds) &&
+        typographyCard.Contains(typographySubtitleBounds) &&
+        typographyTitleBounds.Bottom <= typographySubtitleBounds.Top + 1,
+    "TASK_TITLE_TYPOGRAPHY_BOUNDS_FIT_CARD");
+
 foreach (var count in new[] { 1, 2, 5, 6 })
 {
     var expanded = CodexPetTaskSurfacePolicy.Layout(PetTaskSurfaceState.Expanded, count);

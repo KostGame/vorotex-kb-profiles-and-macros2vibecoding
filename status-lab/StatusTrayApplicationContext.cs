@@ -445,19 +445,13 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
 
                 var switched = await _layoutAuthority.SwitchProfileExplicitlyAsync(
                     prepared,
-                    async confirmedSlot =>
+                    confirmedSlot =>
                     {
-                        // Exact slot readback is enough to update presentation,
-                        // but NOT enough to re-enable dispatch. The authority
-                        // remains guarded until the following full attestation.
-                        _codexPet.SetProfileHint(
-                            ProfileColorHint.FromReadback(
-                                confirmedSlot, DateTimeOffset.UtcNow));
-                        _codexPet.SetControlFeedback(
-                            controlId,
-                            CodexPetControlFeedbackPhase.Reattesting,
-                            confirmedSlot);
-                        await Task.Yield();
+                        // Exact slot readback is enough to commit presentation,
+                        // but NOT enough to re-enable dispatch. Commit the actual
+                        // Pet frame before synchronous full re-attestation resumes.
+                        _codexPet.CommitProfileSwitchReadback(confirmedSlot);
+                        return Task.CompletedTask;
                     });
 
                 _codexPet.SetControlFeedback(

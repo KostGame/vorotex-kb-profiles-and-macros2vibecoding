@@ -125,18 +125,18 @@ internal sealed class CodexPetTaskPopup : Form
 
         var glyph = CodexPetPopupPolicy.GlyphFor(row.VisualState);
         DrawGlyph(graphics, glyph, new Point(card.Bounds.Left + 17, card.Bounds.Top + 27));
-        var textBounds = new Rectangle(card.Bounds.Left + 32, card.Bounds.Top + 7,
-            card.Bounds.Width - 42, 22);
+        var textBounds = CodexPetTaskTypography.TitleBounds(card.Bounds);
         using var title = new SolidBrush(Color.FromArgb(240, 235, 240, 244));
-        using var titleFont = new Font("Segoe UI", 10f, FontStyle.Bold, GraphicsUnit.Pixel);
+        using var titleFont = new Font("Segoe UI", CodexPetTaskTypography.TitlePixelSize,
+            FontStyle.Bold, GraphicsUnit.Pixel);
         using var titleFormat = new StringFormat { Trimming = StringTrimming.EllipsisCharacter };
         graphics.DrawString(row.DisplayTitle, titleFont, title, textBounds, titleFormat);
         if (!string.IsNullOrWhiteSpace(row.DisplaySubtitle))
         {
             using var subtitle = new SolidBrush(Color.FromArgb(180, 190, 198, 205));
-            using var subtitleFont = new Font("Segoe UI", 8f, FontStyle.Regular, GraphicsUnit.Pixel);
-            var subtitleBounds = new Rectangle(textBounds.X, card.Bounds.Top + 29,
-                textBounds.Width, 17);
+            using var subtitleFont = new Font("Segoe UI", CodexPetTaskTypography.SubtitlePixelSize,
+                FontStyle.Regular, GraphicsUnit.Pixel);
+            var subtitleBounds = CodexPetTaskTypography.SubtitleBounds(card.Bounds);
             graphics.DrawString(row.DisplaySubtitle, subtitleFont, subtitle, subtitleBounds,
                 titleFormat);
         }
