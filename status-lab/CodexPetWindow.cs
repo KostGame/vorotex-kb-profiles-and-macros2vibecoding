@@ -137,6 +137,26 @@ internal sealed class CodexPetWindow : Form
         Invalidate();
     }
 
+    internal void CommitProfileSwitchReadback(byte confirmedSlot, DateTimeOffset observedUtc)
+    {
+        _profileHint = ProfileColorHint.FromReadback(confirmedSlot, observedUtc);
+        _popup.SetProfileHint(_profileHint);
+        _controlFeedback = new(
+            "rotary",
+            CodexPetControlFeedbackPhase.Reattesting,
+            observedUtc,
+            confirmedSlot);
+
+        // Invalidate only queues WM_PAINT. Profile re-attestation is synchronous
+        // and can hold the UI thread for noticeable time, so commit this frame
+        // before returning to the HID pipeline. Update() paints without activating
+        // the no-activate Pet window.
+        Invalidate();
+        Update();
+        if (_popup.Visible)
+            _popup.Update();
+    }
+
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
@@ -547,6 +567,24 @@ internal sealed class CodexPetController : IDisposable
         }
 
         _window.SetControlFeedback(controlId, phase, confirmedSlot);
+    }
+
+    public void CommitProfileSwitchReadback(byte confirmedSlot)
+    {
+        if (_window.IsDisposed) return;
+        var observedUtc = DateTimeOffset.UtcNow;
+        if (_window.IsHandleCreated && _window.InvokeRequired)
+        {
+            try
+            {
+                _window.Invoke(() =>
+                    _window.CommitProfileSwitchReadback(confirmedSlot, observedUtc));
+            }
+            catch (InvalidOperationException) { }
+            return;
+        }
+
+        _window.CommitProfileSwitchReadback(confirmedSlot, observedUtc);
     }
 
     public bool Visible => _visible;
