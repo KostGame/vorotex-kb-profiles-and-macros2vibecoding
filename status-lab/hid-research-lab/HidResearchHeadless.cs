@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Vorotex.K15.VendorStaticLab;
 
 namespace Vorotex.K15.HidResearchLab;
 
@@ -22,7 +23,9 @@ public static class HidResearchHeadless
         "sleep-report-construction",
         "sleep-payload-seed",
         "sleep-payload-helper-semantics",
-        "sleep-payload-source"
+        "sleep-payload-source",
+        "feature-call-sites",
+        "layout-attestation-static"
     ];
 
     public static HidResearchHeadlessResult Run(string mode, string exeA, string exeB, string outputDirectory)
@@ -48,6 +51,8 @@ public static class HidResearchHeadless
             "sleep-payload-seed" => RunSleepPayloadSeed(a, b, output),
             "sleep-payload-helper-semantics" => RunSleepPayloadHelperSemantics(a, b, output),
             "sleep-payload-source" => RunSleepPayloadSource(a, b, output),
+            "feature-call-sites" => RunFeatureCallSites(a, output),
+            "layout-attestation-static" => RunLayoutAttestationStatic(a, output),
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode,
                 "Unsupported research mode. Use the CLI --list-modes option.")
         };
@@ -110,6 +115,33 @@ public static class HidResearchHeadless
             report.Verdict,
             report,
             OemNdeviceAggregateCopyAnalyzer.KeyboardSleepPayloadSourceToText(report),
+            output);
+    }
+
+    private static HidResearchHeadlessResult RunFeatureCallSites(string a, string output)
+    {
+        var report = VendorPeAnalyzer.Analyze(a);
+        var verdict = report.GetFeatureCallSites.Count > 0 || report.SetFeatureCallSites.Count > 0
+            ? "FEATURE_CALL_SITES_FOUND"
+            : "NO_FEATURE_CALL_SITES_FOUND";
+        return Write(
+            "feature-call-sites",
+            "oem-feature-call-sites",
+            verdict,
+            report,
+            VendorPeAnalyzer.ToText(report),
+            output);
+    }
+
+    private static HidResearchHeadlessResult RunLayoutAttestationStatic(string a, string output)
+    {
+        var report = OemNdeviceAggregateCopyAnalyzer.AnalyzeLayoutAttestationStatic(a);
+        return Write(
+            "layout-attestation-static",
+            "oem-layout-attestation-static",
+            report.Verdict,
+            report,
+            OemNdeviceAggregateCopyAnalyzer.LayoutAttestationStaticToText(report),
             output);
     }
 

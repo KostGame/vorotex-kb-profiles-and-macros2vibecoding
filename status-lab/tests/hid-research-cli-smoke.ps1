@@ -6,22 +6,26 @@ $labDir = Join-Path $root 'hid-research-lab'
 $cliProgram = Join-Path $cliDir 'Program.cs'
 $cliProject = Join-Path $cliDir 'Vorotex.K15.HidResearch.Cli.csproj'
 $facade = Join-Path $labDir 'HidResearchHeadless.cs'
+$layoutTrace = Join-Path $labDir 'OemLayoutAttestationStaticTrace.cs'
 $fullWorkflow = Join-Path (Split-Path -Parent $root) '.github\workflows\status-lab-build.yml'
 
-foreach ($path in @($cliProgram, $cliProject, $facade, $fullWorkflow)) {
+foreach ($path in @($cliProgram, $cliProject, $facade, $layoutTrace, $fullWorkflow)) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing required file: $path" }
 }
 
 $programText = Get-Content -LiteralPath $cliProgram -Raw
 $projectText = Get-Content -LiteralPath $cliProject -Raw
 $facadeText = Get-Content -LiteralPath $facade -Raw
+$layoutTraceText = Get-Content -LiteralPath $layoutTrace -Raw
 $workflowText = Get-Content -LiteralPath $fullWorkflow -Raw
-$combined = $programText + "`n" + $facadeText
+$combined = $programText + "`n" + $facadeText + "`n" + $layoutTraceText
 
 $required = @(
     '--mode', '--a', '--b', '--out', '--list-modes',
     'sleep-report', 'sleep-report-construction', 'sleep-payload-seed',
     'sleep-payload-helper-semantics', 'sleep-payload-source',
+    'feature-call-sites', 'layout-attestation-static',
+    'RecoverOperationDispatchCases', 'RecoverProfileBindingLoader', 'RecoverBindingValueEncoder',
     'HidResearchHeadless.Run', 'ProjectReference'
 )
 foreach ($token in $required) {

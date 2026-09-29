@@ -22,10 +22,13 @@ internal sealed class CodexPetWindow : Form
     private readonly Dictionary<PetSizePreset, ToolStripMenuItem> _sizeMenuItems = new();
     private bool _dragging;
     private bool _dragMoved;
+    private string? _pressedControlId;
+    private bool _pressedControlMoved;
     private Point _dragStartCursor;
     private Point _dragStartLocation;
 
     internal event Action? CloseRequested;
+    internal event Action<string>? ControlClicked;
 
     public CodexPetWindow(StatusLabConfig config, CodexPetPositionStore? positionStore = null,
         CodexPetUiPreferenceStore? uiPreferenceStore = null)
@@ -52,6 +55,32 @@ internal sealed class CodexPetWindow : Form
         MouseUp += HandleMouseUp;
         _animation.Tick += (_, _) => Invalidate();
         _animation.Start();
+    }
+
+    protected override bool ShowWithoutActivation => true;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            const int WsExNoActivate = 0x08000000;
+            var parameters = base.CreateParams;
+            parameters.ExStyle |= WsExNoActivate;
+            return parameters;
+        }
+    }
+
+    protected override void WndProc(ref Message message)
+    {
+        const int WmMouseActivate = 0x0021;
+        const int MaNoActivate = 3;
+        if (message.Msg == WmMouseActivate)
+        {
+            message.Result = (IntPtr)MaNoActivate;
+            return;
+        }
+
+        base.WndProc(ref message);
     }
 
     public void SetState(CodexPetVisualState state)
@@ -173,6 +202,19 @@ internal sealed class CodexPetWindow : Form
                 SetTaskSurfaceState(CodexPetTaskSurfacePolicy.Cycle(_surfaceState));
             return;
         }
+
+        var hit = CodexPetControlHitTest.HitTest(CurrentKeyboardBodyBounds(), e.Location);
+        if (hit is not null)
+        {
+            _pressedControlId = hit.Id;
+            _pressedControlMoved = false;
+            _dragging = false;
+            _dragStartCursor = Cursor.Position;
+            Capture = true;
+            return;
+        }
+
+        _pressedControlId = null;
         _dragging = true;
         _dragMoved = false;
         _dragStartCursor = Cursor.Position;
@@ -182,6 +224,17 @@ internal sealed class CodexPetWindow : Form
 
     private void HandleMouseMove(object? sender, MouseEventArgs e)
     {
+        if (_pressedControlId is not null && e.Button.HasFlag(MouseButtons.Left))
+        {
+            var pressedCursor = Cursor.Position;
+            var pressedDelta = new Size(
+                pressedCursor.X - _dragStartCursor.X,
+                pressedCursor.Y - _dragStartCursor.Y);
+            if (Math.Abs(pressedDelta.Width) >= 2 || Math.Abs(pressedDelta.Height) >= 2)
+                _pressedControlMoved = true;
+            return;
+        }
+
         if (!_dragging || !e.Button.HasFlag(MouseButtons.Left)) return;
         var cursor = Cursor.Position;
         var delta = new Size(cursor.X - _dragStartCursor.X, cursor.Y - _dragStartCursor.Y);
@@ -193,7 +246,20 @@ internal sealed class CodexPetWindow : Form
 
     private void HandleMouseUp(object? sender, MouseEventArgs e)
     {
-        if (e.Button != MouseButtons.Left || !_dragging) return;
+        if (e.Button != MouseButtons.Left) return;
+
+        if (_pressedControlId is string pressedControlId)
+        {
+            _pressedControlId = null;
+            Capture = false;
+            var released = CodexPetControlHitTest.HitTest(CurrentKeyboardBodyBounds(), e.Location);
+            if (!_pressedControlMoved && released?.Id == pressedControlId)
+                ControlClicked?.Invoke(pressedControlId);
+            _pressedControlMoved = false;
+            return;
+        }
+
+        if (!_dragging) return;
         _dragging = false;
         Capture = false;
         if (_dragMoved)
@@ -212,10 +278,7 @@ internal sealed class CodexPetWindow : Form
         base.OnPaint(e);
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var motion = CodexPetMotion.Sample(_state, _clock.Elapsed.TotalSeconds - _stateEnteredSeconds);
-        var geometry = CodexPetSizePolicy.Geometry(_sizePreset);
-        var baseBody = geometry.KeyboardBodyBounds;
-        var body = new Rectangle(baseBody.X + (int)Math.Round(motion.OffsetX), baseBody.Y + (int)Math.Round(motion.OffsetY), baseBody.Width, baseBody.Height);
+        var body = CurrentKeyboardBodyBounds();
         using var shadow = new SolidBrush(Color.FromArgb(70, 0, 0, 0));
         FillRounded(g, new Rectangle(body.X + 3, body.Y + 5, body.Width, body.Height), 11, shadow);
         using var chassis = new SolidBrush(Color.FromArgb(40, 45, 54));
@@ -246,6 +309,17 @@ internal sealed class CodexPetWindow : Form
     }
 
     internal Rectangle BadgeBounds() => CodexPetSizePolicy.Geometry(_sizePreset).BadgeBounds;
+
+    private Rectangle CurrentKeyboardBodyBounds()
+    {
+        var motion = CodexPetMotion.Sample(_state, _clock.Elapsed.TotalSeconds - _stateEnteredSeconds);
+        var baseBody = CodexPetSizePolicy.Geometry(_sizePreset).KeyboardBodyBounds;
+        return new Rectangle(
+            baseBody.X + (int)Math.Round(motion.OffsetX),
+            baseBody.Y + (int)Math.Round(motion.OffsetY),
+            baseBody.Width,
+            baseBody.Height);
+    }
 
     private static Color KeyColor(VisualEffectSample sample, PetPalette palette)
     {
@@ -317,6 +391,8 @@ internal sealed class CodexPetController : IDisposable
     private bool _titleRefreshInFlight;
     private bool _visible;
 
+    internal event Action<string>? ControlClicked;
+
     public CodexPetController(JournalStateNormalizer normalizer, ICodexUnreadSourceRegistry sources, StatusLabConfig config)
     {
         _normalizer = normalizer;
@@ -324,6 +400,7 @@ internal sealed class CodexPetController : IDisposable
         _window = new CodexPetWindow(config);
         _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _window.CloseRequested += HidePet;
+        _window.ControlClicked += controlId => ControlClicked?.Invoke(controlId);
         _normalizer.StateChanged += OnStateChanged;
         _refresh.Tick += (_, _) => Refresh();
         Refresh();

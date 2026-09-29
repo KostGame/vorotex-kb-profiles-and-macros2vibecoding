@@ -31,8 +31,14 @@ Implemented modes:
 - `sleep-payload-seed`
 - `sleep-payload-helper-semantics`
 - `sleep-payload-source`
+- `feature-call-sites`
+- `layout-attestation-static`
 
 The `sleep-payload-source` mode is implemented as a static, read-only provenance analyzer. Its verdict remains capped below a SleepTime field proof unless an explicit, complete SleepTime-to-source-byte-to-report-to-SetFeature chain is proven.
+
+`feature-call-sites` inventories static `HidD_SetFeature` / `HidD_GetFeature` import call-sites without executing either API. `layout-attestation-static` reconstructs the OEM feature-report transport, operation dispatcher, bounded profile-binding read paths, macro read path, and nearby profile-binding encoder from PE bytes only. These modes do not claim live device attestation by themselves.
+
+The CLI currently keeps the common two-input invocation contract for every mode. For a single-EXE mode, pass the same OEM executable to both `--a` and `--b`; only `--a` is analyzed by these two modes.
 
 ## Local workspace convention
 

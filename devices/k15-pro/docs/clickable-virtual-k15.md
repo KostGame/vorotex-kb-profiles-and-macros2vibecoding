@@ -1,24 +1,41 @@
 # Clickable virtual K15 research contract
 
-This document records the public research boundary and proposed architecture for a future clickable Mini-K15 inside Codex Pet. It describes research and design only. No virtual K15 dispatcher or profile-switch feature is implemented by this document.
+This document records the public research boundary and proposed architecture for a future clickable Mini-K15 inside Codex Pet. It describes research and design only. No arbitrary virtual K15 dispatcher is enabled by this document.
 
 ## Proven research facts
 
-- Active hardware profile slot and local layout definition are separate authorities. The already-proven device read protocol reads the active slot directly from hardware.
-- Independent readback observed slot 0 before one owner physical encoder switch and slot 1 after that switch.
-- Physical A/B switching did not modify local `Profile0` / `Profile1` / `macroConfig` files. Their timestamps or hashes cannot establish which hardware slot is active.
-- An official single-profile `.KB.Config` export matched the corresponding live `ProfileN` `KBconfig` for all relevant K15 controls in the observed layout. Embedded macro references resolved by exact `grpGuid` plus `macGuid`.
-- Macro action authority is the bound GUID pair and the active `macData` prefix `[0:num]`. Display names and `MemMacId` semantics are not dispatch authority.
-- The observed owner layout differed materially from the historical V1.2 release table. A future virtual Pet must not hardcode semantic actions from README or release tables.
+- Active hardware profile slot and local layout definition are separate authorities. The device protocol reads the active slot directly from hardware through command `0x82`, selector `2`.
+- A controlled owner-approved transaction `slot 1 -> slot 0 -> read -> slot 1` completed with exact final hardware readback `RESTORE_VERIFY=PASS`.
+- Physical or programmatic A/B switching does not rewrite local `Profile0` / `Profile1` / `macroConfig` files. File timestamps or hashes cannot establish which hardware slot is active.
+- An official single-profile `.KB.Config` export matched the corresponding live `ProfileN` `KBconfig` for the observed layout. Embedded macro references resolve by exact `grpGuid` plus `macGuid`.
+- The OEM feature protocol uses `HidD_SetFeature` as the request envelope for semantic reads and `HidD_GetFeature` for the response. The recovered request builder is OEM function `0x000B6040`; the previous static false-positive security-cookie helper is not a request builder.
+- Command `0x84` is the onboard main binding/scan read surface with `selector=0`, `address=cellIndex * 4`, `length=4`. The OEM convenience getter caps its public index argument at `0..15`, while the OEM write path proves a 160-cell (`20 x 8`) main matrix and uses the same `cellIndex * 4` addressing.
+- An owner-approved extended read-only canary verified cells `16..47` live with the same `0x84` address contract. Every populated cell matched the corresponding `KBconfig.ini` physical control and every intervening empty matrix cell returned the empty native record `02000000`.
+- Command `0x85` is a bounded two-item onboard encoder-action surface: indices `0..1`, address `index * 4`, length `4`. Slot-1 live values contain the expected encoder actions `234/233`.
+- Command `0x88` provides live macro payload readback. Its index is a macro-memory/binding slot, not a physical-control index. The first page is `selector=index, address=0, length=32`; additional pages increment address by `32`.
+- Full `0x88` payloads from live hardware were decoded and matched current `macroConfig.json` macros byte-for-byte through the active `macSta/macVal/macDly` prefix. Tested live slots uniquely matched `VIBE_10_DONE_RU`, `VIBE_07_CREATE_RU`, `VIBE_09_REVIEW_RU`, and `VIBE_11_STATUS_RU`.
+- Macro semantic authority therefore can be checked against hardware payload contents rather than inferred from display names or `MemMacId`.
+- The observed owner layout differs materially from historical V1.2 tables. A future virtual Pet must not hardcode semantic actions from README or release tables.
 
-These are bounded observations from the tested device and software state. They do not establish a general onboard layout readback capability.
+These are bounded observations from the tested device and OEM software build. Together, `KBconfig.ini`, the OEM 160-cell write path, and live `0x84` reads through cell `47` prove the physical binding-cell map for every rendered Mini-K15 control on the tested K15.
+
+## Important index semantics
+
+Do not conflate the protocol index spaces:
+
+- `0x84 index` is part of an onboard scan/binding surface.
+- `0x85 index` selects one of two encoder-action records.
+- `0x88 index` selects a macro-memory/binding slot.
+
+In particular, a successful `0x88(index=N)` macro match does **not** mean physical control `N`.
 
 ## Not yet proven
 
-- Full onboard key-binding and macro readback is not proven.
-- An onboard configuration checksum, revision, or equivalent hardware-derived attestation token is not proven.
-- Local VOROTEX files cannot attest a keyboard that may have been reconfigured elsewhere.
+- Full hardware-versus-local semantic equality has not yet been evaluated for every clickable control in both profile slots.
+- The neighboring OEM read families `0x86` and `0x87` are not required for the proven Mini-K15 main binding-cell map; their unrelated device-feature semantics remain outside this implementation slice.
+- An onboard whole-layout checksum/revision token is not proven.
 - Unknown action families and unsupported native events have no proven safe virtual dispatch mapping.
+- A hardware-derived macro match plus the proven physical binding cell is sufficient hardware evidence for that control, but arbitrary virtual dispatch remains blocked until the local semantic model independently resolves the same action and equality is enforced.
 
 ## Authority and dispatch contract
 
@@ -39,43 +56,62 @@ READY_VERIFIED, STALE, UNSUPPORTED, ERROR
 
 Only `READY_VERIFIED` may dispatch. Before every virtual dispatch, read the active slot from hardware again. Reconnect, device identity change, layout-file mutation, parser failure, unresolved binding, or unsupported action invalidates `READY_VERIFIED` immediately.
 
-Pet must replay encoded actions from the verified layout snapshot, not semantic labels. Ordinary keyboard macros follow their actual HID usage down/up sequence and active delays. Macro execution uses only `[0:num]`. Unknown action families fail closed. Resolve macro references through exact bound GUIDs; do not use names or `MemMacId` as semantic identity.
+Pet must replay encoded actions from the verified hardware-backed snapshot, not semantic labels. Ordinary keyboard macros follow their actual HID usage down/up sequence and active delays. Macro execution uses only the active event prefix. Exact GUID resolution remains the local-file semantic bridge, while live `0x88` payload equality is the hardware proof for macro contents. Unknown action families fail closed.
 
 Pet must reuse the same rendered Mini-K15 bounds for hit testing. Keep click and drag behavior separate. A key click must not drag the Pet, and the Pet must not take foreground focus from the target application.
 
 ## Explicit virtual encoder click
 
-An explicit user click on the virtual encoder is the only planned exception to the existing no-programmatic-profile-switch policy. This is future design only; current Status Lab does not programmatically switch profiles.
+An explicit user click on the virtual encoder is the only planned exception to the existing no-programmatic-profile-switch policy.
 
-The planned transaction is:
+The proven transaction shape is:
 
 1. Read current hardware slot.
 2. Call `SelectActiveSlot(opposite)`.
 3. Read the slot again and require the exact expected result.
 4. Refresh layout authority and Pet presentation.
+5. On any failure, restore the original slot in a `finally` path and verify the restore.
 
 No startup, reconnect, RGB repair, synchronization, or background process may select a profile. Failed or mismatched readback blocks virtual dispatch and invalidates readiness.
 
 ## Implementation slices
 
-1. **Attestation research:** prove the smallest onboard primitive that binds the relevant onboard layout to hardware: full relevant readback, a deterministic configuration checksum/revision, or an equivalent hardware-derived token.
-2. **Layout model:** parse local profile and macro data, resolve exact GUID bindings, validate active macro prefixes, and reject unsupported actions.
-3. **Authority synchronization:** keep slot observation separate from layout attestation; invalidate readiness on device or file changes and on every parse/validation failure.
-4. **Encoded-action dispatcher:** replay only proven native/HID sequences with their active timings. Add explicit support before enabling each action family.
-5. **Pet interaction:** reuse rendered geometry; verify click/drag separation and no focus steal.
-6. **Explicit encoder transaction:** allow only the user gesture above, with fresh read, opposite-slot selection, exact readback, and refresh.
+1. **Attestation research:** COMPLETE for the clickable Mini-K15 physical-control to main binding-cell map on the tested K15.
+2. **Hardware layout model:** IMPLEMENTED locally; captures active slot, proven `0x84` binding cells, and required `0x88` macro payloads with a slot-before/slot-after consistency gate.
+3. **Local semantic model:** IMPLEMENTED locally; parses profile bindings, resolves exact GUID macros, encodes the active `macSta/macVal/macDly` prefix, and rejects unsupported storage/action values.
+4. **Authority synchronization:** IMPLEMENTED locally as an equality evaluator plus readiness session. The session binds readiness to device connection generation, identity, active slot, profile/macro file hashes, and file-mutation generation. Before every future dispatch it re-reads the selected control's live `0x84` binding and, for macros, the live `0x88` payload. Any difference invalidates readiness.
+5. **Encoded-action dispatcher:** IMPLEMENTED locally and wired behind `READY_VERIFIED`. Verified HID keyboard usages map to physical Windows scan codes and execute as `KEYEVENTF_SCANCODE` down/up events with exact millisecond delays. Planner validation rejects key-up-before-key-down and macros that would leave any HID usage pressed. Fake-transport tests cover ordering and release of held keys after executor failure. The real `SendInput` transport is wired but has not yet passed an owner acceptance canary.
+6. **Pet interaction:** IMPLEMENTED locally. Hit-testing reuses the rendered bounds (including ellipse-aware rotary/joystick checks), key presses are separated from drag gestures, and the Pet uses `ShowWithoutActivation`, `WS_EX_NOACTIVATE`, and `MA_NOACTIVATE`. A click refreshes authority when necessary, performs fresh per-control hardware checks, and dispatches only while `READY_VERIFIED`. Concurrent virtual dispatch is fail-closed as `dispatch_busy`.
+7. **Explicit encoder transaction:** IMPLEMENTED locally and routed only from an explicit Pet rotary click. It performs fresh verified rotary preparation, opposite-slot selection, exact readback, full target re-attestation, and verified rollback plus re-attestation on failure. No background path invokes profile selection.
 
 No implementation slice may bypass the attestation gate for arbitrary clickable controls.
 
 ## Safety and verification gates
 
-- First gate is read-only protocol research. Do not probe unknown write commands. Continue research only after the exact read contract is proven.
-- Until onboard attestation is proven, `SLOT_ONLY` may report hardware slot but must not authorize arbitrary virtual actions.
-- Test both slots, exact GUID resolution, active-prefix behavior, missing references, unsupported action families, reconnect, identity change, and local-file mutation.
-- Test that every virtual dispatch uses a fresh hardware slot read, and that encoder selection requires an explicit click plus exact readback.
+- Do not probe a new HID command live until its exact static read contract is understood and the owner approves that read family.
+- Current owner-approved live read families are the already-tested `0x84`, `0x85`, and `0x88`; active-slot `0x82/selector 2` is separately production-proven.
+- The physical-control mapping, local semantic equality gate, Pet lifecycle wiring, non-activating hit testing, and Windows input backend are implemented locally and passed the non-installed owner acceptance canary. Live installation/promotion remains a separate owner gate.
+- Test both hardware slots, exact GUID resolution, live macro payload equality, active-prefix behavior, missing references, unsupported action families, reconnect, identity change, and local-file mutation.
+- Test that every virtual dispatch uses a fresh hardware slot read, and that encoder selection requires an explicit click plus exact readback and rollback.
 - Test all Pet sizes against the rendered hit bounds, click versus drag, and unchanged foreground focus.
-- A separate non-installed candidate and harmless input-capture target are required before any owner acceptance canary. Physical-device and real-application canaries remain separate owner gates.
+- Owner acceptance used a separate non-installed candidate and harmless input-capture target. No real-application dispatch canary and no live installation/promotion were performed.
 
-## Next research gate
+## Owner acceptance
 
-Before arbitrary clickable dispatch, prove the smallest onboard layout attestation primitive: full relevant readback, deterministic onboard configuration checksum/revision, or equivalent hardware-derived token. Keep research read-only until its exact protocol contract is proven.
+The non-installed owner acceptance canary passed on 2026-09-29 against a harmless input-capture target.
+
+- Native virtual Enter produced injected Windows scan code `0x1C` down/up with unchanged foreground window.
+- A short verified Profile0 macro (`key-6 -> TOOLS_06_SELECT_ALL`) produced exactly `Ctrl down -> A down -> A up -> Ctrl up` as injected scan-code input, with unchanged foreground window.
+- Explicit virtual rotary switching passed `slot 0 -> 1 -> 0`, with full target re-attestation after each switch, no keyboard injection, connection preserved, and final slot restored to the original value.
+- The disconnected setup path also demonstrated fail-closed behavior: authority refresh failed as `Disconnected` and no input was dispatched.
+- The candidate was not installed or copied over the live StatusTray. The original live executable was restarted after the canary with its pre-canary SHA-256 unchanged.
+
+OWNER_ACCEPTANCE_NATIVE_INPUT=PASS
+OWNER_ACCEPTANCE_MACRO_INPUT=PASS
+OWNER_ACCEPTANCE_NO_FOCUS_STEAL=PASS
+OWNER_ACCEPTANCE_PROFILE_SWITCH=PASS
+OWNER_ACCEPTANCE_ROLLBACK=PASS
+
+## Next implementation gate
+
+The local implementation is now acceptance-proven but still unpublished and uninstalled. The next owner gate is repository publication/review (push + PR) and, separately, any promotion of the candidate into the live StatusTray path. Neither gate is implied by the acceptance result.

@@ -5,7 +5,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Vorotex.K15.StatusLab;
 
-internal sealed class K15HidLightingController : IDisposable
+internal sealed class K15HidLightingController : IDisposable, IK15ProfileSlotControl
 {
     private const uint DigcfPresent = 0x00000002;
     private const uint DigcfDeviceInterface = 0x00000010;
@@ -204,6 +204,52 @@ internal sealed class K15HidLightingController : IDisposable
         var selected = ReadActiveSlot();
         if (selected != slot)
             throw new TimeoutException($"K15 did not settle on requested onboard slot {slot}; observed {selected}.");
+    }
+
+    public byte[] ReadBindingCell(int cellIndex)
+    {
+        if (cellIndex is < 0 or >= K15HidProtocol.MainBindingCellCount)
+            throw new ArgumentOutOfRangeException(nameof(cellIndex));
+
+        var address = checked((ushort)(cellIndex * K15HidProtocol.BindingCellSize));
+        var data = Query(K15HidProtocol.BindingReadCommand, 0, address, K15HidProtocol.BindingCellSize);
+        RequireLength(data, K15HidProtocol.BindingCellSize, $"binding cell {cellIndex}");
+        return data;
+    }
+
+    public byte[] ReadEncoderBinding(byte index)
+    {
+        if (index > 1)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+        var address = checked((ushort)(index * K15HidProtocol.BindingCellSize));
+        var data = Query(K15HidProtocol.EncoderBindingReadCommand, 0, address, K15HidProtocol.BindingCellSize);
+        RequireLength(data, K15HidProtocol.BindingCellSize, $"encoder binding {index}");
+        return data;
+    }
+
+    public byte[] ReadMacroPayload(byte memorySlot)
+    {
+        var first = Query(K15HidProtocol.MacroReadCommand, memorySlot, 0, K15HidProtocol.MaxData);
+        if (first.Length < 4)
+            throw new InvalidDataException($"Macro slot {memorySlot} header is too short.");
+
+        var declared = first[2] | (first[3] << 8);
+        if (declared > K15HidProtocol.MacroPayloadLimit)
+            throw new InvalidDataException($"Macro slot {memorySlot} payload length {declared} exceeds safety limit.");
+
+        var total = checked(declared + 4);
+        var bytes = new List<byte>(Math.Max(total, K15HidProtocol.MaxData));
+        bytes.AddRange(first);
+
+        for (var address = K15HidProtocol.MaxData; bytes.Count < total; address += K15HidProtocol.MaxData)
+        {
+            var page = Query(K15HidProtocol.MacroReadCommand, memorySlot, checked((ushort)address),
+                K15HidProtocol.MaxData);
+            bytes.AddRange(page);
+        }
+
+        return bytes.Skip(4).Take(declared).ToArray();
     }
 
     public LightingSnapshot PrepareProfileSnapshot(StatusLabConfig config)

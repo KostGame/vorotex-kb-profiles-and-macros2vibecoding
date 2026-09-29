@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Text.Json;
 using Vorotex.K15.StatusLab;
 
 static void Require(bool condition, string name)
@@ -149,6 +150,242 @@ Require(MiniK15ControlLayout.Controls.Single(control => control.Id == "enter") i
         MiniK15ControlLayout.Controls.Count(control => control.Kind is MiniK15ControlKind.Rotary or
             MiniK15ControlKind.Joystick or MiniK15ControlKind.WideEnter or MiniK15ControlKind.LongBottomKey) == 4,
     "EXPLICIT_SPECIAL_CONTROL_KINDS");
+
+foreach (var preset in Enum.GetValues<PetSizePreset>())
+{
+    var geometry = CodexPetSizePolicy.Geometry(preset);
+    foreach (var control in MiniK15ControlLayout.Controls)
+    {
+        var bounds = CodexPetSizePolicy.ControlBounds(geometry.KeyboardBodyBounds, control);
+        var center = new Point(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
+        Require(CodexPetControlHitTest.HitTest(geometry.KeyboardBodyBounds, center)?.Id == control.Id,
+            $"PET_CONTROL_HIT_CENTER_{preset}_{control.Id}");
+    }
+
+    var rotary = MiniK15ControlLayout.Controls.Single(control => control.Id == "rotary");
+    var rotaryBounds = CodexPetSizePolicy.ControlBounds(geometry.KeyboardBodyBounds, rotary);
+    Require(CodexPetControlHitTest.HitTest(
+                geometry.KeyboardBodyBounds,
+                new Point(rotaryBounds.Left + 1, rotaryBounds.Top + 1))?.Id != "rotary",
+        $"PET_ROTARY_CORNER_NOT_CLICKABLE_{preset}");
+}
+Require(CodexPetControlHitTest.HitTest(
+            CodexPetSizePolicy.Geometry(PetSizePreset.Medium).KeyboardBodyBounds,
+            Point.Empty) is null,
+    "PET_OUTSIDE_CONTROLS_NOT_CLICKABLE");
+
+var expectedBindingCells = new Dictionary<string, int>(StringComparer.Ordinal)
+{
+    ["key-6"] = 0, ["enter"] = 1, ["key-5"] = 8, ["key-dot"] = 9, ["minus"] = 10,
+    ["key-4"] = 16, ["key-0"] = 17, ["plus"] = 18, ["key-3"] = 24, ["key-9"] = 25,
+    ["long-bottom"] = 26, ["key-2"] = 32, ["key-8"] = 33, ["rotary"] = 34,
+    ["key-1"] = 40, ["key-7"] = 41, ["joystick"] = 42
+};
+Require(K15LayoutAuthorityModel.BindingCells.Count == expectedBindingCells.Count &&
+        expectedBindingCells.All(pair =>
+            K15LayoutAuthorityModel.BindingCellForControl(pair.Key) == pair.Value) &&
+        K15LayoutAuthorityModel.BindingCells.Keys.All(id =>
+            MiniK15ControlLayout.Controls.Any(control => control.Id == id)),
+    "K15_HARDWARE_BINDING_CELL_MAP");
+
+var macroBinding = K15LayoutAuthorityModel.DecodeBindingCell(18, new byte[] { 0x0A, 0x00, 0x0E, 0x00 });
+var nativeBinding = K15LayoutAuthorityModel.DecodeBindingCell(1, new byte[] { 0x02, 0x28, 0x00, 0x00 });
+var profileBinding = K15LayoutAuthorityModel.DecodeBindingCell(34, new byte[] { 0x09, 0x03, 0x00, 0x00 });
+Require(macroBinding.IsMacro && macroBinding.MacroMemorySlot == 14 &&
+        nativeBinding.IsNative && nativeBinding.NativeUsage == 40 &&
+        profileBinding.IsProfileLoop,
+    "K15_HARDWARE_BINDING_DECODER");
+
+var groupGuid = "11111111-1111-1111-1111-111111111111";
+var macroGuid = "22222222-2222-2222-2222-222222222222";
+var syntheticKeys = K15LayoutAuthorityModel.StorageFields.Values
+    .ToDictionary(field => field, _ => 40, StringComparer.Ordinal);
+syntheticKeys[K15LayoutAuthorityModel.StorageFieldForControl("key-1")] = 700;
+syntheticKeys[K15LayoutAuthorityModel.StorageFieldForControl("rotary")] = 312;
+var syntheticMacroBindings = K15LayoutAuthorityModel.StorageFields.Values
+    .ToDictionary<string, string, object>(
+        field => field,
+        field => field == K15LayoutAuthorityModel.StorageFieldForControl("key-1")
+            ? new { MemMacId = 7, grpGuid = groupGuid, macGuid = macroGuid }
+            : new { MemMacId = 0, grpGuid = "", macGuid = "" },
+        StringComparer.Ordinal);
+var syntheticProfileJson = JsonSerializer.Serialize(new
+{
+    KBconfig = new { KBKey = syntheticKeys, KBKeyMacro = syntheticMacroBindings }
+});
+var syntheticMacroJson = JsonSerializer.Serialize(new
+{
+    MacroGrpInfo = new[]
+    {
+        new
+        {
+            GrpGuid = groupGuid,
+            MacroInfo = new[]
+            {
+                new
+                {
+                    MacroGuid = macroGuid,
+                    macData = new
+                    {
+                        num = 2,
+                        macSta = new[] { 1, 2 },
+                        macVal = new[] { 4, 4 },
+                        macDly = new[] { 5, 7 }
+                    }
+                }
+            }
+        }
+    }
+});
+var semantic = K15LocalLayoutSemanticModel.Parse(syntheticProfileJson, syntheticMacroJson, 1);
+Require(semantic.Actions["key-1"].ExpectedBindingRaw.SequenceEqual(new byte[] { 0x0A, 0x00, 0x07, 0x00 }) &&
+        semantic.Actions["key-1"].MacroPayload!.SequenceEqual(new byte[] { 0x04, 0x05, 0x04, 0x87 }) &&
+        semantic.Actions["key-2"].ExpectedBindingRaw.SequenceEqual(new byte[] { 0x02, 0x28, 0x00, 0x00 }) &&
+        semantic.Actions["rotary"].ExpectedBindingRaw.SequenceEqual(new byte[] { 0x09, 0x03, 0x00, 0x00 }),
+    "K15_LOCAL_SEMANTIC_WIRE_ENCODING");
+
+var syntheticHardwareBindings = semantic.Actions.ToDictionary(
+    pair => pair.Key,
+    pair => K15LayoutAuthorityModel.DecodeBindingCell(
+        K15LayoutAuthorityModel.BindingCellForControl(pair.Key),
+        pair.Value.ExpectedBindingRaw),
+    StringComparer.Ordinal);
+var syntheticHardware = new K15HardwareLayoutSnapshot(
+    1,
+    syntheticHardwareBindings,
+    new Dictionary<byte, byte[]> { [7] = semantic.Actions["key-1"].MacroPayload! });
+Require(K15LayoutAttestation.Compare(syntheticHardware, semantic).IsVerified,
+    "K15_LAYOUT_ATTESTATION_READY_VERIFIED");
+var staleHardwareBindings = new Dictionary<string, K15OnboardBindingCell>(syntheticHardwareBindings, StringComparer.Ordinal)
+{
+    ["key-1"] = K15LayoutAuthorityModel.DecodeBindingCell(40, new byte[] { 0x0A, 0x00, 0x08, 0x00 })
+};
+Require(K15LayoutAttestation.Compare(
+        syntheticHardware with { Bindings = staleHardwareBindings }, semantic).State == K15LayoutVerificationState.Stale,
+    "K15_LAYOUT_ATTESTATION_BINDING_MISMATCH_FAILS_CLOSED");
+
+var macroPlan = K15DispatchPlanner.Create(semantic.Actions["key-1"]);
+Require(macroPlan.Kind == K15DispatchPlanKind.Macro &&
+        macroPlan.Steps.SequenceEqual(new[]
+        {
+            new K15DispatchStep(K15DispatchStepKind.KeyDown, 0x04),
+            new K15DispatchStep(K15DispatchStepKind.Delay, DelayMilliseconds: 5),
+            new K15DispatchStep(K15DispatchStepKind.KeyUp, 0x04),
+            new K15DispatchStep(K15DispatchStepKind.Delay, DelayMilliseconds: 7)
+        }),
+    "K15_DISPATCH_PLAN_MACRO_EVENT_TIMING");
+try
+{
+    K15DispatchPlanner.Create(semantic.Actions["key-1"] with
+    {
+        MacroPayload = new byte[] { 0xE0, 0x05 }
+    });
+    Require(false, "K15_DISPATCH_PLAN_UNBALANCED_MACRO_EXPECTED_FAILURE");
+}
+catch (InvalidDataException)
+{
+    Require(true, "K15_DISPATCH_PLAN_UNBALANCED_MACRO_FAILS_CLOSED");
+}
+var nativePlan = K15DispatchPlanner.Create(semantic.Actions["key-2"]);
+var profilePlan = K15DispatchPlanner.Create(semantic.Actions["rotary"]);
+Require(nativePlan.Kind == K15DispatchPlanKind.NativeTap &&
+        nativePlan.Steps.SequenceEqual(new[]
+        {
+            new K15DispatchStep(K15DispatchStepKind.KeyDown, 0x28),
+            new K15DispatchStep(K15DispatchStepKind.KeyUp, 0x28)
+        }) &&
+        profilePlan.Kind == K15DispatchPlanKind.ProfileSwitch &&
+        profilePlan.Steps.Count == 0,
+    "K15_DISPATCH_PLAN_NATIVE_AND_PROFILE_SWITCH");
+
+var currentProfileUsages = new byte[]
+{
+    4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,29,
+    30,31,35,40,43,44,51,53,54,55,56,224,225,226
+};
+Require(currentProfileUsages.All(usage => K15HidUsageMap.TryScanCode(usage, out _)) &&
+        !K15HidUsageMap.TryScanCode(0x7F, out _),
+    "K15_WINDOWS_HID_USAGE_ALLOWLIST");
+Require(K15HidUsageMap.TryScanCode(0x04, out var aScan) && aScan.Code == 0x1E &&
+        K15HidUsageMap.TryScanCode(0x28, out var enterScan) && enterScan.Code == 0x1C &&
+        K15HidUsageMap.TryScanCode(0xE0, out var ctrlScan) && ctrlScan.Code == 0x1D,
+    "K15_WINDOWS_SCAN_CODE_PHYSICAL_SEMANTICS");
+
+var recordingInput = new RecordingScanCodeInput();
+var recordingDelay = new RecordingDispatchDelay();
+var executor = new K15WindowsInputExecutor(recordingInput, recordingDelay);
+await executor.ExecuteAsync(macroPlan);
+Require(recordingInput.Events.SequenceEqual(new[] { "DOWN:001E", "UP:001E" }) &&
+        recordingDelay.Delays.SequenceEqual(new[] { 5, 7 }),
+    "K15_WINDOWS_EXECUTOR_FAKE_MACRO_SEQUENCE");
+
+var cleanupInput = new RecordingScanCodeInput();
+var failingDelay = new RecordingDispatchDelay { ThrowOnCall = 1 };
+var cleanupExecutor = new K15WindowsInputExecutor(cleanupInput, failingDelay);
+var cleanupPlan = new K15DispatchPlan(
+    K15DispatchPlanKind.Macro,
+    new[]
+    {
+        new K15DispatchStep(K15DispatchStepKind.KeyDown, 0xE0),
+        new K15DispatchStep(K15DispatchStepKind.Delay, DelayMilliseconds: 5)
+    });
+try
+{
+    await cleanupExecutor.ExecuteAsync(cleanupPlan);
+    Require(false, "K15_WINDOWS_EXECUTOR_FAILURE_EXPECTED");
+}
+catch (InvalidOperationException)
+{
+    Require(cleanupInput.Events.SequenceEqual(new[] { "DOWN:001D", "UP:001D" }),
+        "K15_WINDOWS_EXECUTOR_RELEASES_PRESSED_KEYS_ON_FAILURE");
+}
+
+var switchControl = new RecordingProfileSlotControl(1);
+var switchResult = K15ProfileSwitchTransaction.Execute(
+    switchControl,
+    slot => slot == 0);
+Require(switchResult == new K15ProfileSwitchResult(1, 0) &&
+        switchControl.CurrentSlot == 0 &&
+        switchControl.SelectedSlots.SequenceEqual(new byte[] { 0 }),
+    "K15_PROFILE_SWITCH_TRANSACTION_EXACT_TARGET");
+
+var rollbackControl = new RecordingProfileSlotControl(1);
+try
+{
+    K15ProfileSwitchTransaction.Execute(
+        rollbackControl,
+        slot => slot == 1);
+    Require(false, "K15_PROFILE_SWITCH_ROLLBACK_EXPECTED_FAILURE");
+}
+catch (InvalidOperationException)
+{
+    Require(rollbackControl.CurrentSlot == 1 &&
+            rollbackControl.SelectedSlots.SequenceEqual(new byte[] { 0, 1 }),
+        "K15_PROFILE_SWITCH_TRANSACTION_ROLLBACK_VERIFIED");
+}
+
+var layoutTemp = Path.Combine(Path.GetTempPath(), "k15-layout-authority-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(layoutTemp);
+try
+{
+    var profile0Path = Path.Combine(layoutTemp, "Profile0.json");
+    var profile1Path = Path.Combine(layoutTemp, "Profile1.json");
+    var macroConfigPath = Path.Combine(layoutTemp, "macroConfig.json");
+    File.WriteAllText(profile0Path, syntheticProfileJson);
+    File.WriteAllText(profile1Path, syntheticProfileJson);
+    File.WriteAllText(macroConfigPath, syntheticMacroJson);
+    var paths = new K15LayoutFilePaths(profile0Path, profile1Path, macroConfigPath);
+    var localRead = K15LayoutFileAuthority.Read(paths, 1);
+    Require(K15LayoutFileAuthority.Matches(paths, localRead.Stamp),
+        "K15_LAYOUT_FILE_STAMP_MATCHES_UNCHANGED");
+    File.AppendAllText(macroConfigPath, " ");
+    Require(!K15LayoutFileAuthority.Matches(paths, localRead.Stamp),
+        "K15_LAYOUT_FILE_STAMP_MUTATION_INVALIDATES");
+}
+finally
+{
+    Directory.Delete(layoutTemp, recursive: true);
+}
 
 var topRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Top)
     .OrderBy(control => control.X).ToArray();
@@ -418,4 +655,48 @@ static GraphicsPath RoundedPath(Rectangle rectangle, int radius)
     path.AddArc(rectangle.X, rectangle.Bottom - diameter, diameter, diameter, 90, 90);
     path.CloseFigure();
     return path;
+}
+
+internal sealed class RecordingScanCodeInput : IK15ScanCodeInput
+{
+    internal List<string> Events { get; } = new();
+
+    public void KeyDown(K15WindowsScanCode scanCode) =>
+        Events.Add($"DOWN:{scanCode.Code:X4}{(scanCode.Extended ? ":E" : string.Empty)}");
+
+    public void KeyUp(K15WindowsScanCode scanCode) =>
+        Events.Add($"UP:{scanCode.Code:X4}{(scanCode.Extended ? ":E" : string.Empty)}");
+}
+
+internal sealed class RecordingDispatchDelay : IK15DispatchDelay
+{
+    private int _calls;
+    internal List<int> Delays { get; } = new();
+    internal int? ThrowOnCall { get; init; }
+
+    public Task DelayAsync(int milliseconds, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _calls++;
+        Delays.Add(milliseconds);
+        if (ThrowOnCall == _calls)
+            throw new InvalidOperationException("synthetic delay failure");
+        return Task.CompletedTask;
+    }
+}
+internal sealed class RecordingProfileSlotControl : IK15ProfileSlotControl
+{
+    internal RecordingProfileSlotControl(byte initialSlot) => CurrentSlot = initialSlot;
+
+    internal byte CurrentSlot { get; private set; }
+    internal List<byte> SelectedSlots { get; } = new();
+
+    public byte ReadActiveSlot() => CurrentSlot;
+
+    public void SelectActiveSlot(byte slot)
+    {
+        if (slot > 1) throw new ArgumentOutOfRangeException(nameof(slot));
+        SelectedSlots.Add(slot);
+        CurrentSlot = slot;
+    }
 }
