@@ -106,10 +106,10 @@ The non-installed owner acceptance canary passed on 2026-09-29 against a harmles
 - The disconnected setup path also demonstrated fail-closed behavior: authority refresh failed as `Disconnected` and no input was dispatched.
 - The candidate was not installed or copied over the live StatusTray. The original live executable was restarted after the canary with its pre-canary SHA-256 unchanged.
 
-OWNER_ACCEPTANCE_NATIVE_INPUT=PASS  
-OWNER_ACCEPTANCE_MACRO_INPUT=PASS  
-OWNER_ACCEPTANCE_NO_FOCUS_STEAL=PASS  
-OWNER_ACCEPTANCE_PROFILE_SWITCH=PASS  
+OWNER_ACCEPTANCE_NATIVE_INPUT=PASS
+OWNER_ACCEPTANCE_MACRO_INPUT=PASS
+OWNER_ACCEPTANCE_NO_FOCUS_STEAL=PASS
+OWNER_ACCEPTANCE_PROFILE_SWITCH=PASS
 OWNER_ACCEPTANCE_ROLLBACK=PASS
 
 ## Next implementation gate
