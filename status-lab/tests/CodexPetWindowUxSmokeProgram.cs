@@ -516,9 +516,30 @@ Require(bottomRow.Length == 4 && Gap(bottomRow[0], bottomRow[1]) == MiniK15Contr
         bottomRow[3].X + bottomRow[3].Width ==
             MiniK15ControlLayout.ChassisWidth - MiniK15ControlLayout.BottomOuterMargin,
     "BOTTOM_LEFT_CLUSTER_AND_DEDICATED_RIGHT_CELL");
-Require(Math.Abs(MiniK15ControlLayout.RotaryWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 1.4) < 0.01 &&
-        Math.Abs(MiniK15ControlLayout.JoystickWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 1.4) < 0.01 &&
-        Math.Abs(MiniK15ControlLayout.EnterWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 2.4) < 0.01 &&
+const int legacyOrdinaryKeyWidth = 10;
+const int legacyModifierKeyWidth = 8;
+const int legacyRotaryWidth = 14;
+const int legacyJoystickWidth = 14;
+const int legacyEnterWidth = 24;
+const int legacyRowGutter = 2;
+const double legacyTopToMiddleCenterGap = 29d;
+const double legacyMiddleToBottomCenterGap = 28d;
+static double RowCenter(IReadOnlyList<MiniK15Control> row) =>
+    row.Select(control => control.Y + control.Height / 2d).Average();
+
+Require(MiniK15ControlLayout.OrdinaryKeyWidth > legacyOrdinaryKeyWidth &&
+        MiniK15ControlLayout.ModifierKeyWidth > legacyModifierKeyWidth &&
+        MiniK15ControlLayout.RotaryWidth > legacyRotaryWidth &&
+        MiniK15ControlLayout.JoystickWidth > legacyJoystickWidth &&
+        MiniK15ControlLayout.EnterWidth > legacyEnterWidth,
+    "PET_CONTROLS_LARGER_THAN_PRE_214_LIVE_BASELINE");
+Require(MiniK15ControlLayout.RowGutter < legacyRowGutter &&
+        RowCenter(middleRow) - RowCenter(topRow) < legacyTopToMiddleCenterGap &&
+        RowCenter(bottomRow) - RowCenter(middleRow) < legacyMiddleToBottomCenterGap,
+    "PET_ROW_SPACING_TIGHTER_THAN_PRE_214_LIVE_BASELINE");
+Require(Math.Abs(MiniK15ControlLayout.RotaryWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 1.4) < 0.03 &&
+        Math.Abs(MiniK15ControlLayout.JoystickWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 1.4) < 0.03 &&
+        Math.Abs(MiniK15ControlLayout.EnterWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth - 2.4) < 0.03 &&
         MiniK15ControlLayout.SpaceWidth / (double)MiniK15ControlLayout.OrdinaryKeyWidth > 4.0,
     "SPECIAL_CONTROL_HARDWARE_RATIOS");
 foreach (var preset in Enum.GetValues<PetSizePreset>())
