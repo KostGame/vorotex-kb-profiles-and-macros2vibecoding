@@ -854,6 +854,10 @@ var profileA = hintTracker.Observe(0, observed);
 var profileB = hintTracker.Observe(1, observed.AddMilliseconds(500));
 Require(profileA.Profile == K15Profile.A && profileA.IsExact, "PROFILE_HINT_SLOT_A_EXACT");
 Require(profileB.Profile == K15Profile.B && profileB.IsExact, "PROFILE_HINT_SLOT_B_EXACT");
+Require(ProfileColorHint.FromReadback(0, observed).Profile == K15Profile.A &&
+        ProfileColorHint.FromReadback(1, observed).Profile == K15Profile.B &&
+        !ProfileColorHint.FromReadback(2, observed).IsExact,
+    "PROFILE_HINT_FROM_READBACK_STRICT_SLOT_MAPPING");
 Require(PetPaletteResolver.Resolve(config, profileA, observed).Primary == new PetRgbColor(255, 0, 0),
     "PROFILE_A_DEFAULT_PALETTE");
 Require(PetPaletteResolver.Resolve(config, profileB, observed.AddMilliseconds(500)).Primary == new PetRgbColor(0, 0, 255),

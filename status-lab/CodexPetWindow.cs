@@ -22,8 +22,11 @@ internal sealed class CodexPetWindow : Form
     private readonly Dictionary<PetSizePreset, ToolStripMenuItem> _sizeMenuItems = new();
     private bool _dragging;
     private bool _dragMoved;
+    private string? _hoverControlId;
     private string? _pressedControlId;
     private bool _pressedControlMoved;
+    private CodexPetControlFeedback _controlFeedback =
+        CodexPetControlFeedback.None(DateTimeOffset.UtcNow);
     private Point _dragStartCursor;
     private Point _dragStartLocation;
 
@@ -53,7 +56,22 @@ internal sealed class CodexPetWindow : Form
         MouseDown += HandleMouseDown;
         MouseMove += HandleMouseMove;
         MouseUp += HandleMouseUp;
-        _animation.Tick += (_, _) => Invalidate();
+        MouseLeave += (_, _) =>
+        {
+            if (_pressedControlId is null && _hoverControlId is not null)
+            {
+                _hoverControlId = null;
+                Invalidate();
+            }
+        };
+        _animation.Tick += (_, _) =>
+        {
+            var normalized = CodexPetControlFeedbackPolicy.Normalize(
+                _controlFeedback, DateTimeOffset.UtcNow);
+            if (normalized != _controlFeedback)
+                _controlFeedback = normalized;
+            Invalidate();
+        };
         _animation.Start();
     }
 
@@ -107,6 +125,15 @@ internal sealed class CodexPetWindow : Form
     {
         _profileHint = hint;
         _popup.SetProfileHint(hint);
+        Invalidate();
+    }
+
+    public void SetControlFeedback(
+        string controlId,
+        CodexPetControlFeedbackPhase phase,
+        byte? confirmedSlot = null)
+    {
+        _controlFeedback = new(controlId, phase, DateTimeOffset.UtcNow, confirmedSlot);
         Invalidate();
     }
 
@@ -211,6 +238,8 @@ internal sealed class CodexPetWindow : Form
             _dragging = false;
             _dragStartCursor = Cursor.Position;
             Capture = true;
+            Invalidate();
+            Update();
             return;
         }
 
@@ -224,6 +253,18 @@ internal sealed class CodexPetWindow : Form
 
     private void HandleMouseMove(object? sender, MouseEventArgs e)
     {
+        if (_pressedControlId is null && !_dragging && e.Button == MouseButtons.None)
+        {
+            var hovered = CodexPetControlHitTest.HitTest(
+                CurrentKeyboardBodyBounds(), e.Location)?.Id;
+            if (!string.Equals(hovered, _hoverControlId, StringComparison.Ordinal))
+            {
+                _hoverControlId = hovered;
+                Invalidate();
+            }
+            return;
+        }
+
         if (_pressedControlId is not null && e.Button.HasFlag(MouseButtons.Left))
         {
             var pressedCursor = Cursor.Position;
@@ -254,7 +295,21 @@ internal sealed class CodexPetWindow : Form
             Capture = false;
             var released = CodexPetControlHitTest.HitTest(CurrentKeyboardBodyBounds(), e.Location);
             if (!_pressedControlMoved && released?.Id == pressedControlId)
-                ControlClicked?.Invoke(pressedControlId);
+            {
+                _controlFeedback = new(
+                    pressedControlId,
+                    pressedControlId == "rotary"
+                        ? CodexPetControlFeedbackPhase.Switching
+                        : CodexPetControlFeedbackPhase.Dispatching,
+                    DateTimeOffset.UtcNow);
+                Invalidate();
+                Update();
+                BeginInvoke(() => ControlClicked?.Invoke(pressedControlId));
+            }
+            else
+            {
+                Invalidate();
+            }
             _pressedControlMoved = false;
             return;
         }
@@ -289,16 +344,23 @@ internal sealed class CodexPetWindow : Form
         g.DrawLine(bandDivider, body.Left + 6, body.Top + body.Height * 35 / 100, body.Right - 6, body.Top + body.Height * 35 / 100);
         g.DrawLine(bandDivider, body.Left + 6, body.Top + body.Height * 60 / 100, body.Right - 6, body.Top + body.Height * 60 / 100);
 
+        var now = DateTimeOffset.UtcNow;
+        var feedback = CodexPetControlFeedbackPolicy.Normalize(_controlFeedback, now);
         var intent = VisualEffectIntentFactory.ForPet(_state, _config);
-        var palette = PetPaletteResolver.Resolve(_config, _profileHint, DateTimeOffset.UtcNow);
+        var palette = PetPaletteResolver.Resolve(_config, _profileHint, now);
         var controls = MiniK15ControlLayout.Controls;
         for (var index = 0; index < controls.Count; index++)
         {
             var control = controls[index];
             var bounds = CodexPetSizePolicy.ControlBounds(body, control);
             var sample = VisualEffectAnimator.Sample(intent, _clock.Elapsed.TotalSeconds, index, controls.Count);
-            CodexPetControlRenderer.Draw(g, control, bounds, KeyColor(sample, palette));
+            var interaction = CodexPetControlFeedbackPolicy.RenderState(
+                control.Id, _hoverControlId, _pressedControlId, feedback, now);
+            CodexPetControlRenderer.Draw(g, control, bounds, KeyColor(sample, palette), interaction);
         }
+
+        DrawProfileBadge(g, CodexPetSizePolicy.Geometry(_sizePreset).ProfileBadgeBounds,
+            _profileHint, feedback, palette);
 
         if (CodexPetBadgeRenderer.ShouldDraw(_presentation.RelevantTaskCount))
         {
@@ -309,6 +371,56 @@ internal sealed class CodexPetWindow : Form
     }
 
     internal Rectangle BadgeBounds() => CodexPetSizePolicy.Geometry(_sizePreset).BadgeBounds;
+
+    private static void DrawProfileBadge(
+        Graphics graphics,
+        Rectangle bounds,
+        ProfileColorHint hint,
+        CodexPetControlFeedback feedback,
+        PetPalette palette)
+    {
+        string? label = feedback.ConfirmedSlot switch
+        {
+            0 => "A",
+            1 => "B",
+            _ => hint.IsExact
+                ? hint.Profile switch
+                {
+                    K15Profile.A => "A",
+                    K15Profile.B => "B",
+                    _ => null
+                }
+                : feedback.ControlId == "rotary" &&
+                  feedback.Phase == CodexPetControlFeedbackPhase.Switching
+                    ? "..."
+                    : null
+        };
+        if (label is null) return;
+
+        var accent = feedback.Phase switch
+        {
+            CodexPetControlFeedbackPhase.Blocked => Color.FromArgb(255, 96, 88),
+            CodexPetControlFeedbackPhase.Switching or CodexPetControlFeedbackPhase.Reattesting =>
+                Color.FromArgb(255, 210, 92),
+            _ when !palette.IsNeutral =>
+                Color.FromArgb(palette.Primary.R, palette.Primary.G, palette.Primary.B),
+            _ => Color.FromArgb(112, 154, 174)
+        };
+
+        using var fill = new SolidBrush(Color.FromArgb(205, 31, 36, 44));
+        using var outline = new Pen(Color.FromArgb(235, accent), Math.Max(1f, bounds.Height / 10f));
+        using var text = new SolidBrush(Color.FromArgb(238, 245, 248, 250));
+        using var font = new Font("Segoe UI", Math.Clamp(bounds.Height * 0.52f, 7f, 18f),
+            FontStyle.Bold, GraphicsUnit.Pixel);
+        using var format = new StringFormat
+        {
+            Alignment = StringAlignment.Center,
+            LineAlignment = StringAlignment.Center
+        };
+        FillRounded(graphics, bounds, Math.Max(3, bounds.Height / 3), fill);
+        DrawRounded(graphics, bounds, Math.Max(3, bounds.Height / 3), outline);
+        graphics.DrawString(label, font, text, bounds, format);
+    }
 
     private Rectangle CurrentKeyboardBodyBounds()
     {
@@ -415,6 +527,26 @@ internal sealed class CodexPetController : IDisposable
             return;
         }
         _window.SetProfileHint(hint);
+    }
+
+    public void SetControlFeedback(
+        string controlId,
+        CodexPetControlFeedbackPhase phase,
+        byte? confirmedSlot = null)
+    {
+        if (_window.IsDisposed) return;
+        if (_window.IsHandleCreated && _window.InvokeRequired)
+        {
+            try
+            {
+                _window.BeginInvoke(() =>
+                    _window.SetControlFeedback(controlId, phase, confirmedSlot));
+            }
+            catch (InvalidOperationException) { }
+            return;
+        }
+
+        _window.SetControlFeedback(controlId, phase, confirmedSlot);
     }
 
     public bool Visible => _visible;

@@ -15,7 +15,8 @@ internal enum PetSizePreset
 internal readonly record struct CodexPetSizeGeometry(
     Size WindowSize,
     Rectangle KeyboardBodyBounds,
-    Rectangle BadgeBounds);
+    Rectangle BadgeBounds,
+    Rectangle ProfileBadgeBounds);
 
 internal static class CodexPetSizePolicy
 {
@@ -26,6 +27,7 @@ internal static class CodexPetSizePolicy
 
     private static readonly Rectangle ReferenceKeyboardBody = new(11, 26, 138, 122);
     private static readonly Rectangle ReferenceBadge = new(121, 5, 33, 19);
+    private static readonly Rectangle ReferenceProfileBadge = new(6, 5, 28, 19);
 
     internal static string Label(PetSizePreset preset) => Select(preset) switch
     {
@@ -50,7 +52,10 @@ internal static class CodexPetSizePolicy
             PetSizePreset.Huge => 320,
             _ => 160
         };
-        return new(new Size(size, size), Scale(ReferenceKeyboardBody, size), Scale(ReferenceBadge, size));
+        return new(new Size(size, size),
+            Scale(ReferenceKeyboardBody, size),
+            Scale(ReferenceBadge, size),
+            Scale(ReferenceProfileBadge, size));
     }
 
     private static Rectangle Scale(Rectangle bounds, int size) => new(

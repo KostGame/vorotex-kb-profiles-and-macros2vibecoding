@@ -397,6 +397,8 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     {
         if (!await _petDispatchGate.WaitAsync(0))
         {
+            _codexPet.SetControlFeedback(
+                controlId, CodexPetControlFeedbackPhase.Blocked);
             EventJournal.Append(new
             {
                 timestampUtc = DateTimeOffset.UtcNow,
@@ -411,11 +413,18 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
 
         try
         {
+            // Mouse-up has already painted DISPATCHING/SWITCHING. Yield once
+            // before any synchronous HID reads so that feedback remains
+            // perceptible even for very fast native actions.
+            await Task.Yield();
+
             if (_layoutAuthority.State != K15LayoutAuthorityState.ReadyVerified)
                 RefreshLayoutAuthority("pet_control_click");
 
             if (_layoutAuthority.State != K15LayoutAuthorityState.ReadyVerified)
             {
+                _codexPet.SetControlFeedback(
+                    controlId, CodexPetControlFeedbackPhase.Blocked);
                 EventJournal.Append(new
                 {
                     timestampUtc = DateTimeOffset.UtcNow,
@@ -431,7 +440,30 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             var prepared = _layoutAuthority.PrepareDispatch(controlId);
             if (prepared.Plan.Kind == K15DispatchPlanKind.ProfileSwitch)
             {
-                var switched = _layoutAuthority.SwitchProfileExplicitly();
+                _codexPet.SetControlFeedback(
+                    controlId, CodexPetControlFeedbackPhase.Switching);
+
+                var switched = await _layoutAuthority.SwitchProfileExplicitlyAsync(
+                    prepared,
+                    async confirmedSlot =>
+                    {
+                        // Exact slot readback is enough to update presentation,
+                        // but NOT enough to re-enable dispatch. The authority
+                        // remains guarded until the following full attestation.
+                        _codexPet.SetProfileHint(
+                            ProfileColorHint.FromReadback(
+                                confirmedSlot, DateTimeOffset.UtcNow));
+                        _codexPet.SetControlFeedback(
+                            controlId,
+                            CodexPetControlFeedbackPhase.Reattesting,
+                            confirmedSlot);
+                        await Task.Yield();
+                    });
+
+                _codexPet.SetControlFeedback(
+                    controlId,
+                    CodexPetControlFeedbackPhase.Success,
+                    switched.SelectedSlot);
                 EventJournal.Append(new
                 {
                     timestampUtc = DateTimeOffset.UtcNow,
@@ -446,7 +478,11 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
                 return;
             }
 
+            _codexPet.SetControlFeedback(
+                controlId, CodexPetControlFeedbackPhase.Dispatching);
             await _petInputExecutor.ExecuteAsync(prepared.Plan);
+            _codexPet.SetControlFeedback(
+                controlId, CodexPetControlFeedbackPhase.Success);
             EventJournal.Append(new
             {
                 timestampUtc = DateTimeOffset.UtcNow,
@@ -461,6 +497,8 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         }
         catch (Exception ex)
         {
+            _codexPet.SetControlFeedback(
+                controlId, CodexPetControlFeedbackPhase.Blocked);
             EventJournal.Append(new
             {
                 timestampUtc = DateTimeOffset.UtcNow,

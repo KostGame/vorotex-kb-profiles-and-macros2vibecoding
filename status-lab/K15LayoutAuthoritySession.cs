@@ -158,21 +158,37 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
         return new K15PreparedDispatch(activeSlot, controlId, action, K15DispatchPlanner.Create(action));
     }
 
-    internal K15ProfileSwitchResult SwitchProfileExplicitly()
+    internal async Task<K15ProfileSwitchResult> SwitchProfileExplicitlyAsync(
+        K15PreparedDispatch prepared,
+        Func<byte, Task>? onSlotConfirmed = null)
     {
-        var prepared = PrepareDispatch("rotary");
-        if (prepared.Plan.Kind != K15DispatchPlanKind.ProfileSwitch)
-            throw new InvalidOperationException("Rotary click is not verified as a profile-switch action.");
+        if (prepared.Plan.Kind != K15DispatchPlanKind.ProfileSwitch ||
+            !string.Equals(prepared.ControlId, "rotary", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Prepared dispatch is not a verified rotary profile-switch action.");
+        }
 
         var controller = RequireConnectedController();
-        return K15ProfileSwitchTransaction.Execute(controller, expectedSlot =>
-        {
-            Invalidate(K15LayoutAuthorityState.Stale);
-            var result = Refresh();
-            return result.IsVerified &&
-                   _hardware?.ActiveSlot == expectedSlot &&
-                   _local?.Slot == expectedSlot;
-        });
+        return await K15ProfileSwitchTransaction.ExecuteAsync(
+            controller,
+            expectedSlot =>
+            {
+                var result = Refresh();
+                return result.IsVerified &&
+                       _hardware?.ActiveSlot == expectedSlot &&
+                       _local?.Slot == expectedSlot;
+            },
+            async confirmedSlot =>
+            {
+                // Exact slot readback proves the presentation may move to the
+                // new profile, but the old layout authority is now invalid.
+                // Mark it stale BEFORE yielding back to the UI.
+                Invalidate(K15LayoutAuthorityState.Stale);
+                if (onSlotConfirmed is not null)
+                    await onSlotConfirmed(confirmedSlot);
+            },
+            prepared.ActiveSlot);
     }
 
     internal void Invalidate(K15LayoutAuthorityState state = K15LayoutAuthorityState.Stale)
