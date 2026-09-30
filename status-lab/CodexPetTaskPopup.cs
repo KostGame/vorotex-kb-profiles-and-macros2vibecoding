@@ -5,8 +5,8 @@ namespace Vorotex.K15.StatusLab;
 
 internal sealed class CodexPetTaskPopup : Form
 {
-    private const int CardWidth = 296;
-    private const int CardHeight = 68;
+    private const int CardWidth = CodexPetTaskSurfacePolicy.DefaultCardWidth;
+    private const int CardHeight = CodexPetTaskSurfacePolicy.DefaultCardHeight;
 
     private readonly CodexPetWindow _pet;
     private readonly StatusLabConfig _config;
@@ -161,21 +161,39 @@ internal sealed class CodexPetTaskPopup : Form
         if (!card.ShowsText || row is null) return;
 
         var glyph = CodexPetPopupPolicy.GlyphFor(row.VisualState);
-        DrawGlyph(graphics, glyph, new Point(card.Bounds.Left + 17, card.Bounds.Top + 34));
+        DrawGlyph(graphics, glyph, new Point(card.Bounds.Left + 17,
+            card.Bounds.Top + card.Bounds.Height / 2));
         var textBounds = CodexPetTaskTypography.TitleBounds(card.Bounds);
         using var title = new SolidBrush(Color.FromArgb(240, 235, 240, 244));
         using var titleFont = new Font("Segoe UI", CodexPetTaskTypography.TitlePixelSize,
             FontStyle.Bold, GraphicsUnit.Pixel);
-        using var titleFormat = new StringFormat { Trimming = StringTrimming.EllipsisCharacter };
-        graphics.DrawString(row.DisplayTitle, titleFont, title, textBounds, titleFormat);
+        using var titleFormat = new StringFormat(StringFormat.GenericTypographic)
+        {
+            FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.LineLimit,
+            Trimming = StringTrimming.None
+        };
+        var titleLayout = CodexPetTaskTypography.LayoutTitle(
+            graphics, titleFont, row.DisplayTitle, textBounds);
+        for (var line = 0; line < titleLayout.Lines.Count; line++)
+        {
+            graphics.DrawString(titleLayout.Lines[line], titleFont, title,
+                new RectangleF(textBounds.Left,
+                    textBounds.Top + line * CodexPetTaskTypography.TitleLineHeight,
+                    textBounds.Width, CodexPetTaskTypography.TitleLineHeight), titleFormat);
+        }
         if (!string.IsNullOrWhiteSpace(row.DisplaySubtitle))
         {
             using var subtitle = new SolidBrush(Color.FromArgb(180, 190, 198, 205));
             using var subtitleFont = new Font("Segoe UI", CodexPetTaskTypography.SubtitlePixelSize,
                 FontStyle.Regular, GraphicsUnit.Pixel);
             var subtitleBounds = CodexPetTaskTypography.SubtitleBounds(card.Bounds);
+            using var subtitleFormat = new StringFormat
+            {
+                FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.LineLimit,
+                Trimming = StringTrimming.EllipsisCharacter
+            };
             graphics.DrawString(row.DisplaySubtitle, subtitleFont, subtitle, subtitleBounds,
-                titleFormat);
+                subtitleFormat);
         }
     }
 
