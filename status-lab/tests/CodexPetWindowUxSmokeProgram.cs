@@ -39,16 +39,28 @@ Require(CodexPetTaskSurfacePolicy.DefaultState == PetTaskSurfaceState.Stacked &&
         CodexPetTaskSurfacePolicy.IsVisible(PetTaskSurfaceState.Stacked, 1),
     "TASK_SURFACE_ZERO_COUNT_HIDES");
 
-var typographyCard = new Rectangle(12, 12, 296, 54);
+var typographyCard = new Rectangle(12, 12, 296, 68);
 var typographyTitleBounds = CodexPetTaskTypography.TitleBounds(typographyCard);
 var typographySubtitleBounds = CodexPetTaskTypography.SubtitleBounds(typographyCard);
-Require(CodexPetTaskTypography.TitlePixelSize >= 14f &&
+Require(CodexPetTaskTypography.TitlePixelSize >= 18f &&
+        CodexPetTaskTypography.SubtitlePixelSize >= 12f &&
         CodexPetTaskTypography.TitlePixelSize >= CodexPetTaskTypography.SubtitlePixelSize * 1.5f,
     "TASK_TITLE_TYPOGRAPHY_PRIMARY_HIERARCHY");
 Require(typographyCard.Contains(typographyTitleBounds) &&
         typographyCard.Contains(typographySubtitleBounds) &&
         typographyTitleBounds.Bottom <= typographySubtitleBounds.Top + 1,
     "TASK_TITLE_TYPOGRAPHY_BOUNDS_FIT_CARD");
+
+var launchedThread = (string?)null;
+Require(CodexPetTaskLinkPolicy.TryLaunch("codex://threads/01a0eeda-4e2c-7af1-8187-746b97136e43",
+            true, link => launchedThread = link) &&
+        launchedThread == "codex://threads/01a0eeda-4e2c-7af1-8187-746b97136e43",
+    "EXACT_LOCAL_THREAD_LINK_LAUNCH_IS_INJECTABLE");
+Require(!CodexPetTaskLinkPolicy.TryLaunch("codex://threads/01a0eeda-4e2c-7af1-8187-746b97136e43",
+            false, _ => throw new InvalidOperationException("untrusted target launched")) &&
+        !CodexPetTaskLinkPolicy.TryLaunch("https://example.invalid/", true,
+            _ => throw new InvalidOperationException("non-Codex target launched")),
+    "UNTRUSTED_OR_NON_CODEX_TARGET_FAILS_CLOSED");
 
 foreach (var count in new[] { 1, 2, 5, 6 })
 {

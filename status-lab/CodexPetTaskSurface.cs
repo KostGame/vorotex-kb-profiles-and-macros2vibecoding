@@ -121,7 +121,7 @@ internal static class CodexPetTaskSurfacePolicy
 
     private static Size NormalizeCardSize(Size cardSize) => new(
         cardSize.Width > 0 ? cardSize.Width : 296,
-        cardSize.Height > 0 ? cardSize.Height : 54);
+        cardSize.Height > 0 ? cardSize.Height : 68);
 }
 
 // Pure screen-aware placement seam. It uses only supplied rectangles and sizes.

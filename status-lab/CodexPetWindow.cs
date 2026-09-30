@@ -518,7 +518,7 @@ internal sealed class CodexPetController : IDisposable
     private readonly SynchronizationContext _uiContext;
     private readonly CancellationTokenSource _titleCancellation = new();
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 1000 };
-    private IReadOnlyDictionary<string, string> _localTitles = new Dictionary<string, string>(StringComparer.Ordinal);
+    private CodexLocalThreadMetadata _localMetadata = CodexLocalThreadMetadata.Empty;
     private DateTimeOffset _nextTitleRefreshUtc = DateTimeOffset.MinValue;
     private bool _titleRefreshInFlight;
     private bool _visible;
@@ -629,9 +629,7 @@ internal sealed class CodexPetController : IDisposable
         // while the pet is visible; it never performs animation work.
         if ((canPollUnread || _visible) && !_refresh.Enabled) _refresh.Start();
         if (!canPollUnread && !_visible && _refresh.Enabled) _refresh.Stop();
-        var presentation = canPollUnread
-            ? CodexPetAdapter.MapPresentation(sessions, _sources, _localTitles)
-            : CodexPetAdapter.MapPresentation(sessions, (CodexUnreadSnapshot?)null, _localTitles);
+        var presentation = CodexPetAdapter.MapPresentation(sessions, _sources, _localMetadata);
         _window.SetPresentation(presentation);
         _window.SetState(presentation.Global.State);
     }
@@ -643,8 +641,11 @@ internal sealed class CodexPetController : IDisposable
         var trustedSources = _sources.Sources.ToArray();
         var titleSources = CodexLocalThreadTitleSourceResolver.Resolve(sessions, trustedSources);
         _nextTitleRefreshUtc = now.AddSeconds(30);
-        _localTitles = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (titleSources.Count == 0) return;
+        if (titleSources.Count == 0)
+        {
+            _localMetadata = CodexLocalThreadMetadata.Empty;
+            return;
+        }
 
         _titleRefreshInFlight = true;
         _ = ReadLocalTitlesAsync(sessions.ToArray(), trustedSources, _titleCancellation.Token);
@@ -653,23 +654,23 @@ internal sealed class CodexPetController : IDisposable
     private async Task ReadLocalTitlesAsync(CodexSessionSnapshot[] sessions,
         CodexUnreadSource[] trustedSources, CancellationToken cancellationToken)
     {
-        IReadOnlyDictionary<string, string> titles;
+        CodexLocalThreadMetadata metadata;
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(15));
-            titles = await _titleProvider.ReadTitlesAsync(sessions, trustedSources, timeout.Token).ConfigureAwait(false);
+            metadata = await _titleProvider.ReadTitlesAsync(sessions, trustedSources, timeout.Token).ConfigureAwait(false);
         }
         catch
         {
-            titles = new Dictionary<string, string>(StringComparer.Ordinal);
+            metadata = CodexLocalThreadMetadata.Empty;
         }
 
         _uiContext.Post(_ =>
         {
             if (_window.IsDisposed) return;
             _titleRefreshInFlight = false;
-            _localTitles = titles;
+            _localMetadata = metadata;
             Refresh();
         }, null);
     }
