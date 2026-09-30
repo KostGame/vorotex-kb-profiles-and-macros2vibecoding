@@ -35,6 +35,8 @@ internal readonly record struct TaskSurfaceLayout(
 internal static class CodexPetTaskSurfacePolicy
 {
     internal const PetTaskSurfaceState DefaultState = PetTaskSurfaceState.Stacked;
+    internal const int DefaultCardWidth = 296;
+    internal const int DefaultCardHeight = 80;
     internal const int MaximumExpandedRows = 5;
     internal const int PanelGap = 8;
 
@@ -120,8 +122,8 @@ internal static class CodexPetTaskSurfacePolicy
     }
 
     private static Size NormalizeCardSize(Size cardSize) => new(
-        cardSize.Width > 0 ? cardSize.Width : 296,
-        cardSize.Height > 0 ? cardSize.Height : 68);
+        cardSize.Width > 0 ? cardSize.Width : DefaultCardWidth,
+        cardSize.Height > 0 ? cardSize.Height : DefaultCardHeight);
 }
 
 // Pure screen-aware placement seam. It uses only supplied rectangles and sizes.

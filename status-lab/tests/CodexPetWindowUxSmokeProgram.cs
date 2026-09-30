@@ -39,7 +39,8 @@ Require(CodexPetTaskSurfacePolicy.DefaultState == PetTaskSurfaceState.Stacked &&
         CodexPetTaskSurfacePolicy.IsVisible(PetTaskSurfaceState.Stacked, 1),
     "TASK_SURFACE_ZERO_COUNT_HIDES");
 
-var typographyCard = new Rectangle(12, 12, 296, 68);
+var typographyCard = new Rectangle(12, 12, CodexPetTaskSurfacePolicy.DefaultCardWidth,
+    CodexPetTaskSurfacePolicy.DefaultCardHeight);
 var typographyTitleBounds = CodexPetTaskTypography.TitleBounds(typographyCard);
 var typographySubtitleBounds = CodexPetTaskTypography.SubtitleBounds(typographyCard);
 Require(CodexPetTaskTypography.TitlePixelSize >= 18f &&
@@ -48,8 +49,48 @@ Require(CodexPetTaskTypography.TitlePixelSize >= 18f &&
     "TASK_TITLE_TYPOGRAPHY_PRIMARY_HIERARCHY");
 Require(typographyCard.Contains(typographyTitleBounds) &&
         typographyCard.Contains(typographySubtitleBounds) &&
-        typographyTitleBounds.Bottom <= typographySubtitleBounds.Top + 1,
+        typographyTitleBounds.Bottom < typographySubtitleBounds.Top &&
+        typographySubtitleBounds.Bottom <= typographyCard.Bottom,
     "TASK_TITLE_TYPOGRAPHY_BOUNDS_FIT_CARD");
+
+using var titleBitmap = new Bitmap(640, 160);
+using var titleGraphics = Graphics.FromImage(titleBitmap);
+using var titleFont = new Font("Segoe UI", CodexPetTaskTypography.TitlePixelSize,
+    FontStyle.Bold, GraphicsUnit.Pixel);
+var shortTitle = CodexPetTaskTypography.LayoutTitle(titleGraphics, titleFont,
+    "Short task title", typographyTitleBounds);
+var representativeLongTitle = CodexPetTaskTypography.LayoutTitle(titleGraphics, titleFont,
+    "Continue Issue #186 activity card polish", typographyTitleBounds);
+var veryLongTitle = CodexPetTaskTypography.LayoutTitle(titleGraphics, titleFont,
+    "This representative task title keeps going across many words so the card must stop after its second wrapped line", typographyTitleBounds);
+Require(shortTitle.Lines.Count == 1 && !shortTitle.IsEllipsized &&
+        shortTitle.Lines[0] == "Short task title",
+    "TASK_TITLE_SHORT_REMAINS_ONE_LINE");
+Require(representativeLongTitle.Lines.Count == 2 && !representativeLongTitle.IsEllipsized &&
+        representativeLongTitle.Lines.All(line => !line.Contains('…')) &&
+        string.Join(" ", representativeLongTitle.Lines) ==
+            "Continue Issue #186 activity card polish",
+    "TASK_TITLE_LONG_USES_TWO_LINES");
+Require(veryLongTitle.Lines.Count == 2 && veryLongTitle.IsEllipsized &&
+        !veryLongTitle.Lines[0].Contains('…') && veryLongTitle.Lines[1].EndsWith('…'),
+    "TASK_TITLE_ELLIPSIZES_ONLY_AFTER_LINE_TWO");
+
+foreach (var cardWidth in new[] { 256, 296, 336 })
+{
+    var supportedCard = new Rectangle(12, 12, cardWidth,
+        CodexPetTaskSurfacePolicy.DefaultCardHeight);
+    var firstTitleBounds = CodexPetTaskTypography.TitleBounds(supportedCard);
+    var secondTitleBounds = CodexPetTaskTypography.TitleBounds(supportedCard);
+    var firstTitleLayout = CodexPetTaskTypography.LayoutTitle(titleGraphics, titleFont,
+        "Deterministic supported width title", firstTitleBounds);
+    var secondTitleLayout = CodexPetTaskTypography.LayoutTitle(titleGraphics, titleFont,
+        "Deterministic supported width title", secondTitleBounds);
+    Require(firstTitleBounds == secondTitleBounds &&
+            firstTitleLayout.Lines.SequenceEqual(secondTitleLayout.Lines) &&
+            firstTitleLayout.IsEllipsized == secondTitleLayout.IsEllipsized &&
+            firstTitleBounds.Width == cardWidth - 42,
+        $"TASK_TITLE_SUPPORTED_WIDTH_DETERMINISTIC_{cardWidth}");
+}
 
 var launchedThread = (string?)null;
 Require(CodexPetTaskLinkPolicy.TryLaunch("codex://threads/01a0eeda-4e2c-7af1-8187-746b97136e43",
