@@ -10,6 +10,7 @@ internal static class CodexPetTaskTypography
 {
     internal const float TitlePixelSize = 18f;
     internal const float SubtitlePixelSize = 12f;
+    internal const int SubtitleAlpha = 205;
     internal const int TitleTopOffset = 6;
     internal const int TitleLineHeight = 22;
     internal const int MaximumTitleLines = 2;

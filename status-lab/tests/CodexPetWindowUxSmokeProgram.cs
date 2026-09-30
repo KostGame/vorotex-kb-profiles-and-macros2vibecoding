@@ -39,12 +39,47 @@ Require(CodexPetTaskSurfacePolicy.DefaultState == PetTaskSurfaceState.Stacked &&
         CodexPetTaskSurfacePolicy.IsVisible(PetTaskSurfaceState.Stacked, 1),
     "TASK_SURFACE_ZERO_COUNT_HIDES");
 
+Require(CodexPetTaskSurfacePolicy.HostContract.TransparencyKey.A == 255 &&
+        CodexPetTaskSurfacePolicy.HostContract.TransparencyKey != Color.FromArgb(24, 24, 30) &&
+        !CodexPetTaskSurfacePolicy.HostContract.PaintsBackground,
+    "TASK_SURFACE_HOST_IS_KEYED_TRANSPARENT_AND_NON_PAINTING");
+
+var emptySurface = CodexPetTaskSurfacePolicy.Layout(PetTaskSurfaceState.Stacked, 0);
+using var emptyRegion = CodexPetTaskSurfaceRegion.Build(emptySurface);
+Require(emptySurface.PanelSize == Size.Empty && emptySurface.Cards.Count == 0 &&
+        emptyRegion is null,
+    "TASK_SURFACE_EMPTY_CLEARS_REGION_GEOMETRY");
+
+var oneCardSurface = CodexPetTaskSurfacePolicy.Layout(PetTaskSurfaceState.Stacked, 1);
+using var oneCardRegion = CodexPetTaskSurfaceRegion.Build(oneCardSurface);
+Require(oneCardSurface.PanelSize == new Size(CodexPetTaskSurfacePolicy.DefaultCardWidth,
+            CodexPetTaskSurfacePolicy.DefaultCardHeight) &&
+        oneCardSurface.Cards.Single().Bounds ==
+            new Rectangle(0, 0, CodexPetTaskSurfacePolicy.DefaultCardWidth,
+                CodexPetTaskSurfacePolicy.DefaultCardHeight) &&
+        oneCardRegion is not null &&
+        oneCardRegion.IsVisible(new Point(148, 40)) &&
+        oneCardRegion.IsVisible(new Point(5, 40)) &&
+        !oneCardRegion.IsVisible(new Point(0, 0)) &&
+        !oneCardRegion.IsVisible(new Point(CodexPetTaskSurfacePolicy.DefaultCardWidth - 1, 0)),
+    "TASK_SURFACE_ONE_CARD_TIGHT_ROUNDED_REGION");
+Require(CodexPetTaskSurfaceRegion.IsPointInRoundedCard(oneCardSurface.Cards[0].Bounds,
+            new Point(148, 40)) &&
+        CodexPetTaskSurfaceRegion.IsPointInRoundedCard(oneCardSurface.Cards[0].Bounds,
+            new Point(148, 1)) &&
+        !CodexPetTaskSurfaceRegion.IsPointInRoundedCard(oneCardSurface.Cards[0].Bounds,
+            new Point(0, 0)) &&
+        !CodexPetTaskSurfaceRegion.IsPointInRoundedCard(oneCardSurface.Cards[0].Bounds,
+            new Point(-1, 40)),
+    "TASK_SURFACE_CLICK_TARGET_COVERS_FULL_ROUNDED_CARD");
+
 var typographyCard = new Rectangle(12, 12, CodexPetTaskSurfacePolicy.DefaultCardWidth,
     CodexPetTaskSurfacePolicy.DefaultCardHeight);
 var typographyTitleBounds = CodexPetTaskTypography.TitleBounds(typographyCard);
 var typographySubtitleBounds = CodexPetTaskTypography.SubtitleBounds(typographyCard);
 Require(CodexPetTaskTypography.TitlePixelSize >= 18f &&
         CodexPetTaskTypography.SubtitlePixelSize >= 12f &&
+        CodexPetTaskTypography.SubtitleAlpha >= 200 &&
         CodexPetTaskTypography.TitlePixelSize >= CodexPetTaskTypography.SubtitlePixelSize * 1.5f,
     "TASK_TITLE_TYPOGRAPHY_PRIMARY_HIERARCHY");
 Require(typographyCard.Contains(typographyTitleBounds) &&
@@ -112,6 +147,24 @@ foreach (var count in new[] { 1, 2, 5, 6 })
             expanded.OverflowCount == Math.Max(0, count - 5),
         $"EXPANDED_GEOMETRY_{count}");
 }
+var expandedThree = CodexPetTaskSurfacePolicy.Layout(PetTaskSurfaceState.Expanded, 3);
+Require(expandedThree.PanelSize == new Size(CodexPetTaskSurfacePolicy.DefaultCardWidth,
+            3 * CodexPetTaskSurfacePolicy.DefaultCardHeight + 2 *
+                CodexPetTaskSurfacePolicy.ExpandedRowGap) &&
+        expandedThree.Cards[1].Bounds.Top - expandedThree.Cards[0].Bounds.Bottom ==
+            CodexPetTaskSurfacePolicy.ExpandedRowGap &&
+        expandedThree.Cards[2].Bounds.Top - expandedThree.Cards[1].Bounds.Bottom ==
+            CodexPetTaskSurfacePolicy.ExpandedRowGap,
+    "EXPANDED_CARDS_HAVE_DETERMINISTIC_ROW_GAPS");
+var expandedOverflow = CodexPetTaskSurfacePolicy.Layout(PetTaskSurfaceState.Expanded, 6);
+var overflowBounds = CodexPetTaskSurfacePolicy.OverflowBounds(expandedOverflow);
+using var overflowRegion = CodexPetTaskSurfaceRegion.Build(expandedOverflow);
+Require(expandedOverflow.PanelSize == new Size(CodexPetTaskSurfacePolicy.DefaultCardWidth, 454) &&
+        overflowBounds.Top == 436 && overflowBounds.Bottom == expandedOverflow.PanelSize.Height &&
+        overflowBounds.Width == CodexPetTaskSurfacePolicy.DefaultCardWidth - 8 &&
+        overflowRegion is not null && overflowRegion.IsVisible(new Point(8, 444)) &&
+        !overflowRegion.IsVisible(new Point(CodexPetTaskSurfacePolicy.DefaultCardWidth - 1, 444)),
+    "EXPANDED_OVERFLOW_EXTENT_IS_TIGHT_AND_DETERMINISTIC");
 
 var stackedOne = CodexPetTaskSurfacePolicy.Layout(PetTaskSurfaceState.Stacked, 1);
 var stackedTwo = CodexPetTaskSurfacePolicy.Layout(PetTaskSurfaceState.Stacked, 2);
