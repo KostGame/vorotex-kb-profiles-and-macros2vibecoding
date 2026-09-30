@@ -139,6 +139,38 @@ internal static class CodexLocalThreadTitleTests
                   visibleRows[0].OpenTarget.CanFocus &&
                   visibleRows[0].OpenTarget.DeepLink == "codex://threads/" + Uri.EscapeDataString(ownerThread),
                 "PERSISTED_OWNER_EXEC_TASK_VISIBLE_EXACT_LINK_HELPER_SESSION_FILTERED");
+            var sessionIdentity = "session-fallback-thread";
+            var sessionOnly = new CodexSessionSnapshot(sessionIdentity, K15NormalizedState.Running, true, false,
+                SourceInstanceId: sourceA);
+            var sessionOnlyRequests = CodexLocalThreadTitleSourceResolver.Resolve([sessionOnly], [registeredA]);
+            Check(sessionOnlyRequests.Count == 1 &&
+                  sessionOnlyRequests[0].ThreadIds.SequenceEqual([sessionIdentity]),
+                "NULL_THREAD_ID_RESOLVES_EXACT_SESSION_ID_FOR_PERSISTED_LOOKUP");
+            var sessionOnlyKey = CodexSourceIdentity.CompositeKey(sourceA, sessionIdentity);
+            var sessionOnlyMetadata = new CodexLocalThreadMetadata(
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [sessionOnlyKey] = "Persisted session title"
+                }, new HashSet<string>([sessionOnlyKey], StringComparer.Ordinal));
+            var sessionOnlyPresentation = CodexPetAdapter.MapPresentation([sessionOnly],
+                new CodexUnreadSourceRegistry([homeA]), sessionOnlyMetadata);
+            Check(sessionOnlyPresentation.Tasks is [{ } sessionOnlyTask] &&
+                  sessionOnlyTask.Activity.State == CodexActivityState.Running &&
+                  sessionOnlyTask.Activity.SessionId == sessionIdentity &&
+                  sessionOnlyTask.Activity.ThreadId == sessionIdentity &&
+                  sessionOnlyTask.DisplayTitle == "Persisted session title" &&
+                  sessionOnlyTask.Activity.OpenTarget.CanFocus &&
+                  sessionOnlyTask.Activity.OpenTarget.ThreadId == sessionIdentity &&
+                  sessionOnlyTask.Activity.OpenTarget.DeepLink ==
+                      "codex://threads/" + Uri.EscapeDataString(sessionIdentity),
+                "PERSISTED_SESSION_ID_BINDS_RUNNING_ROW_TITLE_AND_EXACT_LINK");
+            var unpersistedSessionPresentation = CodexPetAdapter.MapPresentation([sessionOnly],
+                new CodexUnreadSourceRegistry([homeA]), sessionOnlyMetadata with
+                {
+                    PersistedThreadKeys = new HashSet<string>(StringComparer.Ordinal)
+                });
+            Check(unpersistedSessionPresentation.Tasks.Count == 0,
+                "SESSION_ID_WITHOUT_PERSISTED_ENTRY_REMAINS_SUPPRESSED");
             var titleFallback = CodexActivityNormalizer.ApplyLocalMetadata(
                 CodexActivityNormalizer.Normalize([forensicSessions[0]], new Dictionary<string, CodexUnreadState>()),
                 new Dictionary<string, string>
