@@ -467,6 +467,98 @@ catch (InvalidOperationException)
 }
 
 var cooperativeTrace = new List<string>();
+var authorityGuard = new K15LayoutAuthorityVersionGuard();
+object? authorityHardware = new();
+object? authorityLocal = new();
+var authorityReady = true;
+var capturedAuthority = authorityGuard.Capture(version =>
+    (hardware: authorityHardware, local: authorityLocal, version));
+using (var snapshotCaptured = new ManualResetEventSlim())
+using (var invalidationFinished = new ManualResetEventSlim())
+{
+    var concurrentPrepare = Task.Run(() =>
+    {
+        snapshotCaptured.Set();
+        invalidationFinished.Wait();
+        // Uses the same production guard methods as PrepareDispatch and AuthorizeDispatch.
+        return authorityGuard.ExecuteIfCurrent(capturedAuthority.version,
+            () => authorityReady &&
+                  capturedAuthority.hardware is not null && capturedAuthority.local is not null);
+    });
+    snapshotCaptured.Wait();
+    authorityGuard.Invalidate(() =>
+    {
+        authorityHardware = null;
+        authorityLocal = null;
+        authorityReady = false;
+    });
+    invalidationFinished.Set();
+    var raceResult = await concurrentPrepare;
+    Require(capturedAuthority.hardware is not null && capturedAuthority.local is not null && !raceResult,
+        "K15_LAYOUT_PRODUCTION_GUARD_INVALIDATION_DURING_PREPARE_FAILS_CLOSED_WITHOUT_NULL_DEREFERENCE");
+}
+
+var publishGuard = new K15LayoutAuthorityVersionGuard();
+object? publishedHardware = null;
+var publishingAuthorityReady = false;
+var refreshVersion = publishGuard.Capture(version => version);
+publishGuard.Invalidate(() =>
+{
+    publishedHardware = null;
+    publishingAuthorityReady = false;
+});
+var stalePublishSucceeded = publishGuard.TryPublish(refreshVersion, () =>
+{
+    publishedHardware = new object();
+    publishingAuthorityReady = true;
+});
+Require(!stalePublishSucceeded && publishedHardware is null &&
+        !publishingAuthorityReady,
+    "K15_LAYOUT_PRODUCTION_GUARD_COMPARE_AND_PUBLISH_CANNOT_RESURRECT_INVALIDATED_AUTHORITY");
+
+var callerContext = new SynchronizationContext();
+var priorContext = SynchronizationContext.Current;
+var callerThreadId = Environment.CurrentManagedThreadId;
+var blockingHidWorkContext = callerContext;
+var blockingHidWorkThread = callerThreadId;
+try
+{
+    SynchronizationContext.SetSynchronizationContext(callerContext);
+    await K15LayoutAuthorityRecoveryRunner.RunAsync(async () =>
+    {
+        // Represents a synchronous blocking HID read before and after a cooperative yield.
+        blockingHidWorkContext = SynchronizationContext.Current!;
+        blockingHidWorkThread = Environment.CurrentManagedThreadId;
+        await Task.Yield();
+        Require(SynchronizationContext.Current is null,
+            "K15_STALE_RECOVERY_CONTINUATION_HAS_NO_CALLER_UI_CONTEXT");
+        return true;
+    });
+}
+finally
+{
+    SynchronizationContext.SetSynchronizationContext(priorContext);
+}
+Require(!ReferenceEquals(blockingHidWorkContext, callerContext) && blockingHidWorkThread != callerThreadId,
+    "K15_STALE_RECOVERY_BLOCKING_HID_WORK_RUNS_OFF_CALLER_UI_CONTEXT");
+
+var petDispatchQueue = new PetControlDispatchQueue();
+var activePetRequest = new PetControlDispatchRequest("key-1", 1);
+var pendingPetRequest = new PetControlDispatchRequest("key-2", 2);
+var executedPetControls = new List<string> { activePetRequest.ControlId };
+var activeDisposition = petDispatchQueue.Submit(activePetRequest);
+var pendingDisposition = petDispatchQueue.Submit(pendingPetRequest);
+var extraDisposition = petDispatchQueue.Submit(new PetControlDispatchRequest("key-3", 3));
+var handedOffPetRequest = petDispatchQueue.CompleteAndTakePending();
+if (handedOffPetRequest is not null) executedPetControls.Add(handedOffPetRequest.ControlId);
+Require(activeDisposition == PetControlSubmission.Started &&
+        pendingDisposition == PetControlSubmission.Queued &&
+        extraDisposition == PetControlSubmission.Rejected &&
+        handedOffPetRequest == pendingPetRequest &&
+        executedPetControls.SequenceEqual(new[] { "key-1", "key-2" }) &&
+        petDispatchQueue.CompleteAndTakePending() is null,
+    "PET_DISPATCH_SINGLE_FIFO_PENDING_EXTRA_INPUT_REJECTED");
+
 var cooperativeMacroCell = K15LayoutAuthorityModel.BindingCells.First().Value;
 var cooperativeControl = new RecordingLayoutReadControl(
     initialSlot: 1,
