@@ -38,7 +38,7 @@ internal static class CodexLocalThreadTitleSourceResolver
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
         var rowsById = sessions
             .Where(session => (session.IsAlive || session.State == K15NormalizedState.DonePendingAttention) &&
-                CodexSourceIdentity.IsValid(session.SourceInstanceId) && IsBoundedThreadId(session.ThreadId))
+                CodexSourceIdentity.IsValid(session.SourceInstanceId) && CandidateThreadId(session) is not null)
             .GroupBy(session => session.SourceInstanceId, StringComparer.Ordinal);
         var requests = new List<CodexLocalThreadTitleSource>();
 
@@ -54,7 +54,7 @@ internal static class CodexLocalThreadTitleSourceResolver
                 !Directory.Exists(home))
                 continue;
 
-            var threadIds = rows.Select(session => session.ThreadId!)
+            var threadIds = rows.Select(session => CandidateThreadId(session)!)
                 .Distinct(StringComparer.Ordinal).Take(20).ToArray();
             if (threadIds.Length > 0)
                 requests.Add(new(source.SourceInstanceId, home, threadIds));
@@ -65,6 +65,10 @@ internal static class CodexLocalThreadTitleSourceResolver
 
     private static bool IsBoundedThreadId(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 && !value.Any(char.IsControl);
+
+    private static string? CandidateThreadId(CodexSessionSnapshot session) =>
+        IsBoundedThreadId(session.ThreadId) ? session.ThreadId :
+        IsBoundedThreadId(session.SessionId) ? session.SessionId : null;
 }
 
 // Reads only stock app-server metadata. Lifecycle and unread evidence never enter this provider.

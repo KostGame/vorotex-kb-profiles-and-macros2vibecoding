@@ -267,22 +267,25 @@ internal static class CodexActivityNormalizer
         return rows.Select(row =>
         {
             if (row.Source != CodexActivitySource.Local) return row;
-            if (row.ThreadId is null || !CodexSourceIdentity.IsValid(row.SourceInstanceId)) return null;
-            var key = CodexSourceIdentity.CompositeKey(row.SourceInstanceId, row.ThreadId);
+            if (!CodexSourceIdentity.IsValid(row.SourceInstanceId)) return null;
+            var threadCandidate = Bounded(row.ThreadId, 256) ? row.ThreadId : row.SessionId;
+            if (!Bounded(threadCandidate, 256)) return null;
+            var key = CodexSourceIdentity.CompositeKey(row.SourceInstanceId, threadCandidate!);
             if (!persistedThreadKeys.Contains(key)) return null;
 
-            var title = namesBySourceAndThread.TryGetValue(key, out var candidate)
-                ? SanitizeLabel(candidate)
+            var title = namesBySourceAndThread.TryGetValue(key, out var titleCandidate)
+                ? SanitizeLabel(titleCandidate)
                 : null;
-            var deepLink = BuildLocalThreadDeepLink(row.ThreadId);
+            var deepLink = BuildLocalThreadDeepLink(threadCandidate!);
             var openTarget = deepLink is null
-                ? CodexActivityOpenTarget.Unavailable(CodexActivitySource.Local, row.ThreadId,
+                ? CodexActivityOpenTarget.Unavailable(CodexActivitySource.Local, threadCandidate,
                     row.SessionId, ThreadIdUnavailable)
-                : new CodexActivityOpenTarget(CodexActivitySource.Local, row.ThreadId, row.SessionId,
+                : new CodexActivityOpenTarget(CodexActivitySource.Local, threadCandidate, row.SessionId,
                     deepLink, true, null);
             return row with
             {
-                Title = title ?? FallbackTitle(row.ThreadId),
+                ThreadId = threadCandidate,
+                Title = title ?? FallbackTitle(threadCandidate!),
                 OpenTarget = openTarget
             };
         }).Where(row => row is not null).Select(row => row!).ToArray();
