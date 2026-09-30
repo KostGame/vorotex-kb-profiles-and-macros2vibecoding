@@ -22,6 +22,7 @@
     <Compile Include="..\K15LayoutAuthorityVersionGuard.cs" Link="K15LayoutAuthorityVersionGuard.cs" />
     <Compile Include="..\K15LayoutAuthorityRecoveryRunner.cs" Link="K15LayoutAuthorityRecoveryRunner.cs" />
     <Compile Include="..\K15LayoutAuthority.cs" Link="K15LayoutAuthority.cs" />
+    <Compile Include="..\K15LayoutAuthoritySession.cs" Link="K15LayoutAuthoritySession.cs" />
     <Compile Include="..\K15LocalLayoutSemanticModel.cs" Link="K15LocalLayoutSemanticModel.cs" />
     <Compile Include="..\K15LayoutAttestation.cs" Link="K15LayoutAttestation.cs" />
     <Compile Include="..\K15DispatchPlan.cs" Link="K15DispatchPlan.cs" />

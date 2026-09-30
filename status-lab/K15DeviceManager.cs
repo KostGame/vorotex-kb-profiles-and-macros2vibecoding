@@ -50,7 +50,7 @@ internal static class K15DeviceIdentity
     }
 }
 
-internal sealed class K15DeviceManager : IDisposable
+internal sealed class K15DeviceManager : IDisposable, IK15LayoutAuthorityDeviceSource
 {
     private readonly string _preferencePath;
     private K15HidLightingController? _controller;
@@ -72,6 +72,12 @@ internal sealed class K15DeviceManager : IDisposable
     public string? PreferredFingerprint => _preferredFingerprint;
     public event Action<K15DeviceConnectionState>? StateChanged;
     public event Action<byte, DateTimeOffset>? ActiveSlotObserved;
+    public event Action? AuthorityChanged;
+
+    bool IK15LayoutAuthorityDeviceSource.IsConnected =>
+        ConnectionState == K15DeviceConnectionState.Connected && _controller is not null;
+    IK15LayoutReadControl? IK15LayoutAuthorityDeviceSource.LayoutController => _controller;
+    string? IK15LayoutAuthorityDeviceSource.IdentityFingerprint => _selected?.IdentityFingerprint;
 
     public IReadOnlyList<K15DeviceCandidate> GetCandidates() => Candidates;
 
@@ -197,6 +203,7 @@ internal sealed class K15DeviceManager : IDisposable
     {
         ConnectionState = state;
         StateChanged?.Invoke(state);
+        AuthorityChanged?.Invoke();
     }
 
     private void LoadPreference()

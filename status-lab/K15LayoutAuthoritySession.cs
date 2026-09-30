@@ -6,6 +6,7 @@ internal enum K15LayoutAuthorityState
     SlotOnly,
     SyncingLayout,
     ReadyVerified,
+    ReadyActionVerified,
     Stale,
     Unsupported,
     Error
@@ -20,7 +21,7 @@ internal sealed record K15PreparedDispatch(
 
 internal sealed class K15LayoutAuthoritySession : IDisposable
 {
-    private readonly K15DeviceManager _deviceManager;
+    private readonly IK15LayoutAuthorityDeviceSource _deviceManager;
     private readonly K15LayoutFilePaths _paths;
     private K15HardwareLayoutSnapshot? _hardware;
     private K15LocalSemanticSnapshot? _local;
@@ -32,17 +33,18 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
     private readonly K15LayoutAuthorityVersionGuard _authorityGuard = new();
 
     internal K15LayoutAuthoritySession(
-        K15DeviceManager deviceManager,
+        IK15LayoutAuthorityDeviceSource deviceManager,
         K15LayoutFilePaths? paths = null)
     {
         _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
         _paths = paths ?? K15LayoutFilePaths.ResolveDefault();
         State = K15LayoutAuthorityState.Disconnected;
-        _deviceManager.StateChanged += HandleDeviceStateChanged;
+        _deviceManager.AuthorityChanged += HandleDeviceAuthorityChanged;
         CreateFileWatchers();
     }
 
     internal K15LayoutAuthorityState State { get; private set; }
+    internal bool HasDispatchAuthority => CanDispatchFrom(State);
     internal event Action<K15LayoutAuthorityState>? StateChanged;
 
     internal K15LayoutAttestationResult Refresh()
@@ -55,7 +57,7 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
             var authorityVersion = _authorityGuard.Capture(version => version);
             var generation = _deviceManager.ConnectionGeneration;
             var fileGeneration = Interlocked.Read(ref _fileMutationGeneration);
-            var identity = _deviceManager.SelectedDevice?.IdentityFingerprint
+            var identity = _deviceManager.IdentityFingerprint
                 ?? throw new InvalidOperationException("Connected K15 identity is unavailable.");
 
             var slot = controller.ReadActiveSlot();
@@ -66,7 +68,7 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
             var localAfter = K15LayoutFileAuthority.Read(_paths, slot);
 
             if (generation != _deviceManager.ConnectionGeneration ||
-                !string.Equals(identity, _deviceManager.SelectedDevice?.IdentityFingerprint, StringComparison.Ordinal) ||
+                !string.Equals(identity, _deviceManager.IdentityFingerprint, StringComparison.Ordinal) ||
                 hardware.ActiveSlot != slot ||
                 localBefore.Stamp != localAfter.Stamp ||
                 fileGeneration != Interlocked.Read(ref _fileMutationGeneration))
@@ -126,7 +128,7 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
             var authorityVersion = _authorityGuard.Capture(version => version);
             var generation = _deviceManager.ConnectionGeneration;
             var fileGeneration = Interlocked.Read(ref _fileMutationGeneration);
-            var identity = _deviceManager.SelectedDevice?.IdentityFingerprint
+            var identity = _deviceManager.IdentityFingerprint
                 ?? throw new InvalidOperationException("Connected K15 identity is unavailable.");
 
             var slot = controller.ReadActiveSlot();
@@ -137,7 +139,7 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
             var localAfter = K15LayoutFileAuthority.Read(_paths, slot);
 
             if (generation != _deviceManager.ConnectionGeneration ||
-                !string.Equals(identity, _deviceManager.SelectedDevice?.IdentityFingerprint, StringComparison.Ordinal) ||
+                !string.Equals(identity, _deviceManager.IdentityFingerprint, StringComparison.Ordinal) ||
                 hardware.ActiveSlot != slot ||
                 localBefore.Stamp != localAfter.Stamp ||
                 fileGeneration != Interlocked.Read(ref _fileMutationGeneration))
@@ -194,9 +196,9 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
         string? identityFingerprint;
         var snapshot = _authorityGuard.Capture(version =>
         {
-            if (State != K15LayoutAuthorityState.ReadyVerified ||
+            if (!CanDispatchFrom(State) ||
                 _hardware is null || _local is null || _stamp is null)
-                throw new InvalidOperationException("K15 layout authority is not READY_VERIFIED.");
+                throw new InvalidOperationException("K15 layout authority is not action-ready.");
             return (hardware: _hardware, local: _local, stamp: _stamp, version,
                 connectionGeneration: _connectionGeneration, identityFingerprint: _identityFingerprint);
         });
@@ -207,12 +209,12 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
         connectionGeneration = snapshot.connectionGeneration;
         identityFingerprint = snapshot.identityFingerprint;
 
-        if (State != K15LayoutAuthorityState.ReadyVerified)
-            throw new InvalidOperationException("K15 layout authority is not READY_VERIFIED.");
+        if (!CanDispatchFrom(State))
+            throw new InvalidOperationException("K15 layout authority is not action-ready.");
 
         var controller = RequireConnectedController();
         if (_deviceManager.ConnectionGeneration != connectionGeneration ||
-            !string.Equals(_deviceManager.SelectedDevice?.IdentityFingerprint, identityFingerprint,
+            !string.Equals(_deviceManager.IdentityFingerprint, identityFingerprint,
                 StringComparison.Ordinal) ||
             !K15LayoutFileAuthority.Matches(_paths, stamp))
         {
@@ -224,7 +226,7 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
         if (activeSlot != hardware.ActiveSlot || activeSlot != local.Slot)
         {
             Invalidate(K15LayoutAuthorityState.Stale);
-            throw new K15HidLightingController.K15ProfileChangedException(hardware.ActiveSlot, activeSlot);
+            throw new K15LayoutProfileChangedException(hardware.ActiveSlot, activeSlot);
         }
 
         if (!local.Actions.TryGetValue(controlId, out var action))
@@ -255,11 +257,11 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
         if (finalSlot != activeSlot)
         {
             Invalidate(K15LayoutAuthorityState.Stale);
-            throw new K15HidLightingController.K15ProfileChangedException(activeSlot, finalSlot);
+            throw new K15LayoutProfileChangedException(activeSlot, finalSlot);
         }
 
         if (!_authorityGuard.ExecuteIfCurrent(authorityVersion, () =>
-                State == K15LayoutAuthorityState.ReadyVerified &&
+                CanDispatchFrom(State) &&
                 ReferenceEquals(_hardware, hardware) && ReferenceEquals(_local, local) &&
                 ReferenceEquals(_stamp, stamp)))
             throw new InvalidOperationException("K15 layout authority changed during dispatch preparation.");
@@ -271,9 +273,17 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
     internal void AuthorizeDispatch(K15PreparedDispatch prepared)
     {
         if (!_authorityGuard.ExecuteIfCurrent(prepared.AuthorityVersion,
-                () => State == K15LayoutAuthorityState.ReadyVerified && _hardware is not null &&
-                      _local is not null && _stamp is not null))
+                () => CanDispatchFrom(State) && _hardware is not null &&
+                      _local is not null && _stamp is not null &&
+                      _connectionGeneration == _deviceManager.ConnectionGeneration &&
+                      string.Equals(_identityFingerprint, _deviceManager.IdentityFingerprint,
+                          StringComparison.Ordinal) &&
+                      _deviceManager.IsConnected &&
+                      K15LayoutFileAuthority.Matches(_paths, _stamp)))
+        {
+            Invalidate(K15LayoutAuthorityState.Stale);
             throw new InvalidOperationException("K15 layout authority changed before dispatch.");
+        }
     }
 
     internal async Task<K15ProfileSwitchResult> SwitchProfileExplicitlyAsync(
@@ -289,25 +299,134 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
 
         var controller = RequireConnectedController();
         AuthorizeDispatch(prepared);
+        var originalStamp = _stamp ?? throw new InvalidOperationException("K15 file authority is unavailable.");
+        var targetSlot = checked((byte)(1 - prepared.ActiveSlot));
+        var targetLocalBaseline = K15LayoutFileAuthority.Read(_paths, targetSlot);
+        var switchGeneration = _deviceManager.ConnectionGeneration;
+        var switchIdentity = _deviceManager.IdentityFingerprint;
+        var switchFileGeneration = Interlocked.Read(ref _fileMutationGeneration);
+        long? targetInvalidationVersion = null;
+        var targetInvalidationValid = false;
+        var switchDriftDetected = false;
         return await K15ProfileSwitchTransaction.ExecuteAsync(
             controller,
             async expectedSlot =>
             {
+                if (expectedSlot == targetSlot)
+                    return await RefreshActionBindingsAsync(
+                        expectedSlot, targetLocalBaseline.Stamp, targetInvalidationVersion,
+                        targetInvalidationValid, switchGeneration, switchIdentity,
+                        switchFileGeneration, () => switchDriftDetected = true);
+
+                var rollbackBaselineStable = targetInvalidationValid &&
+                    switchGeneration == _deviceManager.ConnectionGeneration &&
+                    string.Equals(switchIdentity, _deviceManager.IdentityFingerprint, StringComparison.Ordinal) &&
+                    switchFileGeneration == Interlocked.Read(ref _fileMutationGeneration) &&
+                    K15LayoutFileAuthority.Matches(_paths, targetLocalBaseline.Stamp);
+                if (!rollbackBaselineStable) switchDriftDetected = true;
                 var result = await RefreshCooperativelyAsync();
-                return result.IsVerified &&
-                       _hardware?.ActiveSlot == expectedSlot &&
-                       _local?.Slot == expectedSlot;
+                var rollbackVerified = result.IsVerified && _hardware?.ActiveSlot == expectedSlot &&
+                    _local?.Slot == expectedSlot && _stamp == originalStamp;
+                if (switchDriftDetected || !rollbackVerified)
+                {
+                    Invalidate(K15LayoutAuthorityState.Stale);
+                    return false;
+                }
+                return true;
             },
             async confirmedSlot =>
             {
-                // Exact slot readback proves the presentation may move to the
-                // new profile, but the old layout authority is now invalid.
-                // Mark it stale BEFORE yielding back to the UI.
-                Invalidate(K15LayoutAuthorityState.Stale);
+                if (confirmedSlot == targetSlot)
+                {
+                    targetInvalidationValid = _authorityGuard.TryInvalidate(
+                        prepared.AuthorityVersion,
+                        () => ClearAuthority(K15LayoutAuthorityState.Stale),
+                        out var version);
+                    targetInvalidationVersion = targetInvalidationValid ? version : null;
+                    if (!targetInvalidationValid) Invalidate(K15LayoutAuthorityState.Stale);
+                }
+                else
+                {
+                    Invalidate(K15LayoutAuthorityState.Stale);
+                }
                 if (onSlotConfirmed is not null)
                     await onSlotConfirmed(confirmedSlot);
             },
             prepared.ActiveSlot);
+    }
+
+    private async Task<bool> RefreshActionBindingsAsync(
+        byte expectedSlot,
+        K15LayoutFileStamp expectedStamp,
+        long? expectedAuthorityVersion,
+        bool expectedVersionValid,
+        long expectedGeneration,
+        string? expectedIdentity,
+        long expectedFileGeneration,
+        Action markSwitchDrift)
+    {
+        var controller = RequireConnectedController();
+        if (!expectedVersionValid || expectedAuthorityVersion is not long authorityVersion)
+        {
+            markSwitchDrift();
+            return false;
+        }
+        var generation = expectedGeneration;
+        var fileGeneration = expectedFileGeneration;
+        var identity = _deviceManager.IdentityFingerprint
+            ?? throw new InvalidOperationException("Connected K15 identity is unavailable.");
+
+        try
+        {
+            var localBefore = K15LayoutFileAuthority.Read(_paths, expectedSlot);
+            var hardware = K15LayoutAuthority.CaptureBindingsOnly(controller, localBefore.Semantic);
+            var localAfter = K15LayoutFileAuthority.Read(_paths, expectedSlot);
+
+            if (!_deviceManager.IsConnected ||
+                !ReferenceEquals(controller, _deviceManager.LayoutController) ||
+                generation != _deviceManager.ConnectionGeneration ||
+                !string.Equals(identity, expectedIdentity, StringComparison.Ordinal) ||
+                !string.Equals(identity, _deviceManager.IdentityFingerprint, StringComparison.Ordinal) ||
+                hardware.ActiveSlot != expectedSlot || localBefore.Stamp != expectedStamp ||
+                localBefore.Stamp != localAfter.Stamp ||
+                fileGeneration != Interlocked.Read(ref _fileMutationGeneration))
+            {
+                markSwitchDrift();
+                Invalidate(K15LayoutAuthorityState.Stale);
+                return false;
+            }
+
+            var result = K15LayoutAttestation.CompareBindingsOnly(hardware, localAfter.Semantic);
+            if (!result.IsActionVerified)
+            {
+                Invalidate(K15LayoutAuthorityState.Stale);
+                return false;
+            }
+
+            if (!_authorityGuard.TryPublish(authorityVersion, () =>
+                {
+                    _hardware = hardware;
+                    _local = localAfter.Semantic;
+                    _stamp = localAfter.Stamp;
+                    _connectionGeneration = generation;
+                    _identityFingerprint = identity;
+                    State = K15LayoutAuthorityState.ReadyActionVerified;
+                }))
+            {
+                markSwitchDrift();
+                return false;
+            }
+
+            StateChanged?.Invoke(K15LayoutAuthorityState.ReadyActionVerified);
+            await Task.CompletedTask;
+            return true;
+        }
+        catch
+        {
+            markSwitchDrift();
+            Invalidate(K15LayoutAuthorityState.Stale);
+            throw;
+        }
     }
 
     internal void Invalidate(K15LayoutAuthorityState state = K15LayoutAuthorityState.Stale)
@@ -315,21 +434,15 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
         var changed = false;
         _authorityGuard.Invalidate(() =>
         {
-            _hardware = null;
-            _local = null;
-            _stamp = null;
-            _connectionGeneration = 0;
-            _identityFingerprint = null;
             changed = State != state;
-            State = state;
+            ClearAuthority(state);
         });
         if (changed) StateChanged?.Invoke(state);
     }
 
-    private K15HidLightingController RequireConnectedController()
+    private IK15LayoutReadControl RequireConnectedController()
     {
-        if (_deviceManager.ConnectionState != K15DeviceConnectionState.Connected ||
-            _deviceManager.Controller is not K15HidLightingController controller)
+        if (!_deviceManager.IsConnected || _deviceManager.LayoutController is not { } controller)
         {
             Invalidate(K15LayoutAuthorityState.Disconnected);
             throw new InvalidOperationException("K15 device is not connected.");
@@ -337,11 +450,24 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
         return controller;
     }
 
-    private void HandleDeviceStateChanged(K15DeviceConnectionState state)
+    private void HandleDeviceAuthorityChanged()
     {
-        if (state != K15DeviceConnectionState.Connected)
+        if (!_deviceManager.IsConnected)
             Invalidate(K15LayoutAuthorityState.Disconnected);
     }
+
+    private void ClearAuthority(K15LayoutAuthorityState state)
+    {
+        _hardware = null;
+        _local = null;
+        _stamp = null;
+        _connectionGeneration = 0;
+        _identityFingerprint = null;
+        State = state;
+    }
+
+    private static bool CanDispatchFrom(K15LayoutAuthorityState state) =>
+        state is K15LayoutAuthorityState.ReadyVerified or K15LayoutAuthorityState.ReadyActionVerified;
 
     private void SetState(K15LayoutAuthorityState state)
     {
@@ -407,7 +533,7 @@ internal sealed class K15LayoutAuthoritySession : IDisposable
 
     public void Dispose()
     {
-        _deviceManager.StateChanged -= HandleDeviceStateChanged;
+        _deviceManager.AuthorityChanged -= HandleDeviceAuthorityChanged;
         foreach (var watcher in _watchers) watcher.Dispose();
         _watchers.Clear();
         Invalidate(K15LayoutAuthorityState.Disconnected);
