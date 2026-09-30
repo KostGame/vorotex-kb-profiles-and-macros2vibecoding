@@ -681,6 +681,186 @@ finally
     Directory.Delete(layoutTemp, recursive: true);
 }
 
+(string Root, K15LayoutAuthoritySession Session, AuthorityFakeDeviceSource Source,
+    AuthorityFakeLayoutControl Controller) CreateAuthorityFixture()
+{
+    var root = Path.Combine(Path.GetTempPath(), "k15-fast-switch-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    var profile0 = Path.Combine(root, "Profile0.json");
+    var profile1 = Path.Combine(root, "Profile1.json");
+    var macroConfig = Path.Combine(root, "macroConfig.json");
+    File.WriteAllText(profile0, syntheticProfileJson);
+    File.WriteAllText(profile1, syntheticProfileJson);
+    File.WriteAllText(macroConfig, syntheticMacroJson);
+    var paths = new K15LayoutFilePaths(profile0, profile1, macroConfig);
+    var profiles = new[]
+    {
+        K15LayoutFileAuthority.Read(paths, 0).Semantic,
+        K15LayoutFileAuthority.Read(paths, 1).Semantic
+    };
+    var controller = new AuthorityFakeLayoutControl(profiles);
+    var source = new AuthorityFakeDeviceSource(controller);
+    return (root, new K15LayoutAuthoritySession(source, paths), source, controller);
+}
+
+var operationLocal = new K15LocalSemanticSnapshot(1,
+    K15LayoutAuthorityModel.BindingCells.Keys.Select((controlId, index) =>
+    {
+        var slot = checked((byte)index);
+        return new KeyValuePair<string, K15LocalSemanticAction>(controlId,
+            new K15LocalSemanticAction(controlId, controlId, 700,
+                new byte[] { 0x0A, 0x00, slot, 0x00 }, slot, "group", $"macro-{index}",
+                new byte[] { 0x04, 0x85 }));
+    }).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
+var operationBindings = operationLocal.Actions.ToDictionary(pair => pair.Key,
+    pair => pair.Value.ExpectedBindingRaw, StringComparer.Ordinal);
+var operationPayloads = operationLocal.Actions.Values.ToDictionary(
+    action => action.MacroMemorySlot!.Value, _ => new byte[] { 0x04, 0x85 });
+var operationControl = new OperationCountingLayoutControl(operationBindings, operationPayloads);
+var fullOperationSnapshot = K15LayoutAuthority.Capture(operationControl);
+var fullOperationReads = operationControl.TotalHidReads;
+operationControl.ResetCounts();
+var fastOperationSnapshot = K15LayoutAuthority.CaptureBindingsOnly(operationControl, operationLocal);
+var fastOperationReads = operationControl.TotalHidReads;
+Require(K15LayoutAttestation.CompareBindingsOnly(fastOperationSnapshot, operationLocal).IsActionVerified &&
+        operationControl.MacroPayloadReads == 0 &&
+        fullOperationSnapshot.MacroPayloads.Count == K15LayoutAuthorityModel.BindingCells.Count &&
+        fastOperationReads == 2 + K15LayoutAuthorityModel.BindingCells.Count &&
+        fullOperationReads == 2 + K15LayoutAuthorityModel.BindingCells.Count * 2 &&
+        fastOperationReads * 10 < fullOperationReads * 6,
+    $"K15_PROFILE_SWITCH_FAST_HID_READS_{fastOperationReads}_VS_FULL_{fullOperationReads}");
+
+var actionFixture = CreateAuthorityFixture();
+try
+{
+    await actionFixture.Session.RefreshCooperativelyAsync();
+    var preparedSwitch = actionFixture.Session.PrepareDispatch("rotary");
+    actionFixture.Controller.ResetCounts();
+    var states = new List<K15LayoutAuthorityState>();
+    actionFixture.Session.StateChanged += states.Add;
+    var switched = await actionFixture.Session.SwitchProfileExplicitlyAsync(preparedSwitch);
+    Require(switched == new K15ProfileSwitchResult(0, 1) &&
+            actionFixture.Session.State == K15LayoutAuthorityState.ReadyActionVerified &&
+            actionFixture.Session.HasDispatchAuthority &&
+            actionFixture.Controller.BindingReads == K15LayoutAuthorityModel.BindingCells.Count &&
+            actionFixture.Controller.MacroPayloadReads == 0 &&
+            actionFixture.Controller.SlotReads == 4,
+        "K15_PROFILE_SWITCH_FAST_ATTESTS_ALL_BINDINGS_WITH_ZERO_MACRO_PAYLOAD_READS");
+
+    actionFixture.Controller.MacroOverrides[7] = new byte[] { 0x04, 0x06, 0x04, 0x87 };
+    try
+    {
+        actionFixture.Session.PrepareDispatch("key-1");
+        Require(false, "K15_ACTION_READY_MACRO_PAYLOAD_MISMATCH_MUST_BLOCK_PREPARE");
+    }
+    catch (InvalidOperationException)
+    {
+        Require(actionFixture.Session.State == K15LayoutAuthorityState.Stale &&
+                actionFixture.Controller.MacroPayloadReads == 1,
+            "K15_ACTION_READY_MACRO_PAYLOAD_MISMATCH_BLOCKS_PREPARE");
+    }
+}
+finally
+{
+    actionFixture.Session.Dispose();
+    Directory.Delete(actionFixture.Root, recursive: true);
+}
+
+var nativeBindingFixture = CreateAuthorityFixture();
+try
+{
+    await nativeBindingFixture.Session.RefreshCooperativelyAsync();
+    var preparedSwitch = nativeBindingFixture.Session.PrepareDispatch("rotary");
+    await nativeBindingFixture.Session.SwitchProfileExplicitlyAsync(preparedSwitch);
+    var nativePrepared = nativeBindingFixture.Session.PrepareDispatch("key-2");
+    nativeBindingFixture.Session.AuthorizeDispatch(nativePrepared);
+    nativeBindingFixture.Controller.BindingOverrides[(1, 32)] = new byte[] { 0x02, 0x77, 0x00, 0x00 };
+    try
+    {
+        nativeBindingFixture.Session.PrepareDispatch("key-2");
+        Require(false, "K15_ACTION_READY_NATIVE_BINDING_MISMATCH_MUST_BLOCK_PREPARE");
+    }
+    catch (InvalidOperationException)
+    {
+        Require(nativeBindingFixture.Session.State == K15LayoutAuthorityState.Stale,
+            "K15_ACTION_READY_NATIVE_BINDING_LIVE_CHECK_BLOCKS_PREPARE");
+    }
+}
+finally
+{
+    nativeBindingFixture.Session.Dispose();
+    Directory.Delete(nativeBindingFixture.Root, recursive: true);
+}
+
+var bindingFailureFixture = CreateAuthorityFixture();
+try
+{
+    await bindingFailureFixture.Session.RefreshCooperativelyAsync();
+    var prepared = bindingFailureFixture.Session.PrepareDispatch("rotary");
+    var states = new List<K15LayoutAuthorityState>();
+    bindingFailureFixture.Session.StateChanged += states.Add;
+    bindingFailureFixture.Controller.BindingOverrides[(1, 40)] = new byte[] { 0x02, 0x77, 0x00, 0x00 };
+    try
+    {
+        await bindingFailureFixture.Session.SwitchProfileExplicitlyAsync(prepared);
+        Require(false, "K15_FAST_BINDING_MISMATCH_SWITCH_MUST_FAIL");
+    }
+    catch (InvalidOperationException)
+    {
+        Require(bindingFailureFixture.Controller.CurrentSlot == 0 &&
+                bindingFailureFixture.Controller.SelectedSlots.SequenceEqual(new byte[] { 1, 0 }) &&
+                bindingFailureFixture.Session.State == K15LayoutAuthorityState.ReadyVerified &&
+                !states.Contains(K15LayoutAuthorityState.ReadyActionVerified),
+            "K15_FAST_BINDING_MISMATCH_ROLLS_BACK_AND_REQUIRES_FULL_ORIGINAL_ATTESTATION");
+    }
+}
+finally
+{
+    bindingFailureFixture.Session.Dispose();
+    Directory.Delete(bindingFailureFixture.Root, recursive: true);
+}
+
+foreach (var drift in new[] { "slot", "file", "device", "version" })
+{
+    var driftFixture = CreateAuthorityFixture();
+    try
+    {
+        await driftFixture.Session.RefreshCooperativelyAsync();
+        var prepared = driftFixture.Session.PrepareDispatch("rotary");
+        var states = new List<K15LayoutAuthorityState>();
+        driftFixture.Session.StateChanged += states.Add;
+        var injected = false;
+        driftFixture.Controller.OnBindingRead = _ =>
+        {
+            if (injected) return;
+            injected = true;
+            switch (drift)
+            {
+                case "slot": driftFixture.Controller.CurrentSlot = 0; break;
+                case "file": File.AppendAllText(Path.Combine(driftFixture.Root, "Profile1.json"), " "); break;
+                case "device": driftFixture.Source.ConnectionGeneration++; break;
+                case "version": driftFixture.Session.Invalidate(); break;
+            }
+        };
+        try
+        {
+            await driftFixture.Session.SwitchProfileExplicitlyAsync(prepared);
+            Require(false, $"K15_FAST_SWITCH_{drift.ToUpperInvariant()}_DRIFT_MUST_FAIL");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or AggregateException or IOException)
+        {
+            Require(injected && driftFixture.Controller.CurrentSlot == 0 &&
+                    !states.Contains(K15LayoutAuthorityState.ReadyActionVerified),
+                $"K15_FAST_SWITCH_{drift.ToUpperInvariant()}_DRIFT_FAILS_CLOSED");
+        }
+    }
+    finally
+    {
+        driftFixture.Session.Dispose();
+        Directory.Delete(driftFixture.Root, recursive: true);
+    }
+}
+
 var topRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Top)
     .OrderBy(control => control.X).ToArray();
 var middleRow = MiniK15ControlLayout.Controls.Where(control => control.Band == MiniK15ControlBand.Middle)
@@ -1043,6 +1223,124 @@ internal sealed class RecordingLayoutReadControl : IK15LayoutReadControl
     {
         _trace.Add($"macro:{memorySlot}");
         return new byte[] { 0x01, 0x02, 0x03 };
+    }
+}
+
+internal sealed class AuthorityFakeDeviceSource : IK15LayoutAuthorityDeviceSource
+{
+    internal AuthorityFakeDeviceSource(AuthorityFakeLayoutControl controller) => Controller = controller;
+
+    internal AuthorityFakeLayoutControl Controller { get; }
+    public bool IsConnected { get; private set; } = true;
+    public IK15LayoutReadControl? LayoutController => Controller;
+    public long ConnectionGeneration { get; set; } = 1;
+    public string? IdentityFingerprint { get; set; } = "synthetic-k15";
+    public event Action? AuthorityChanged;
+
+    internal void Disconnect()
+    {
+        IsConnected = false;
+        AuthorityChanged?.Invoke();
+    }
+}
+
+internal sealed class AuthorityFakeLayoutControl : IK15LayoutReadControl
+{
+    private readonly IReadOnlyList<K15LocalSemanticSnapshot> _profiles;
+
+    internal AuthorityFakeLayoutControl(IReadOnlyList<K15LocalSemanticSnapshot> profiles) => _profiles = profiles;
+
+    internal byte CurrentSlot { get; set; }
+    internal int SlotReads { get; private set; }
+    internal int BindingReads { get; private set; }
+    internal int MacroPayloadReads { get; private set; }
+    internal List<byte> SelectedSlots { get; } = new();
+    internal Dictionary<(byte Slot, int Cell), byte[]> BindingOverrides { get; } = new();
+    internal Dictionary<byte, byte[]> MacroOverrides { get; } = new();
+    internal Action<int>? OnBindingRead { get; set; }
+
+    public byte ReadActiveSlot()
+    {
+        SlotReads++;
+        return CurrentSlot;
+    }
+
+    public void SelectActiveSlot(byte slot)
+    {
+        SelectedSlots.Add(slot);
+        CurrentSlot = slot;
+    }
+
+    public byte[] ReadBindingCell(int cellIndex)
+    {
+        BindingReads++;
+        OnBindingRead?.Invoke(cellIndex);
+        var controlId = K15LayoutAuthorityModel.BindingCells.Single(pair => pair.Value == cellIndex).Key;
+        if (BindingOverrides.TryGetValue((CurrentSlot, cellIndex), out var overridden))
+            return overridden.ToArray();
+        return _profiles[CurrentSlot].Actions[controlId].ExpectedBindingRaw.ToArray();
+    }
+
+    public byte[] ReadMacroPayload(byte memorySlot)
+    {
+        MacroPayloadReads++;
+        if (MacroOverrides.TryGetValue(memorySlot, out var overridden)) return overridden.ToArray();
+        var action = _profiles[CurrentSlot].Actions.Values.Single(candidate => candidate.MacroMemorySlot == memorySlot);
+        return action.MacroPayload!.ToArray();
+    }
+
+    internal void ResetCounts()
+    {
+        SlotReads = 0;
+        BindingReads = 0;
+        MacroPayloadReads = 0;
+    }
+}
+
+internal sealed class OperationCountingLayoutControl : IK15LayoutReadControl
+{
+    private readonly IReadOnlyDictionary<int, byte[]> _bindings;
+    private readonly IReadOnlyDictionary<byte, byte[]> _payloads;
+
+    internal OperationCountingLayoutControl(
+        IReadOnlyDictionary<string, byte[]> bindings,
+        IReadOnlyDictionary<byte, byte[]> payloads)
+    {
+        _bindings = K15LayoutAuthorityModel.BindingCells.ToDictionary(
+            pair => pair.Value, pair => bindings[pair.Key]);
+        _payloads = payloads;
+    }
+
+    internal int SlotReads { get; private set; }
+    internal int BindingReads { get; private set; }
+    internal int MacroPayloadReads { get; private set; }
+    internal int TotalHidReads => SlotReads + BindingReads + MacroPayloadReads;
+
+    public byte ReadActiveSlot()
+    {
+        SlotReads++;
+        return 1;
+    }
+
+    public void SelectActiveSlot(byte slot) => throw new NotSupportedException();
+
+    public byte[] ReadBindingCell(int cellIndex)
+    {
+        BindingReads++;
+        return _bindings[cellIndex].ToArray();
+    }
+
+    public byte[] ReadMacroPayload(byte memorySlot)
+    {
+        MacroPayloadReads++;
+        return _payloads[memorySlot].ToArray();
+    }
+
+    internal void ResetCounts()
+    {
+        SlotReads = 0;
+        BindingReads = 0;
+        MacroPayloadReads = 0;
     }
 }
 

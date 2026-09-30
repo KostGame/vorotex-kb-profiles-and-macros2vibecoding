@@ -441,7 +441,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             // perceptible even for very fast native actions.
             await Task.Yield();
 
-            if (_layoutAuthority.State != K15LayoutAuthorityState.ReadyVerified)
+            if (!_layoutAuthority.HasDispatchAuthority)
             {
                 var recoveryStarted = Stopwatch.GetTimestamp();
                 try
@@ -473,7 +473,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
                 recoveryDurationMs = Stopwatch.GetElapsedTime(recoveryStarted).TotalMilliseconds;
             }
 
-            if (_layoutAuthority.State != K15LayoutAuthorityState.ReadyVerified)
+            if (!_layoutAuthority.HasDispatchAuthority)
             {
                 _codexPet.SetControlFeedback(
                     controlId, CodexPetControlFeedbackPhase.Blocked);
@@ -500,9 +500,8 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
                     prepared,
                     confirmedSlot =>
                     {
-                        // Exact slot readback is enough to commit presentation,
-                        // but NOT enough to re-enable dispatch. Commit the actual
-                        // Pet frame before synchronous full re-attestation resumes.
+                        // Commit the actual Pet frame before the binding-only
+                        // action attestation resumes dispatch authority.
                         _codexPet.CommitProfileSwitchReadback(confirmedSlot);
                         return Task.CompletedTask;
                     });

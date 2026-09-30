@@ -35,6 +35,22 @@ internal sealed class K15LayoutAuthorityVersionGuard
         }
     }
 
+    internal bool TryInvalidate(long capturedVersion, Action clear, out long invalidatedVersion)
+    {
+        ArgumentNullException.ThrowIfNull(clear);
+        lock (_sync)
+        {
+            if (capturedVersion != _version)
+            {
+                invalidatedVersion = _version;
+                return false;
+            }
+            clear();
+            invalidatedVersion = ++_version;
+            return true;
+        }
+    }
+
     internal bool ExecuteIfCurrent(long capturedVersion, Func<bool> action)
     {
         ArgumentNullException.ThrowIfNull(action);

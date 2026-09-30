@@ -6,6 +6,15 @@ internal interface IK15LayoutReadControl : IK15ProfileSlotControl
     byte[] ReadMacroPayload(byte memorySlot);
 }
 
+internal interface IK15LayoutAuthorityDeviceSource
+{
+    bool IsConnected { get; }
+    IK15LayoutReadControl? LayoutController { get; }
+    long ConnectionGeneration { get; }
+    string? IdentityFingerprint { get; }
+    event Action? AuthorityChanged;
+}
+
 internal sealed class K15LayoutCaptureProfileChangedException : InvalidOperationException
 {
     internal K15LayoutCaptureProfileChangedException(byte previousSlot, byte currentSlot)
@@ -88,4 +97,46 @@ internal static class K15LayoutAuthority
 
         return new K15HardwareLayoutSnapshot(before, bindings, macros);
     }
+
+    internal static K15HardwareLayoutSnapshot CaptureBindingsOnly(
+        IK15LayoutReadControl controller,
+        K15LocalSemanticSnapshot local)
+    {
+        ArgumentNullException.ThrowIfNull(controller);
+        ArgumentNullException.ThrowIfNull(local);
+
+        var before = controller.ReadActiveSlot();
+        if (before != local.Slot)
+            throw new K15LayoutCaptureProfileChangedException(local.Slot, before);
+
+        if (K15LayoutAuthorityModel.BindingCells.Count != local.Actions.Count ||
+            K15LayoutAuthorityModel.BindingCells.Keys.Any(key => !local.Actions.ContainsKey(key)))
+            throw new InvalidDataException("Local profile does not contain all proven Mini-K15 bindings.");
+
+        var bindings = new Dictionary<string, K15OnboardBindingCell>(StringComparer.Ordinal);
+        foreach (var pair in K15LayoutAuthorityModel.BindingCells)
+        {
+            var raw = controller.ReadBindingCell(pair.Value);
+            bindings[pair.Key] = K15LayoutAuthorityModel.DecodeBindingCell(pair.Value, raw);
+        }
+
+        var after = controller.ReadActiveSlot();
+        if (after != before)
+            throw new K15LayoutCaptureProfileChangedException(before, after);
+
+        return new K15HardwareLayoutSnapshot(before, bindings, new Dictionary<byte, byte[]>());
+    }
+}
+
+internal sealed class K15LayoutProfileChangedException : InvalidOperationException
+{
+    internal K15LayoutProfileChangedException(byte previousSlot, byte currentSlot)
+        : base($"K15 profile changed during dispatch: {previousSlot} -> {currentSlot}.")
+    {
+        PreviousSlot = previousSlot;
+        CurrentSlot = currentSlot;
+    }
+
+    internal byte PreviousSlot { get; }
+    internal byte CurrentSlot { get; }
 }
