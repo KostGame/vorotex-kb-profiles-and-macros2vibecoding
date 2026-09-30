@@ -11,6 +11,7 @@
     <Compile Include="CodexPetWindowUxSmokeProgram.cs" />
     <Compile Include="..\CodexPetPosition.cs" Link="CodexPetPosition.cs" />
     <Compile Include="..\CodexPetTaskSurface.cs" Link="CodexPetTaskSurface.cs" />
+    <Compile Include="..\CodexPetTaskSurfaceRegion.cs" Link="CodexPetTaskSurfaceRegion.cs" />
     <Compile Include="..\CodexPetTaskTypography.cs" Link="CodexPetTaskTypography.cs" />
     <Compile Include="..\CodexPetTaskLinkPolicy.cs" Link="CodexPetTaskLinkPolicy.cs" />
     <Compile Include="..\CodexPetUiPreferences.cs" Link="CodexPetUiPreferences.cs" />

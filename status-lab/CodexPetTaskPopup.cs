@@ -25,8 +25,9 @@ internal sealed class CodexPetTaskPopup : Form
         ShowInTaskbar = false;
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
-        BackColor = Color.FromArgb(24, 24, 30);
-        TransparencyKey = BackColor;
+        AllowTransparency = true;
+        BackColor = CodexPetTaskSurfacePolicy.HostContract.TransparencyKey;
+        TransparencyKey = CodexPetTaskSurfacePolicy.HostContract.TransparencyKey;
         DoubleBuffered = true;
         Cursor = Cursors.Default;
         _launchThreadLink = launchThreadLink ?? LaunchThreadLink;
@@ -73,13 +74,33 @@ internal sealed class CodexPetTaskPopup : Form
         if (Visible) PositionNearPet();
     }
 
-    internal void ClosePopup() => Hide();
+    internal void ClosePopup()
+    {
+        ReplaceRegion(null);
+        Size = Size.Empty;
+        Hide();
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        // Clear with the color key so invalidated pixels become transparent instead of
+        // retaining stale card/background pixels between relayouts.
+        e.Graphics.Clear(CodexPetTaskSurfacePolicy.HostContract.TransparencyKey);
+    }
+
+    private void ReplaceRegion(Region? next)
+    {
+        var previous = Region;
+        Region = next;
+        previous?.Dispose();
+    }
 
     private void PositionNearPet()
     {
         var layout = CodexPetTaskSurfacePolicy.Layout(_surfaceState, _tasks.Count,
             new Size(CardWidth, CardHeight));
         Size = layout.PanelSize;
+        ReplaceRegion(CodexPetTaskSurfaceRegion.Build(layout));
         if (layout.PanelSize == Size.Empty) return;
 
         var monitor = Screen.FromRectangle(_pet.Bounds);
@@ -106,8 +127,10 @@ internal sealed class CodexPetTaskPopup : Form
         {
             using var overflow = new SolidBrush(Color.FromArgb(190, 190, 198, 205));
             using var font = new Font("Segoe UI", 9f, FontStyle.Regular, GraphicsUnit.Pixel);
-            var y = 12 + CodexPetTaskSurfacePolicy.ExpandedVisibleRows(_tasks.Count) * (CardHeight + 8);
-            e.Graphics.DrawString("+" + layout.OverflowCount + " ещё", font, overflow, 18, y);
+            var overflowBounds = CodexPetTaskSurfacePolicy.OverflowBounds(layout,
+                new Size(CardWidth, CardHeight));
+            e.Graphics.DrawString("+" + layout.OverflowCount + " ещё", font, overflow,
+                overflowBounds);
         }
     }
 
@@ -133,7 +156,7 @@ internal sealed class CodexPetTaskPopup : Form
             new Size(CardWidth, CardHeight));
         foreach (var card in layout.Cards)
         {
-            if (!card.ShowsText || !card.Bounds.Contains(point) ||
+            if (!card.ShowsText || !CodexPetTaskSurfaceRegion.IsPointInRoundedCard(card.Bounds, point) ||
                 card.TaskIndex < 0 || card.TaskIndex >= _tasks.Count) continue;
             var target = _tasks[card.TaskIndex].Activity.OpenTarget;
             if (target.Source == CodexActivitySource.Local && target.CanFocus &&
@@ -183,7 +206,8 @@ internal sealed class CodexPetTaskPopup : Form
         }
         if (!string.IsNullOrWhiteSpace(row.DisplaySubtitle))
         {
-            using var subtitle = new SolidBrush(Color.FromArgb(180, 190, 198, 205));
+            using var subtitle = new SolidBrush(Color.FromArgb(CodexPetTaskTypography.SubtitleAlpha,
+                198, 207, 214));
             using var subtitleFont = new Font("Segoe UI", CodexPetTaskTypography.SubtitlePixelSize,
                 FontStyle.Regular, GraphicsUnit.Pixel);
             var subtitleBounds = CodexPetTaskTypography.SubtitleBounds(card.Bounds);

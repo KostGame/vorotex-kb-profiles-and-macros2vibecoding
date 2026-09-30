@@ -31,6 +31,10 @@ internal readonly record struct TaskSurfaceLayout(
     IReadOnlyList<TaskCardLayout> Cards,
     int OverflowCount);
 
+internal readonly record struct TaskSurfaceHostContract(
+    Color TransparencyKey,
+    bool PaintsBackground);
+
 // Presentation-only policy. It does not read or change reducer/session state.
 internal static class CodexPetTaskSurfacePolicy
 {
@@ -38,7 +42,14 @@ internal static class CodexPetTaskSurfacePolicy
     internal const int DefaultCardWidth = 296;
     internal const int DefaultCardHeight = 80;
     internal const int MaximumExpandedRows = 5;
-    internal const int PanelGap = 8;
+    internal const int ExpandedRowGap = 8;
+    internal const int StackedLayerOffsetX = 7;
+    internal const int StackedLayerOffsetY = 12;
+    internal const int CardCornerRadius = 10;
+    internal const int OverflowGap = 4;
+    internal const int OverflowHeight = 18;
+    internal static readonly TaskSurfaceHostContract HostContract = new(
+        Color.FromArgb(255, 255, 0, 255), false);
 
     internal static PetTaskSurfaceState Cycle(PetTaskSurfaceState state) => state switch
     {
@@ -71,12 +82,12 @@ internal static class CodexPetTaskSurfacePolicy
         return state switch
         {
             PetTaskSurfaceState.Stacked => new(
-                cardSize.Width + 24,
-                18 + cardSize.Height + StackedHiddenLayerCount(taskCount) * 12),
+                cardSize.Width + StackedHiddenLayerCount(taskCount) * StackedLayerOffsetX,
+                cardSize.Height + StackedHiddenLayerCount(taskCount) * StackedLayerOffsetY),
             PetTaskSurfaceState.Expanded => new(
-                cardSize.Width + 24,
-                18 + ExpandedVisibleRows(taskCount) * (cardSize.Height + 8) +
-                (OverflowCount(taskCount) > 0 ? 24 : 0)),
+                cardSize.Width,
+                ExpandedContentHeight(taskCount, cardSize) +
+                (OverflowCount(taskCount) > 0 ? OverflowGap + OverflowHeight : 0)),
             _ => Size.Empty
         };
     }
@@ -97,12 +108,12 @@ internal static class CodexPetTaskSurfacePolicy
             {
                 cards.Add(new(
                     layer,
-                    new Rectangle(12 + layer * 7, 12 + layer * 12,
+                    new Rectangle(layer * StackedLayerOffsetX, layer * StackedLayerOffsetY,
                         cardSize.Width, cardSize.Height),
                     false,
                     false));
             }
-            cards.Add(new(0, new Rectangle(12, 12, cardSize.Width, cardSize.Height), true, true));
+            cards.Add(new(0, new Rectangle(0, 0, cardSize.Width, cardSize.Height), true, true));
         }
         else
         {
@@ -111,7 +122,7 @@ internal static class CodexPetTaskSurfacePolicy
             {
                 cards.Add(new(
                     index,
-                    new Rectangle(12, 12 + index * (cardSize.Height + 8),
+                    new Rectangle(0, index * (cardSize.Height + ExpandedRowGap),
                         cardSize.Width, cardSize.Height),
                     index == 0,
                     true));
@@ -121,9 +132,25 @@ internal static class CodexPetTaskSurfacePolicy
         return new(state, panelSize, cards, OverflowCount(taskCount));
     }
 
+    internal static Rectangle OverflowBounds(TaskSurfaceLayout layout, Size cardSize = default)
+    {
+        cardSize = NormalizeCardSize(cardSize);
+        if (layout.State != PetTaskSurfaceState.Expanded || layout.OverflowCount <= 0)
+            return Rectangle.Empty;
+
+        var rows = ExpandedVisibleRows(layout.Cards.Count + layout.OverflowCount);
+        var top = ExpandedContentHeight(rows, cardSize) + OverflowGap;
+        return new(4, top, Math.Max(1, layout.PanelSize.Width - 8), OverflowHeight);
+    }
+
+    private static int ExpandedContentHeight(int total, Size cardSize) =>
+        ExpandedVisibleRows(total) * cardSize.Height +
+        Math.Max(0, ExpandedVisibleRows(total) - 1) * ExpandedRowGap;
+
     private static Size NormalizeCardSize(Size cardSize) => new(
         cardSize.Width > 0 ? cardSize.Width : DefaultCardWidth,
         cardSize.Height > 0 ? cardSize.Height : DefaultCardHeight);
+
 }
 
 // Pure screen-aware placement seam. It uses only supplied rectangles and sizes.
@@ -141,10 +168,10 @@ internal static class TaskPanelPlacementPolicy
         var size = new Size(
             Math.Clamp(desiredSize.Width, 0, workingArea.Width),
             Math.Clamp(desiredSize.Height, 0, workingArea.Height));
-        var belowY = petBounds.Bottom + CodexPetTaskSurfacePolicy.PanelGap;
-        var aboveY = petBounds.Top - CodexPetTaskSurfacePolicy.PanelGap - size.Height;
+        var belowY = petBounds.Bottom + CodexPetTaskSurfacePolicy.ExpandedRowGap;
+        var aboveY = petBounds.Top - CodexPetTaskSurfacePolicy.ExpandedRowGap - size.Height;
         var belowSpace = Math.Max(0, workingArea.Bottom - belowY);
-        var aboveSpace = Math.Max(0, petBounds.Top - CodexPetTaskSurfacePolicy.PanelGap - workingArea.Top);
+        var aboveSpace = Math.Max(0, petBounds.Top - CodexPetTaskSurfacePolicy.ExpandedRowGap - workingArea.Top);
         var fitsBelow = size.Height <= belowSpace;
         var fitsAbove = size.Height <= aboveSpace;
 
