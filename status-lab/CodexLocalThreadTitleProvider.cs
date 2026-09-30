@@ -77,12 +77,23 @@ internal sealed class CodexAppServerLocalThreadTitleProvider : ICodexLocalThread
     private const int MaxThreadIds = 20;
     private const int MaxLineBytes = 128 * 1024;
     private const int MaxMessagesPerResponse = 64;
+    private readonly Action? _blockingWorkStarted;
 
-    public async Task<CodexLocalThreadMetadata> ReadTitlesAsync(
+    internal CodexAppServerLocalThreadTitleProvider(Action? blockingWorkStarted = null) =>
+        _blockingWorkStarted = blockingWorkStarted;
+
+    public Task<CodexLocalThreadMetadata> ReadTitlesAsync(
+        IReadOnlyList<CodexSessionSnapshot> sessions,
+        IReadOnlyList<CodexUnreadSource> trustedSources,
+        CancellationToken cancellationToken) =>
+        Task.Run(() => ReadTitlesCoreAsync(sessions, trustedSources, cancellationToken), cancellationToken);
+
+    private async Task<CodexLocalThreadMetadata> ReadTitlesCoreAsync(
         IReadOnlyList<CodexSessionSnapshot> sessions,
         IReadOnlyList<CodexUnreadSource> trustedSources,
         CancellationToken cancellationToken)
     {
+        _blockingWorkStarted?.Invoke();
         var requests = CodexLocalThreadTitleSourceResolver.Resolve(sessions, trustedSources);
         var titles = new Dictionary<string, string>(StringComparer.Ordinal);
         var persistedThreadKeys = new HashSet<string>(StringComparer.Ordinal);

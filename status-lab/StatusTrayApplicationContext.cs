@@ -15,7 +15,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private readonly K15LayoutAuthoritySession _layoutAuthority;
     private readonly K15WindowsInputExecutor _petInputExecutor =
         new(new K15SendInputScanCodeTransport());
-    private readonly SemaphoreSlim _petDispatchGate = new(1, 1);
+    private readonly PetControlDispatchQueue _petDispatchQueue = new();
     private readonly K15RgbCanary _rgbCanary;
     private readonly NotifyIcon _trayIcon;
     private readonly Icon _trackingOnIcon;
@@ -315,7 +315,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
                     operation: () => _deviceManager.Select(candidate) && _deviceManager.Connect())))
             throw new InvalidOperationException("Не удалось подтвердить выбранное K15 устройство.");
         UpdateDeviceStatus(_deviceManager.ConnectionState);
-        RefreshLayoutAuthority("device_connect");
+        await RefreshLayoutAuthorityAsync("device_connect");
     }
 
     private async Task ReconnectDeviceAsync()
@@ -323,7 +323,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         if (!await RunDeviceOperationWithRgbAsync("device_reconnect", _deviceManager.Reconnect))
             throw new InvalidOperationException("Выбранное K15 устройство недоступно для reconnect.");
         UpdateDeviceStatus(_deviceManager.ConnectionState);
-        RefreshLayoutAuthority("device_reconnect");
+        await RefreshLayoutAuthorityAsync("device_reconnect");
     }
 
     private async Task<bool> RunDeviceOperationWithRgbAsync(string reason, Func<bool> operation)
@@ -362,11 +362,11 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         UpdateDeviceStatus(_deviceManager.ConnectionState);
     }
 
-    private void RefreshLayoutAuthority(string reason)
+    private async Task RefreshLayoutAuthorityAsync(string reason)
     {
         try
         {
-            var result = _layoutAuthority.Refresh();
+            var result = await _layoutAuthority.RefreshCooperativelyAsync();
             EventJournal.Append(new
             {
                 timestampUtc = DateTimeOffset.UtcNow,
@@ -393,24 +393,47 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         }
     }
 
-    private async void HandlePetControlClicked(string controlId)
+    private void HandlePetControlClicked(string controlId)
     {
-        if (!await _petDispatchGate.WaitAsync(0))
+        var request = new PetControlDispatchRequest(controlId, Stopwatch.GetTimestamp());
+        var submission = _petDispatchQueue.Submit(request);
+        if (submission == PetControlSubmission.Started)
         {
-            _codexPet.SetControlFeedback(
-                controlId, CodexPetControlFeedbackPhase.Blocked);
+            _ = RunPetControlDispatchAsync(request);
+            return;
+        }
+
+        if (submission == PetControlSubmission.Queued)
+        {
             EventJournal.Append(new
             {
                 timestampUtc = DateTimeOffset.UtcNow,
                 source = "codex_pet",
-                @event = "virtual_control_blocked",
+                @event = "virtual_control_queued",
                 controlId,
-                authorityState = _layoutAuthority.State.ToString(),
-                reason = "dispatch_busy"
+                policy = "single_fifo_pending"
             });
             return;
         }
 
+        _codexPet.SetControlFeedback(controlId, CodexPetControlFeedbackPhase.Blocked);
+        EventJournal.Append(new
+        {
+            timestampUtc = DateTimeOffset.UtcNow,
+            source = "codex_pet",
+            @event = "virtual_control_blocked",
+            controlId,
+            authorityState = _layoutAuthority.State.ToString(),
+            reason = "pending_slot_full"
+        });
+    }
+
+    private async Task RunPetControlDispatchAsync(PetControlDispatchRequest request)
+    {
+        var controlId = request.ControlId;
+        var gateAcquiredTimestamp = Stopwatch.GetTimestamp();
+        long authorityReadyTimestamp = 0;
+        double? recoveryDurationMs = null;
         try
         {
             // Mouse-up has already painted DISPATCHING/SWITCHING. Yield once
@@ -419,7 +442,36 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             await Task.Yield();
 
             if (_layoutAuthority.State != K15LayoutAuthorityState.ReadyVerified)
-                RefreshLayoutAuthority("pet_control_click");
+            {
+                var recoveryStarted = Stopwatch.GetTimestamp();
+                try
+                {
+                    var result = await _layoutAuthority.RefreshCooperativelyAsync();
+                    EventJournal.Append(new
+                    {
+                        timestampUtc = DateTimeOffset.UtcNow,
+                        source = "k15_layout_authority",
+                        @event = "layout_authority_refreshed",
+                        reason = "pet_control_click",
+                        state = _layoutAuthority.State.ToString(),
+                        verified = result.IsVerified,
+                        differences = result.Differences
+                    });
+                }
+                catch (Exception ex)
+                {
+                    EventJournal.Append(new
+                    {
+                        timestampUtc = DateTimeOffset.UtcNow,
+                        source = "k15_layout_authority",
+                        @event = "layout_authority_refresh_failed",
+                        reason = "pet_control_click",
+                        state = _layoutAuthority.State.ToString(),
+                        exception = ex.GetType().Name
+                    });
+                }
+                recoveryDurationMs = Stopwatch.GetElapsedTime(recoveryStarted).TotalMilliseconds;
+            }
 
             if (_layoutAuthority.State != K15LayoutAuthorityState.ReadyVerified)
             {
@@ -438,6 +490,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
             }
 
             var prepared = _layoutAuthority.PrepareDispatch(controlId);
+            authorityReadyTimestamp = Stopwatch.GetTimestamp();
             if (prepared.Plan.Kind == K15DispatchPlanKind.ProfileSwitch)
             {
                 _codexPet.SetControlFeedback(
@@ -474,6 +527,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
 
             _codexPet.SetControlFeedback(
                 controlId, CodexPetControlFeedbackPhase.Dispatching);
+            _layoutAuthority.AuthorizeDispatch(prepared);
             await _petInputExecutor.ExecuteAsync(prepared.Plan);
             _codexPet.SetControlFeedback(
                 controlId, CodexPetControlFeedbackPhase.Success);
@@ -506,7 +560,22 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         }
         finally
         {
-            _petDispatchGate.Release();
+            var completeTimestamp = Stopwatch.GetTimestamp();
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "codex_pet",
+                @event = "virtual_control_latency",
+                clickToGateMs = Stopwatch.GetElapsedTime(request.ClickObservedTimestamp, gateAcquiredTimestamp).TotalMilliseconds,
+                gateToAuthorityReadyMs = authorityReadyTimestamp == 0 ? (double?)null :
+                    Stopwatch.GetElapsedTime(gateAcquiredTimestamp, authorityReadyTimestamp).TotalMilliseconds,
+                authorityToCompleteMs = authorityReadyTimestamp == 0 ? (double?)null :
+                    Stopwatch.GetElapsedTime(authorityReadyTimestamp, completeTimestamp).TotalMilliseconds,
+                recoveryDurationMs
+            });
+            var nextRequest = _petDispatchQueue.CompleteAndTakePending();
+            if (nextRequest is not null)
+                _ = RunPetControlDispatchAsync(nextRequest);
         }
     }
 

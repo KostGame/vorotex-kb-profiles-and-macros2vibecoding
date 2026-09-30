@@ -4,6 +4,30 @@ internal static class CodexLocalThreadTitleTests
 {
     internal static void Run()
     {
+        var callerThreadId = Environment.CurrentManagedThreadId;
+        var providerWorkThreadId = -1;
+        SynchronizationContext? providerWorkContext = null;
+        var callerContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
+        Task<CodexLocalThreadMetadata> providerTask;
+        try
+        {
+            var provider = new CodexAppServerLocalThreadTitleProvider(() =>
+            {
+                providerWorkThreadId = Environment.CurrentManagedThreadId;
+                providerWorkContext = SynchronizationContext.Current;
+            });
+            providerTask = provider.ReadTitlesAsync(Array.Empty<CodexSessionSnapshot>(),
+                Array.Empty<CodexUnreadSource>(), CancellationToken.None);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(callerContext);
+        }
+        providerTask.GetAwaiter().GetResult();
+        Check(providerWorkThreadId != callerThreadId && providerWorkContext is null,
+            "LOCAL_TITLE_PROVIDER_BLOCKING_WORK_RUNS_OFF_CALLER_SYNCHRONIZATION_CONTEXT");
+
         var responseA = """
             {"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-shared","name":"Source A title","preview":"PRIVATE_PROMPT_MARKER","cwd":"C:/repo-a","model":"PRIVATE_MODEL_MARKER","turns":[{"items":[{"type":"tool","text":"PRIVATE_TOOL_MARKER"}]}]}}}
             """;
