@@ -228,7 +228,7 @@ internal static class CodexReadAckTests
         evidence = Evidence(reducer);
         reducer.Apply(Hook("UserPromptSubmit", 4, turn: "U2"));
         Check(reducer.ApplyReadAck(evidence) is null && reducer.State == K15NormalizedState.Running, "NEW_TURN_INVALIDATES_ARM");
-        reducer.Apply(Hook("PermissionRequest", 5, turn: "U2"));
+        reducer.Apply(ApprovalRequest(5, "T", "U2", "I2", "92"));
         Check(reducer.ApplyReadAck(evidence) is null && reducer.State == K15NormalizedState.Waiting, "WAITING_NEVER_READ_ACK");
         reducer = Done();
         evidence = Evidence(reducer);
@@ -259,7 +259,7 @@ internal static class CodexReadAckTests
         reducer.Apply(Hook("SessionEnd", 3));
         Check(reducer.ApplyReadAck(Evidence(reducer, 4))?.Reason == "codex_read_ack", "ENDED_DONE_EXACT_ACK");
         reducer = Done();
-        reducer.Apply(Hook("PermissionRequest", 3, "B", "TB", "UB"));
+        reducer.Apply(Hook("UserPromptSubmit", 3, "B", "TB", "UB"));
         reducer.Apply(ApprovalRequest(4, "TB", "UB", "IB", "33"));
         Check(reducer.ApplyReadAck(Evidence(reducer, 4)) is null && reducer.LastSessionTransitions.Single().SessionId == "S" &&
             reducer.State == K15NormalizedState.Waiting && reducer.SessionSnapshots.Single(s => s.SessionId == "B").State == K15NormalizedState.Waiting,
