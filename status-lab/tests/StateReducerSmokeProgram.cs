@@ -396,10 +396,10 @@ replayTransition.Rehydrate(new[]
     TypedRequest(t.AddMilliseconds(1), "replay-thread", "replay-turn"),
     Approval(t.AddSeconds(1), "accept", threadId: "replay-thread", turnId: "replay-turn")
 });
-Require(replayTransition.LastSessionTransitions.Count == 2 &&
-        replayTransition.LastSessionTransitions[^1].IsRehydrated &&
+Require(replayTransition.LastSessionTransitions.Count == 3 &&
+        replayTransition.LastSessionTransitions.All(transition => transition.IsRehydrated) &&
         replayTransition.LastSessionTransitions[^1].Reason == "codex_approval_resolved",
-    "Rehydrated session transitions must be explicitly marked and cannot masquerade as live evidence.");
+    "Rehydrated typed approval lifecycle must preserve all replay transitions and cannot masquerade as live evidence.");
 var sessionJson = JsonSerializer.Serialize(new
 {
     source = "state_normalizer", @event = "session_state_changed", plane = "per_session",
