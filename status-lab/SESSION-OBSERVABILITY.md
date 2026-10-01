@@ -6,20 +6,42 @@ contains `sessionId`, `previous`, `current`, `reason`, `sourceTimestampUtc`,
 `rpcIdType`, `rpcId`). It never contains prompt text, model output, tool
 arguments, command contents, raw protocol, credentials, or reusable secrets.
 
-For live approval verification, the architect must correlate these records:
+For the required future same-session live approval verification, the architect
+must correlate these records:
 
-1. `codex_hook/PermissionRequest` for session S;
-2. `state_normalizer/session_state_changed` for the same session with
+1. `codex_stdio_bridge/approval_requested` with exact thread, turn, and item IDs;
+2. `state_normalizer/session_state_changed` for the uniquely correlated session with
    `sessionId=S`, `current=WAITING`, `reason=codex_permission_request`,
    `isRehydrated=false`;
-3. the correlated `codex_stdio_bridge/approval_resolved` record;
+3. the matching `codex_stdio_bridge/approval_resolved` record;
 4. `state_normalizer/session_state_changed` with `sessionId=S`,
    `previous=WAITING`, `current=RUNNING`, `reason=codex_approval_resolved`,
    `isRehydrated=false`;
 5. `codex_hook/PostToolUse` for the same session S, after that transition.
 
-The raw `PermissionRequest` alone is not session WAITING evidence; the
-per-session WAITING transition is required.
+The raw `PermissionRequest` alone is diagnostic/lifecycle evidence and does
+not enter WAITING. WAITING authority comes from a sanitized
+`codex_stdio_bridge/approval_requested` record with schema
+`k15-codex-approval-request/v1`, emitted for command execution and file change
+requests only after the effective reviewer for that exact turn is proven
+`user`. It must include bounded `rpcIdType`, `rpcId`, `requestFamily`,
+`approvalsReviewer` (`user` or `auto_review`), `threadId`, `turnId`, and
+`itemId`; private request payload fields are never persisted. The reducer
+independently requires `approvalsReviewer=user` and a unique active
+non-internal session matching
+the exact thread and turn. Missing or ambiguous matches fail closed. The
+permissions request family remains diagnostic-only. `auto_review`, unknown,
+or missing reviewer provenance never enters WAITING. Reviewer state comes from
+matching thread start/resume/fork responses, settings updates, and exact
+turn/start overrides; turn overrides are removed on turn completion. An
+accepted response resumes only a session already waiting from a proven user
+request and matching the typed RPC, thread, turn, and item correlation.
+
+An accepted `approval_resolved` record can move that exact WAITING session to
+RUNNING when its typed RPC ID and item match the request. Decline and cancel
+remain decisions without resume authority. `PreToolUse` and `PostToolUse` are
+independent exact resume evidence. This contract is preparatory; same-session
+live Desktop acceptance has not yet been established.
 
 For Issue #93, `codex_stdio_bridge/turn_completed` with schema
 `k15-codex-completion/v1` and status `completed` is the candidate authoritative

@@ -12,6 +12,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private const int StartupReplayMaxLines = 5000;
     private const string ApprovalSource = "codex_stdio_bridge";
     private const string ApprovalSchemaVersion = "k15-codex-approval/v1";
+    private const string ApprovalRequestSchemaVersion = "k15-codex-approval-request/v1";
     private const string CompletionSchemaVersion = "k15-codex-completion/v1";
 
     private readonly CancellationTokenSource _cts = new();
@@ -601,7 +602,36 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                     SchemaVersion: schemaVersion, ThreadId: threadId, TurnId: turnId, CompletionStatus: status);
         }
 
+        if (schemaVersion == ApprovalRequestSchemaVersion && eventName == "approval_requested")
+            return ParseApprovalRequestInput(root);
         return ParseApprovalInput(root);
+    }
+
+    private static StatusInputEvent? ParseApprovalRequestInput(JsonElement root)
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schemaVersion", "timestampUtc", "source", "event", "requestFamily", "approvalsReviewer",
+            "rpcIdType", "rpcId", "threadId", "turnId", "itemId"
+        };
+        if (root.EnumerateObject().Any(p => !allowed.Contains(p.Name) || p.Value.ValueKind != JsonValueKind.String ||
+                Encoding.UTF8.GetByteCount(p.Value.GetString() ?? string.Empty) > 1024)) return null;
+        var schema = GetBoundedString(root, "schemaVersion");
+        var family = GetBoundedString(root, "requestFamily");
+        var reviewer = GetBoundedString(root, "approvalsReviewer");
+        var rpcType = GetBoundedString(root, "rpcIdType");
+        var rpc = GetBoundedString(root, "rpcId");
+        var thread = GetBoundedString(root, "threadId");
+        var turn = GetBoundedString(root, "turnId");
+        var item = GetBoundedString(root, "itemId");
+        if (schema != ApprovalRequestSchemaVersion || GetBoundedString(root, "event") != "approval_requested" ||
+            family is not ("item/commandExecution" or "item/fileChange") || reviewer is not ("user" or "auto_review") || rpcType is not ("number" or "string") ||
+            string.IsNullOrWhiteSpace(rpc) || !CodexUnreadStateReader.Bounded(thread) ||
+            !CodexUnreadStateReader.Bounded(turn) || !CodexUnreadStateReader.Bounded(item) ||
+            !DateTimeOffset.TryParse(GetBoundedString(root, "timestampUtc"), out var timestamp)) return null;
+        return new StatusInputEvent(timestamp.ToUniversalTime(), ApprovalSource, "approval_requested",
+            SchemaVersion: schema, RpcIdType: rpcType, RpcId: rpc, ThreadId: thread, TurnId: turn,
+            ItemId: item, RequestFamily: family, ApprovalsReviewer: reviewer);
     }
 
     private static string[] SafeReadReplayLines()

@@ -10,9 +10,11 @@ const PERMISSIONS_REQUEST_FAMILY = 'item/permissions';
 
 const DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 const MAX_PENDING = 256;
+const MAX_REVIEWER_THREADS = 512;
 const MAX_PARTIAL_BYTES = 64 * 1024;
 const MAX_FIELD_BYTES = 1024;
 export const APPROVAL_SCHEMA_VERSION = 'k15-codex-approval/v1';
+export const APPROVAL_REQUEST_SCHEMA_VERSION = 'k15-codex-approval-request/v1';
 export const PERMISSIONS_APPROVAL_DIAGNOSTIC_SCHEMA_VERSION = 'k15-codex-permissions-approval-diagnostic/v1';
 export const COMPLETION_SCHEMA_VERSION = 'k15-codex-completion/v1';
 export const THREAD_STATUS_SCHEMA_VERSION = 'k15-codex-thread-status/v1';
@@ -158,6 +160,10 @@ export class ApprovalObserver {
   #clientPartial = Buffer.alloc(0);
   #sink;
   #sinkBusy = false;
+  #sinkQueue = [];
+  #reviewers = new Map();
+  #reviewerRequests = new Map();
+  #turnReviewers = new Map();
 
   constructor({ telemetrySink = () => {} } = {}) {
     this.#sink = telemetrySink;
@@ -165,13 +171,17 @@ export class ApprovalObserver {
 
   observeServerChunk(chunk) {
     this.#observeChunk(chunk, 'server', (message) => {
+      this.#observeReviewerServer(message);
       this.#trackRequest(message);
       this.#trackCompletion(message);
     });
   }
 
   observeClientChunk(chunk) {
-    this.#observeChunk(chunk, 'client', (message) => this.#resolveResponse(message));
+    this.#observeChunk(chunk, 'client', (message) => {
+      this.#observeReviewerClient(message);
+      this.#resolveResponse(message);
+    });
   }
 
   pendingCount() {
@@ -235,6 +245,73 @@ export class ApprovalObserver {
     };
     Object.assign(request, metadata);
     this.#pending.set(key, request);
+    const turnKey = JSON.stringify([metadata.threadId, metadata.turnId]);
+    const reviewer = this.#turnReviewers.has(turnKey) ? this.#turnReviewers.get(turnKey) : this.#reviewers.get(metadata.threadId);
+    if (family !== PERMISSIONS_REQUEST_FAMILY &&
+        (reviewer === 'user' || reviewer === 'auto_review') &&
+        ['threadId', 'turnId', 'itemId'].every(name => metadata[name] && Buffer.byteLength(metadata[name], 'utf8') <= 128) &&
+        Buffer.byteLength(id.value, 'utf8') <= 128) {
+      this.#emitFailOpen({
+        schemaVersion: APPROVAL_REQUEST_SCHEMA_VERSION,
+        timestampUtc: request.timestampUtc,
+        source: 'codex_stdio_bridge',
+        event: 'approval_requested',
+        requestFamily: family,
+        rpcIdType: id.type,
+        rpcId: id.value,
+        threadId: metadata.threadId,
+        turnId: metadata.turnId,
+        itemId: metadata.itemId,
+        approvalsReviewer: reviewer
+      });
+    }
+  }
+
+  #observeReviewerClient(message) {
+    if (!message || typeof message !== 'object' || Array.isArray(message) || typeof message.method !== 'string') return;
+    if (!['thread/start', 'thread/resume', 'thread/fork', 'turn/start'].includes(message.method)) return;
+    const id = rpcId(message.id); if (!id || !message.params || typeof message.params !== 'object' || Array.isArray(message.params)) return;
+    const key = `${id.type}:${id.value}`;
+    if (this.#reviewerRequests.size >= MAX_PENDING || this.#reviewerRequests.has(key)) return;
+    const requestedReviewer = message.params.approvalsReviewer;
+    this.#reviewerRequests.set(key, { method: message.method, threadId: optionalString(message.params.threadId),
+      override: message.method === 'turn/start' && Object.hasOwn(message.params, 'approvalsReviewer')
+        ? (requestedReviewer === 'user' || requestedReviewer === 'auto_review' ? requestedReviewer : null) : undefined });
+  }
+
+  #observeReviewerServer(message) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+    if (message.method === 'thread/settings/updated') {
+      const threadId = optionalString(message.params?.threadId), reviewer = message.params?.settings?.approvalsReviewer ?? message.params?.approvalsReviewer;
+      if (threadId) this.#rememberThreadReviewer(threadId, reviewer);
+      return;
+    }
+    if (message.method === 'turn/completed') {
+      const threadId = optionalString(message.params?.threadId), turnId = optionalString(message.params?.turn?.id);
+      if (threadId && turnId) this.#turnReviewers.delete(JSON.stringify([threadId, turnId]));
+      return;
+    }
+    if (Object.hasOwn(message, 'method') || !Object.hasOwn(message, 'id')) return;
+    const id = rpcId(message.id); if (!id) return;
+    const key = `${id.type}:${id.value}`, req = this.#reviewerRequests.get(key); if (!req) return;
+    this.#reviewerRequests.delete(key);
+    const result = message.result; if (!result || typeof result !== 'object' || Array.isArray(result)) return;
+    const reviewer = result.approvalsReviewer;
+    const threadId = req.method === 'turn/start' ? (req.threadId ?? optionalString(result.threadId)) : (optionalString(result.threadId) ?? optionalString(result.thread?.id));
+    if (req.method !== 'turn/start' && threadId) this.#rememberThreadReviewer(threadId, reviewer);
+    if (req.method === 'turn/start' && threadId) {
+      const turnId = optionalString(result.turnId) ?? optionalString(result.turn?.id);
+      const turnKey = JSON.stringify([threadId, turnId]);
+      if (turnId && (this.#turnReviewers.has(turnKey) || this.#turnReviewers.size < MAX_REVIEWER_THREADS))
+        this.#turnReviewers.set(turnKey, req.override !== undefined
+          ? (req.override === 'user' || req.override === 'auto_review' ? req.override : null)
+          : (reviewer === 'user' || reviewer === 'auto_review' ? reviewer : null));
+    }
+  }
+
+  #rememberThreadReviewer(threadId, reviewer) {
+    if (reviewer !== 'user' && reviewer !== 'auto_review') { this.#reviewers.delete(threadId); return; }
+    if (this.#reviewers.has(threadId) || this.#reviewers.size < MAX_REVIEWER_THREADS) this.#reviewers.set(threadId, reviewer);
   }
 
   #trackCompletion(message) {
@@ -324,20 +401,21 @@ export class ApprovalObserver {
   }
 
   #emitFailOpen(event) {
-    if (this.#sinkBusy) return;
+    if (this.#sinkQueue.length >= MAX_PENDING) return;
+    this.#sinkQueue.push(event);
+    this.#drainSinkQueue();
+  }
+
+  #drainSinkQueue() {
+    if (this.#sinkBusy || this.#sinkQueue.length === 0) return;
     this.#sinkBusy = true;
-    try {
-      const result = this.#sink(event);
-      if (result && typeof result.then === 'function') {
-        Promise.resolve(result)
-          .catch(() => {})
-          .finally(() => { this.#sinkBusy = false; });
-      } else {
-        this.#sinkBusy = false;
-      }
-    } catch {
+    const event = this.#sinkQueue.shift();
+    let result;
+    try { result = this.#sink(event); } catch { result = undefined; }
+    Promise.resolve(result).catch(() => {}).finally(() => {
       this.#sinkBusy = false;
-    }
+      this.#drainSinkQueue();
+    });
   }
 }
 
@@ -498,6 +576,11 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
     }
     for (const key of ['threadId', 'turnId', 'itemId']) {
       if (event[key]) sanitized[key] = event[key];
+    }
+    if (event.schemaVersion === APPROVAL_REQUEST_SCHEMA_VERSION && event.event === 'approval_requested' &&
+        (event.requestFamily === 'item/commandExecution' || event.requestFamily === 'item/fileChange')) {
+      sanitized.requestFamily = event.requestFamily;
+      if (event.approvalsReviewer === 'user' || event.approvalsReviewer === 'auto_review') sanitized.approvalsReviewer = event.approvalsReviewer;
     }
     if (event.schemaVersion === PERMISSIONS_APPROVAL_DIAGNOSTIC_SCHEMA_VERSION &&
         event.event === 'permissions_approval_observed') {

@@ -15,6 +15,9 @@ internal static class CodexReadAckTests
     private static StatusInputEvent Hook(string name, int second, string session = "S", string thread = "T", string turn = "U", string sourceInstanceId = "") =>
         new(T.AddSeconds(second), "codex_hook", name, SessionId: session, ThreadId: thread, TurnId: turn,
             SourceInstanceId: sourceInstanceId);
+    private static StatusInputEvent ApprovalRequest(int second, string thread = "T", string turn = "U", string item = "I", string rpc = "91", string family = "item/commandExecution", string reviewer = "user") =>
+        new(T.AddSeconds(second), "codex_stdio_bridge", "approval_requested", SchemaVersion: "k15-codex-approval-request/v1",
+            RpcIdType: "number", RpcId: rpc, ThreadId: thread, TurnId: turn, ItemId: item, RequestFamily: family, ApprovalsReviewer: reviewer);
     private static StateReducer Done(string session = "S", string thread = "T", string turn = "U")
     {
         var reducer = new StateReducer(0, T);
@@ -61,6 +64,44 @@ internal static class CodexReadAckTests
     {
         SourceIdentityTests();
         NormalizerLivenessTests();
+        var authority = new StateReducer(0, T);
+        authority.Apply(Hook("UserPromptSubmit", 1));
+        authority.Apply(Hook("PermissionRequest", 2));
+        Check(authority.State == K15NormalizedState.Running, "RAW_PERMISSION_REQUEST_NOT_WAITING");
+        authority.Apply(ApprovalRequest(3));
+        Check(authority.State == K15NormalizedState.Waiting && authority.LastSessionTransitions.Single().PermissionEvidence?.RpcId == "91" &&
+            authority.LastSessionTransitions.Single().PermissionEvidence?.RequestFamily == "item/commandExecution", "TYPED_COMMAND_REQUEST_WAITING");
+        authority.Apply(new(T.AddSeconds(4), "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1",
+            Decision: "accept", RpcIdType: "number", RpcId: "91", ThreadId: "T", TurnId: "U", ItemId: "I"));
+        Check(authority.State == K15NormalizedState.Running, "EXACT_TYPED_ACCEPT_RESUMES");
+        var automatic = new StateReducer(0, T); automatic.Apply(Hook("UserPromptSubmit", 1));
+        automatic.Apply(ApprovalRequest(2, reviewer: "auto_review"));
+        automatic.Apply(new(T.AddSeconds(3), "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "91", ThreadId: "T", TurnId: "U", ItemId: "I"));
+        Check(automatic.State == K15NormalizedState.Running, "AUTO_REVIEW_REQUEST_AND_ACCEPT_NEVER_WAIT");
+        var unknownReviewer = new StateReducer(0, T); unknownReviewer.Apply(Hook("UserPromptSubmit", 1));
+        unknownReviewer.Apply(ApprovalRequest(2, reviewer: ""));
+        Check(unknownReviewer.State == K15NormalizedState.Running, "UNKNOWN_REVIEWER_FAILS_CALM");
+        authority.Apply(ApprovalRequest(5, "T", "OTHER", "I2", "92", "item/fileChange"));
+        Check(authority.State == K15NormalizedState.Running, "WRONG_TURN_REQUEST_FAILS_CALM");
+        var replay = new StateReducer(0, T);
+        replay.Rehydrate([Hook("UserPromptSubmit", 1), ApprovalRequest(3, family: "item/fileChange")]);
+        Check(replay.State == K15NormalizedState.Waiting && replay.LastSessionTransitions.Last().Reason == "codex_permission_request",
+            "TYPED_REQUEST_REHYDRATES_DETERMINISTICALLY");
+        replay.Apply(Hook("PostToolUse", 4));
+        Check(replay.State == K15NormalizedState.Running, "POST_TOOL_USE_CLEARS_WAITING");
+        var ambiguous = new StateReducer(0, T);
+        ambiguous.Apply(Hook("UserPromptSubmit", 1, "A"));
+        ambiguous.Apply(Hook("UserPromptSubmit", 2, "B"));
+        ambiguous.Apply(ApprovalRequest(3));
+        Check(ambiguous.SessionSnapshots.All(s => s.State == K15NormalizedState.Running), "AMBIGUOUS_TYPED_REQUEST_FAILS_CALM");
+        Check(JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:01Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"approval_requested\",\"schemaVersion\":\"k15-codex-approval-request/v1\",\"requestFamily\":\"item/commandExecution\",\"rpcIdType\":\"number\",\"rpcId\":\"1\",\"threadId\":\"T\",\"turnId\":\"U\",\"itemId\":\"I\",\"command\":\"PRIVATE_MARKER\"}") is null,
+            "REQUEST_PRIVATE_PAYLOAD_REJECTED");
+        Check(JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:01Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"approval_requested\",\"schemaVersion\":\"k15-codex-approval-request/v1\",\"requestFamily\":\"item/commandExecution\",\"approvalsReviewer\":\"guardian_subagent\",\"rpcIdType\":\"number\",\"rpcId\":\"1\",\"threadId\":\"T\",\"turnId\":\"U\",\"itemId\":\"I\"}") is null,
+            "REQUEST_INVALID_REVIEWER_REJECTED");
+        Check(JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:01Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"approval_requested\",\"schemaVersion\":\"k15-codex-approval-request/v1\",\"requestFamily\":\"item/commandExecution\",\"rpcIdType\":\"number\",\"rpcId\":\"1\",\"turnId\":\"U\",\"itemId\":\"I\"}") is null &&
+            JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:01Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"approval_requested\",\"schemaVersion\":\"k15-codex-approval-request/v1\",\"requestFamily\":\"item/commandExecution\",\"rpcIdType\":\"number\",\"rpcId\":\"1\",\"threadId\":\"T\",\"itemId\":\"I\"}") is null &&
+            JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:01Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"approval_requested\",\"schemaVersion\":\"k15-codex-approval-request/v1\",\"requestFamily\":\"item/permissions\",\"rpcIdType\":\"number\",\"rpcId\":\"1\",\"threadId\":\"T\",\"turnId\":\"U\",\"itemId\":\"I\"}") is null,
+            "REQUEST_MISSING_ID_AND_PERMISSIONS_SCHEMA_REJECTED");
         Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[\"T\"]}}")) == CodexUnreadState.HasUnread, "CANONICAL_SINGLE_IDENTITY_HAS_UNREAD");
         Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[]}}")) == CodexUnreadState.NoUnread, "CANONICAL_SINGLE_IDENTITY_NO_UNREAD");
         Check(Parse(Canonical("{\"identity-a\":{\"host-a\":[\"T\"]},\"identity-b\":{\"host-a\":[]}}")) == CodexUnreadState.Unknown, "CANONICAL_MULTIPLE_IDENTITIES_UNKNOWN");
@@ -183,6 +224,7 @@ internal static class CodexReadAckTests
         Check(reducer.ApplyReadAck(Evidence(reducer, 4))?.Reason == "codex_read_ack", "ENDED_DONE_EXACT_ACK");
         reducer = Done();
         reducer.Apply(Hook("PermissionRequest", 3, "B", "TB", "UB"));
+        reducer.Apply(ApprovalRequest(4, "TB", "UB", "IB", "33"));
         Check(reducer.ApplyReadAck(Evidence(reducer, 4)) is null && reducer.LastSessionTransitions.Single().SessionId == "S" &&
             reducer.State == K15NormalizedState.Waiting && reducer.SessionSnapshots.Single(s => s.SessionId == "B").State == K15NormalizedState.Waiting,
             "A_READ_ACK_PRESERVES_UNRELATED_WAITING");

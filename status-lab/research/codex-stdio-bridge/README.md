@@ -44,9 +44,23 @@ boolean `strictAutoReview` when present. Permission payloads and all other
 request/response fields are discarded. The diagnostic is not consumed by
 Status Lab state mapping.
 
-Command/file events sent to the optional sink contain only timestamp, source,
-event name, typed sanitized RPC correlation, decision, and present
-thread/turn/item IDs. Permissions events use the separate diagnostic schema
+Valid command/file requests with bounded exact thread, turn, and item IDs emit
+`k15-codex-approval-request/v1` / `approval_requested` before the response
+when reviewer provenance for that exact turn is known as `user` or
+`auto_review`. The event contains only timestamp, source, family, reviewer
+enum, typed RPC ID, and those three opaque IDs. Unknown or malformed reviewer
+provenance emits no request event and never creates WAITING. The bridge tracks
+reviewer state from thread start/resume/fork responses, settings updates, and
+turn/start overrides scoped to the returned turn; turn state is cleared on
+completion. Status Lab enters WAITING only for `approvalsReviewer=user` and an
+exact unique active non-internal session. Raw hook `PermissionRequest` is
+diagnostic only. The
+`item/permissions` family remains diagnostic-only and never emits
+`approval_requested`.
+
+Command/file response events sent to the optional sink retain the existing
+schema and contain only timestamp, source, event name, typed sanitized RPC
+correlation, decision, and present thread/turn/item IDs. Permissions events use the separate diagnostic schema
 below and never contain permission payloads. Request payloads are parsed
 transiently to read allowlisted values but are never persisted or forwarded to
 telemetry. JSONL framing retains at most 64 KiB of an incomplete record and
@@ -122,8 +136,8 @@ transparent wrapper. It adds only bounded `data` listeners; forwarding still
 uses the Phase B native pipes and the Phase B entry point remains
 zero-observation. The optional `CODEX_BRIDGE_APPROVAL_SINK_PATH` must be an
 absolute path. When set, the observer appends only the versioned sanitized
-`k15-codex-approval/v1` event shape to that path; when absent, no side-channel
-file is created.
+request, resolution, and permissions-diagnostic event schemas to that path;
+when absent, no side-channel file is created.
 
 The live-allowlisted request families are the only protocol assumptions in this
 implementation (see the immutable upstream pin above):

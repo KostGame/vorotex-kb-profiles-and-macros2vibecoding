@@ -13,6 +13,10 @@ static StatusInputEvent Notification(DateTimeOffset t, string name, uint id, boo
 static StatusInputEvent Approval(DateTimeOffset t, string decision, string rpcId = "1", string threadId = "", string turnId = "") =>
     new(t, "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1",
         Decision: decision, RpcIdType: "number", RpcId: rpcId, ThreadId: threadId, TurnId: turnId, ItemId: "item-1");
+static StatusInputEvent TypedRequest(DateTimeOffset t, string threadId, string turnId, string rpcId = "1") =>
+    new(t, "codex_stdio_bridge", "approval_requested", SchemaVersion: "k15-codex-approval-request/v1",
+        RpcIdType: "number", RpcId: rpcId, ThreadId: threadId, TurnId: turnId, ItemId: "item-1",
+        RequestFamily: "item/commandExecution", ApprovalsReviewer: "user");
 static StatusInputEvent Completion(DateTimeOffset t, string threadId, string turnId, string status = "completed") =>
     new(t, "codex_stdio_bridge", "turn_completed", SchemaVersion: "k15-codex-completion/v1",
         CompletionStatus: status, ThreadId: threadId, TurnId: turnId);
@@ -341,13 +345,14 @@ Require(endedCompletion.Apply(Completion(t.AddSeconds(2), "thread-ended", "turn-
         endedCompletion.State == K15NormalizedState.Normal && endedCompletion.LastSessionTransitions.Count == 0,
     "Ended session must not be resurrected by completion.");
 reducer.Apply(Hook(t.AddSeconds(1), "PermissionRequest"));
-Require(reducer.State == K15NormalizedState.Waiting, "PermissionRequest must enter WAITING.");
+Require(reducer.State == K15NormalizedState.Running, "Raw PermissionRequest must remain diagnostic-only.");
 var resolved = reducer.Apply(Approval(t.AddSeconds(1), "accept", turnId: "turn-approval"));
 Require(resolved is null && reducer.State == K15NormalizedState.Waiting,
     "An approval without exact turn/thread correlation must not infer RUNNING.");
 var exactApproval = new StateReducer();
-exactApproval.Apply(Hook(t, "UserPromptSubmit", turn: "turn-approval"));
+exactApproval.Apply(Hook(t, "UserPromptSubmit", turn: "turn-approval", thread: "thread-approval"));
 exactApproval.Apply(Hook(t.AddSeconds(1), "PermissionRequest", turn: "turn-approval"));
+exactApproval.Apply(TypedRequest(t.AddSeconds(1), "thread-approval", "turn-approval"));
 Require(exactApproval.LastSessionTransitions.Count == 1 &&
         exactApproval.LastSessionTransitions[0].SessionId == "session-main" &&
         exactApproval.LastSessionTransitions[0].Previous == K15NormalizedState.Running &&
