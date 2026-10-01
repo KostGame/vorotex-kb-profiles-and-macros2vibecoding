@@ -35,7 +35,7 @@ static string HookJson(DateTimeOffset timestamp, string eventName, string? sessi
 var t = DateTimeOffset.Parse("2026-08-25T00:00:00Z");
 var reducer = new StateReducer();
 Require(reducer.State == K15NormalizedState.Normal, "Initial state must be NORMAL.");
-reducer.Apply(Hook(t, "UserPromptSubmit"));
+reducer.Apply(Hook(t, "UserPromptSubmit", turn: "turn-approval", thread: "thread-approval"));
 Require(reducer.State == K15NormalizedState.Running, "UserPromptSubmit must enter RUNNING.");
 Require(reducer.FocusedSessionId == "session-main", "Main task session must become focused.");
 var noStop = new StateReducer();
@@ -121,8 +121,8 @@ Require(fallbackAfterAck.Apply(Completion(t.AddSeconds(2), "fallback-ack", "fall
 Console.WriteLine("SESSION_ID_FALLBACK_AFTER_ACK_BLOCKED=PASS");
 
 var fallbackWaiting = new StateReducer();
-fallbackWaiting.Apply(Hook(t, "UserPromptSubmit", "fallback-waiting", turn: "fallback-waiting-turn"));
-fallbackWaiting.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "fallback-waiting", turn: "fallback-waiting-turn"));
+fallbackWaiting.Apply(Hook(t, "UserPromptSubmit", "fallback-waiting", turn: "fallback-waiting-turn", thread: "fallback-waiting-thread"));
+fallbackWaiting.Apply(TypedRequest(t.AddSeconds(1), "fallback-waiting-thread", "fallback-waiting-turn"));
 Require(fallbackWaiting.Apply(Completion(t.AddSeconds(2), "fallback-waiting", "fallback-waiting-turn")) is null &&
         fallbackWaiting.State == K15NormalizedState.Waiting && fallbackWaiting.LastSessionTransitions.Count == 0,
     "Fallback completion must not auto-complete WAITING.");
@@ -212,7 +212,8 @@ Require(ambiguous.Apply(Completion(t.AddSeconds(2), "thread-ambiguous", "turn-am
     "Multiple matching sessions must fail closed.");
 var parallelPriority = new StateReducer();
 parallelPriority.Apply(Hook(t, "UserPromptSubmit", "parallel-A", turn: "turn-parallel-A", thread: "thread-parallel-A"));
-parallelPriority.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "parallel-B", turn: "turn-parallel-B", thread: "thread-parallel-B"));
+parallelPriority.Apply(Hook(t.AddMilliseconds(500), "UserPromptSubmit", "parallel-B", turn: "turn-parallel-B", thread: "thread-parallel-B"));
+parallelPriority.Apply(TypedRequest(t.AddSeconds(1), "thread-parallel-B", "turn-parallel-B"));
 var parallelTransition = parallelPriority.Apply(Completion(t.AddSeconds(2), "thread-parallel-A", "turn-parallel-A"));
 Require(parallelTransition is null && parallelPriority.State == K15NormalizedState.Waiting &&
         parallelPriority.SessionSnapshots.Single(s => s.SessionId == "parallel-A").State == K15NormalizedState.DonePendingAttention &&
@@ -250,26 +251,20 @@ Require(richPermission?.ToolName == "Bash" && richPermission.PermissionMode == "
     "Permission metadata parser must preserve only bounded structured fields.");
 var richPermissionReducer = new StateReducer();
 richPermissionReducer.Apply(richPermission!);
-var richPermissionTransition = richPermissionReducer.LastSessionTransitions.Single();
-Require(richPermissionReducer.State == K15NormalizedState.Waiting &&
-        richPermissionTransition.PermissionEvidence?.ToolName == "Bash" &&
-        richPermissionTransition.PermissionEvidence.PermissionMode == "default" &&
-        richPermissionTransition.PermissionEvidence.ToolNamePresent &&
-        richPermissionTransition.PermissionEvidence.PermissionModePresent,
-    "Rich PermissionRequest metadata must not change WAITING semantics.");
+Require(richPermissionReducer.State == K15NormalizedState.Normal && richPermissionReducer.LastSessionTransitions.Count == 0,
+    "Rich raw PermissionRequest metadata must remain diagnostic-only.");
 var plainPermission = JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:00Z\",\"source\":\"codex_hook\",\"event\":\"PermissionRequest\",\"sessionId\":\"plain-session\",\"turnId\":\"plain-turn\"}");
 var plainPermissionReducer = new StateReducer();
 plainPermissionReducer.Apply(plainPermission!);
 Require(plainPermission?.ToolName == "" && plainPermission?.PermissionMode == "" &&
-        plainPermissionReducer.State == K15NormalizedState.Waiting &&
-        plainPermissionReducer.LastSessionTransitions.Single().PermissionEvidence is { ToolName: "", PermissionMode: "", ToolNamePresent: false, PermissionModePresent: false },
-    "Missing PermissionRequest metadata must remain explicit and preserve WAITING semantics.");
+        plainPermissionReducer.State == K15NormalizedState.Normal && plainPermissionReducer.LastSessionTransitions.Count == 0,
+    "Missing raw PermissionRequest metadata must remain diagnostic-only.");
 var oversizedPermission = JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:00Z\",\"source\":\"codex_hook\",\"event\":\"PermissionRequest\",\"sessionId\":\"bounded-session\",\"turnId\":\"bounded-turn\",\"toolName\":\"" + new string('x', 129) + "\",\"permissionMode\":\"default\"}");
 var oversizedPermissionReducer = new StateReducer();
 oversizedPermissionReducer.Apply(oversizedPermission!);
-Require(oversizedPermission?.ToolName == "" &&
-        oversizedPermissionReducer.LastSessionTransitions.Single().PermissionEvidence is { ToolName: "", ToolNamePresent: true },
-    "Oversized PermissionRequest metadata must be bounded without changing WAITING semantics.");
+Require(oversizedPermission?.ToolName == "" && oversizedPermissionReducer.State == K15NormalizedState.Normal &&
+        oversizedPermissionReducer.LastSessionTransitions.Count == 0,
+    "Oversized raw PermissionRequest metadata must be bounded and diagnostic-only.");
 var journalFixture = Path.Combine(Path.GetTempPath(), "vorotex-k15-event-journal-" + Guid.NewGuid().ToString("N"));
 try
 {
@@ -335,7 +330,7 @@ finally
 }
 var waitingCompletion = new StateReducer();
 waitingCompletion.Apply(Hook(t, "UserPromptSubmit", "waiting-completion", turn: "turn-waiting", thread: "thread-waiting"));
-waitingCompletion.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "waiting-completion", turn: "turn-waiting", thread: "thread-waiting"));
+waitingCompletion.Apply(TypedRequest(t.AddSeconds(1), "thread-waiting", "turn-waiting"));
 Require(waitingCompletion.Apply(Completion(t.AddSeconds(2), "thread-waiting", "turn-waiting")) is null &&
         waitingCompletion.State == K15NormalizedState.Waiting && waitingCompletion.LastSessionTransitions.Count == 0,
     "WAITING must not be treated as successful completion automatically.");
@@ -347,12 +342,12 @@ Require(endedCompletion.Apply(Completion(t.AddSeconds(2), "thread-ended", "turn-
     "Ended session must not be resurrected by completion.");
 reducer.Apply(Hook(t.AddSeconds(1), "PermissionRequest"));
 Require(reducer.State == K15NormalizedState.Running, "Raw PermissionRequest must remain diagnostic-only.");
-var resolved = reducer.Apply(Approval(t.AddSeconds(1), "accept", turnId: "turn-approval"));
+reducer.Apply(TypedRequest(t.AddSeconds(1.5), "thread-approval", "turn-approval"));
+var resolved = reducer.Apply(Approval(t.AddSeconds(1.75), "accept", turnId: "turn-approval"));
 Require(resolved is null && reducer.State == K15NormalizedState.Waiting,
     "An approval without exact turn/thread correlation must not infer RUNNING.");
 var exactApproval = new StateReducer();
 exactApproval.Apply(Hook(t, "UserPromptSubmit", turn: "turn-approval", thread: "thread-approval"));
-exactApproval.Apply(Hook(t.AddSeconds(1), "PermissionRequest", turn: "turn-approval"));
 exactApproval.Apply(TypedRequest(t.AddSeconds(1), "thread-approval", "turn-approval"));
 Require(exactApproval.LastSessionTransitions.Count == 1 &&
         exactApproval.LastSessionTransitions[0].SessionId == "session-main" &&
@@ -361,7 +356,7 @@ Require(exactApproval.LastSessionTransitions.Count == 1 &&
         exactApproval.LastSessionTransitions[0].Reason == "codex_permission_request" &&
         !exactApproval.LastSessionTransitions[0].IsRehydrated,
     "Single-session approval must provide explicit live WAITING evidence before approval resolution.");
-var bridgeTransition = exactApproval.Apply(Approval(t.AddSeconds(2), "accept", turnId: "turn-approval"));
+var bridgeTransition = exactApproval.Apply(Approval(t.AddSeconds(2), "accept", threadId: "thread-approval", turnId: "turn-approval"));
 Require(bridgeTransition?.Current == K15NormalizedState.Running &&
         bridgeTransition.Reason == "codex_approval_resolved" && exactApproval.State == K15NormalizedState.Running,
     "Exact sanitized accept must resume the matching WAITING session immediately.");
@@ -373,10 +368,10 @@ Require(exactApproval.LastSessionTransitions.Count == 1 &&
         !exactApproval.LastSessionTransitions[0].IsRehydrated,
     "Accepted approval must emit exactly one live same-session WAITING to RUNNING transition.");
 var doneHold = new StateReducer();
-doneHold.Apply(Hook(t, "UserPromptSubmit", "session-a", turn: "turn-a"));
-doneHold.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "session-a", turn: "turn-a"));
+doneHold.Apply(Hook(t, "UserPromptSubmit", "session-a", turn: "turn-a", thread: "thread-a"));
+doneHold.Apply(TypedRequest(t.AddSeconds(1), "thread-a", "turn-a"));
 doneHold.Apply(Hook(t.AddSeconds(2), "Stop", "session-b", turn: "turn-b"));
-var doneHoldApproval = doneHold.Apply(Approval(t.AddSeconds(3), "accept", turnId: "turn-a"));
+var doneHoldApproval = doneHold.Apply(Approval(t.AddSeconds(3), "accept", threadId: "thread-a", turnId: "turn-a"));
 Require(doneHoldApproval?.Current == K15NormalizedState.DonePendingAttention &&
         doneHold.State == K15NormalizedState.DonePendingAttention &&
         doneHold.LastSessionTransitions.Count == 1 &&
@@ -384,9 +379,11 @@ Require(doneHoldApproval?.Current == K15NormalizedState.DonePendingAttention &&
         doneHold.LastSessionTransitions[0].Reason == "codex_approval_resolved",
     "Per-session approval evidence must publish while DONE_UNREAD keeps the aggregate state.");
 var twoWaiting = new StateReducer();
-twoWaiting.Apply(Hook(t, "PermissionRequest", "session-a", turn: "turn-a"));
-twoWaiting.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "session-b", turn: "turn-b"));
-var unchangedApproval = twoWaiting.Apply(Approval(t.AddSeconds(2), "accept", turnId: "turn-a"));
+twoWaiting.Apply(Hook(t, "UserPromptSubmit", "session-a", turn: "turn-a", thread: "thread-a"));
+twoWaiting.Apply(TypedRequest(t.AddSeconds(1), "thread-a", "turn-a"));
+twoWaiting.Apply(Hook(t.AddMilliseconds(1100), "UserPromptSubmit", "session-b", turn: "turn-b", thread: "thread-b"));
+twoWaiting.Apply(TypedRequest(t.AddMilliseconds(1500), "thread-b", "turn-b", "2"));
+var unchangedApproval = twoWaiting.Apply(Approval(t.AddSeconds(2), "accept", threadId: "thread-a", turnId: "turn-a"));
 Require(unchangedApproval is null && twoWaiting.State == K15NormalizedState.Waiting &&
         twoWaiting.LastSessionTransitions.Count == 1 &&
         twoWaiting.LastSessionTransitions[0].SessionId == "session-a" &&
@@ -395,8 +392,9 @@ Require(unchangedApproval is null && twoWaiting.State == K15NormalizedState.Wait
 var replayTransition = new StateReducer();
 replayTransition.Rehydrate(new[]
 {
-    Hook(t, "PermissionRequest", "replay-session", turn: "replay-turn"),
-    Approval(t.AddSeconds(1), "accept", turnId: "replay-turn")
+    Hook(t, "UserPromptSubmit", "replay-session", turn: "replay-turn", thread: "replay-thread"),
+    TypedRequest(t.AddMilliseconds(1), "replay-thread", "replay-turn"),
+    Approval(t.AddSeconds(1), "accept", threadId: "replay-thread", turnId: "replay-turn")
 });
 Require(replayTransition.LastSessionTransitions.Count == 2 &&
         replayTransition.LastSessionTransitions[^1].IsRehydrated &&
@@ -414,27 +412,27 @@ foreach (var forbidden in new[] { "prompt", "modelOutput", "toolArguments", "com
         $"Per-session event contract must not contain {forbidden}.");
 
 var sessionDecision = new StateReducer();
-sessionDecision.Apply(Hook(t, "UserPromptSubmit", turn: "turn-decision"));
-sessionDecision.Apply(Hook(t.AddSeconds(1), "PermissionRequest", turn: "turn-decision"));
-sessionDecision.Apply(Approval(t.AddSeconds(2), "decline", rpcId: "2", turnId: "turn-decision"));
+sessionDecision.Apply(Hook(t, "UserPromptSubmit", turn: "turn-decision", thread: "thread-decision"));
+sessionDecision.Apply(TypedRequest(t.AddSeconds(1), "thread-decision", "turn-decision", "4"));
+sessionDecision.Apply(Approval(t.AddSeconds(2), "decline", rpcId: "4", threadId: "thread-decision", turnId: "turn-decision"));
 Require(sessionDecision.State == K15NormalizedState.Waiting,
     "decline must remain distinct and must not map to RUNNING.");
-sessionDecision.Apply(Approval(t.AddSeconds(3), "cancel", rpcId: "3", turnId: "turn-decision"));
+sessionDecision.Apply(Approval(t.AddSeconds(3), "cancel", rpcId: "4", threadId: "thread-decision", turnId: "turn-decision"));
 Require(sessionDecision.State == K15NormalizedState.Waiting,
     "cancel must remain distinct and must not map to RUNNING.");
-sessionDecision.Apply(Approval(t.AddSeconds(4), "acceptForSession", rpcId: "4", turnId: "turn-decision"));
+sessionDecision.Apply(Approval(t.AddSeconds(4), "acceptForSession", rpcId: "4", threadId: "thread-decision", turnId: "turn-decision"));
 Require(sessionDecision.State == K15NormalizedState.Running,
     "acceptForSession must resume the exact waiting session.");
 
 var parallelApprovals = new StateReducer();
-parallelApprovals.Apply(Hook(t, "UserPromptSubmit", "session-a", turn: "turn-a"));
-parallelApprovals.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "session-a", turn: "turn-a"));
-parallelApprovals.Apply(Hook(t.AddSeconds(2), "UserPromptSubmit", "session-b", turn: "turn-b"));
-parallelApprovals.Apply(Hook(t.AddSeconds(3), "PermissionRequest", "session-b", turn: "turn-b"));
-parallelApprovals.Apply(Approval(t.AddSeconds(4), "accept", rpcId: "5", turnId: "turn-b"));
+parallelApprovals.Apply(Hook(t, "UserPromptSubmit", "session-a", turn: "turn-a", thread: "thread-a"));
+parallelApprovals.Apply(TypedRequest(t.AddSeconds(1), "thread-a", "turn-a"));
+parallelApprovals.Apply(Hook(t.AddSeconds(2), "UserPromptSubmit", "session-b", turn: "turn-b", thread: "thread-b"));
+parallelApprovals.Apply(TypedRequest(t.AddSeconds(3), "thread-b", "turn-b", "5"));
+parallelApprovals.Apply(Approval(t.AddSeconds(4), "accept", rpcId: "5", threadId: "thread-b", turnId: "turn-b"));
 Require(parallelApprovals.Snapshot.ApprovalWaitingCount == 1 && parallelApprovals.Snapshot.RunningCount == 1,
     "Parallel approvals must resolve only the matching turn.");
-Require(parallelApprovals.Apply(Approval(t.AddSeconds(5), "accept", rpcId: "6", turnId: "turn-a"))?.Current == K15NormalizedState.Running,
+Require(parallelApprovals.Apply(Approval(t.AddSeconds(5), "accept", rpcId: "1", threadId: "thread-a", turnId: "turn-a"))?.Current == K15NormalizedState.Running,
     "The second parallel approval must resolve independently.");
 Require(parallelApprovals.Apply(new StatusInputEvent(t.AddSeconds(6), "codex_stdio_bridge", "serverRequest/resolved",
         SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "7", TurnId: "turn-a")) is null,
@@ -459,8 +457,8 @@ Require(JournalStateNormalizer.ParseInput("""
 var approvalTransition = reducer.Apply(Hook(t.AddSeconds(2), "PreToolUse"));
 Require(reducer.State == K15NormalizedState.Running, "PreToolUse must resume RUNNING immediately after in-Codex approval.");
 Require(approvalTransition?.Reason == "codex_pre_tool_use", "PreToolUse approval transition reason changed.");
-reducer.Apply(Hook(t.AddSeconds(3), "PermissionRequest"));
-Require(reducer.State == K15NormalizedState.Waiting, "Second PermissionRequest must enter WAITING.");
+reducer.Apply(TypedRequest(t.AddSeconds(3), "thread-approval", "turn-approval", "2"));
+Require(reducer.State == K15NormalizedState.Waiting, "Second typed approval request must enter WAITING.");
 reducer.Apply(Hook(t.AddSeconds(4), "PostToolUse"));
 Require(reducer.State == K15NormalizedState.Running, "PostToolUse remains a fallback RUNNING confirmation.");
 reducer.Apply(Hook(t.AddSeconds(5), "Stop"));
@@ -472,8 +470,8 @@ Require(reducer.State == K15NormalizedState.DonePendingAttention,
     "Removing a completion toast must never acknowledge DONE_UNREAD.");
 
 var manual = new StateReducer();
-manual.Apply(Hook(t, "UserPromptSubmit", "manual-main"));
-manual.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "manual-main"));
+manual.Apply(Hook(t, "UserPromptSubmit", "manual-main", turn: "manual-turn", thread: "manual-thread"));
+manual.Apply(TypedRequest(t.AddSeconds(1), "manual-thread", "manual-turn"));
 Require(manual.State == K15NormalizedState.Waiting, "Manual-reset setup must be WAITING.");
 var manualTransition = manual.Acknowledge(t.AddSeconds(2));
 Require(manualTransition?.Current == K15NormalizedState.Normal && manual.State == K15NormalizedState.Normal,
@@ -490,8 +488,8 @@ Require(preStop.State == K15NormalizedState.DonePendingAttention,
     "Removing a pre-Stop completion toast must not resolve DONE_UNREAD.");
 
 var timeout = new StateReducer(30);
-timeout.Apply(Hook(t, "UserPromptSubmit", "timeout-main"));
-timeout.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "timeout-main"));
+timeout.Apply(Hook(t, "UserPromptSubmit", "timeout-main", turn: "timeout-turn", thread: "timeout-thread"));
+timeout.Apply(TypedRequest(t.AddSeconds(1), "timeout-thread", "timeout-turn"));
 Require(timeout.Tick(t.AddSeconds(30.9)) is null && timeout.State == K15NormalizedState.Waiting,
     "WAITING stale reset must not fire before 30 seconds from the waiting transition.");
 var timeoutTransition = timeout.Tick(t.AddSeconds(31.1));
@@ -506,8 +504,8 @@ Require(doneTimeout.Tick(t.AddDays(2)) is null && doneTimeout.State == K15Normal
 
 var mixedTimeout = new StateReducer(30);
 mixedTimeout.Apply(Hook(t, "Stop", "mixed-done"));
-mixedTimeout.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "mixed-waiting"));
-mixedTimeout.Apply(Hook(t.AddSeconds(2), "PermissionRequest", "mixed-waiting"));
+mixedTimeout.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "mixed-waiting", turn: "mixed-turn", thread: "mixed-thread"));
+mixedTimeout.Apply(TypedRequest(t.AddSeconds(2), "mixed-thread", "mixed-turn"));
 var mixedTimeoutTransition = mixedTimeout.Tick(t.AddSeconds(32.1));
 Require(mixedTimeoutTransition?.Current == K15NormalizedState.DonePendingAttention &&
         mixedTimeoutTransition.Reason == "stale_attention_timeout" &&
@@ -517,8 +515,8 @@ Require(mixedTimeoutTransition?.Current == K15NormalizedState.DonePendingAttenti
 
 var ackEpoch = new StateReducer(30);
 ackEpoch.Apply(Hook(t, "Stop", "ack-done"));
-ackEpoch.Apply(Hook(t.AddSeconds(10), "UserPromptSubmit", "ack-waiting"));
-ackEpoch.Apply(Hook(t.AddSeconds(10), "PermissionRequest", "ack-waiting"));
+ackEpoch.Apply(Hook(t.AddSeconds(10), "UserPromptSubmit", "ack-waiting", turn: "ack-turn", thread: "ack-thread"));
+ackEpoch.Apply(TypedRequest(t.AddSeconds(10), "ack-thread", "ack-turn"));
 Require(ackEpoch.Snapshot.StaleResetDueUtc == t.AddSeconds(40),
     "WAITING must establish its stale timeout epoch.");
 ackEpoch.Acknowledge("ack-waiting", t.AddSeconds(20));
@@ -526,8 +524,8 @@ Require(ackEpoch.State == K15NormalizedState.DonePendingAttention && ackEpoch.Sn
         ackEpoch.Snapshot.ApprovalWaitingCount == 0 && ackEpoch.Snapshot.NoRunningSinceUtc is null &&
         ackEpoch.Snapshot.StaleResetDueUtc is null,
     "Session acknowledgement must clear the last WAITING timer while retaining DONE.");
-ackEpoch.Apply(Hook(t.AddSeconds(1000), "UserPromptSubmit", "ack-new-waiting"));
-ackEpoch.Apply(Hook(t.AddSeconds(1001), "PermissionRequest", "ack-new-waiting"));
+ackEpoch.Apply(Hook(t.AddSeconds(1000), "UserPromptSubmit", "ack-new-waiting", turn: "ack-new-turn", thread: "ack-new-thread"));
+ackEpoch.Apply(TypedRequest(t.AddSeconds(1001), "ack-new-thread", "ack-new-turn"));
 Require(ackEpoch.Snapshot.StaleResetDueUtc == t.AddSeconds(1031),
     "A later WAITING must start a fresh stale timeout epoch.");
 Require(ackEpoch.Tick(t.AddSeconds(1030.9)) is null &&
@@ -540,8 +538,8 @@ Require(ackEpoch.SessionSnapshots.Single(session => session.SessionId == "ack-ne
 
 var sessionEndEpoch = new StateReducer(30);
 sessionEndEpoch.Apply(Hook(t, "Stop", "end-done"));
-sessionEndEpoch.Apply(Hook(t.AddSeconds(10), "UserPromptSubmit", "end-waiting"));
-sessionEndEpoch.Apply(Hook(t.AddSeconds(11), "PermissionRequest", "end-waiting"));
+sessionEndEpoch.Apply(Hook(t.AddSeconds(10), "UserPromptSubmit", "end-waiting", turn: "end-turn", thread: "end-thread"));
+sessionEndEpoch.Apply(TypedRequest(t.AddSeconds(11), "end-thread", "end-turn"));
 sessionEndEpoch.Apply(Hook(t.AddSeconds(20), "SessionEnd", "end-waiting"));
 Require(sessionEndEpoch.Snapshot.DoneUnreadCount == 1 && sessionEndEpoch.Snapshot.ApprovalWaitingCount == 0 &&
         sessionEndEpoch.Snapshot.NoRunningSinceUtc is null && sessionEndEpoch.Snapshot.StaleResetDueUtc is null,
@@ -565,8 +563,8 @@ Require(parallel.State == K15NormalizedState.Running && parallel.FocusedSessionI
 var rehydrated = new StateReducer();
 rehydrated.Rehydrate(new[]
 {
-    Hook(t, "UserPromptSubmit", "rehydrate-main", @"D:\AI_AGENT_PROJECTS\rehydrate"),
-    Hook(t.AddSeconds(1), "PermissionRequest", "rehydrate-main", @"D:\AI_AGENT_PROJECTS\rehydrate"),
+    Hook(t, "UserPromptSubmit", "rehydrate-main", @"D:\AI_AGENT_PROJECTS\rehydrate", "rehydrate-turn", "rehydrate-thread"),
+    TypedRequest(t.AddSeconds(1), "rehydrate-thread", "rehydrate-turn"),
     Hook(t.AddSeconds(2), "PreToolUse", "rehydrate-main", @"D:\AI_AGENT_PROJECTS\rehydrate"),
     Hook(t.AddSeconds(3), "UserPromptSubmit", "rehydrate-memory", @"C:\Users\Desktop\.codex-agentloop\memories"),
     Hook(t.AddSeconds(4), "SessionEnd", "rehydrate-memory", @"C:\Users\Desktop\.codex-agentloop\memories")
@@ -582,8 +580,8 @@ var ledger = new StateReducer(30);
 ledger.Apply(Hook(t, "UserPromptSubmit", "A"));
 ledger.Apply(Hook(t.AddSeconds(1), "UserPromptSubmit", "B"));
 ledger.Apply(Hook(t.AddSeconds(2), "Stop", "B"));
-ledger.Apply(Hook(t.AddSeconds(3), "UserPromptSubmit", "C"));
-ledger.Apply(Hook(t.AddSeconds(4), "PermissionRequest", "C"));
+ledger.Apply(Hook(t.AddSeconds(3), "UserPromptSubmit", "C", turn: "turn-C", thread: "thread-C"));
+ledger.Apply(TypedRequest(t.AddSeconds(4), "thread-C", "turn-C"));
 var snapshot = ledger.Snapshot;
 Require(snapshot.RunningCount == 1 && snapshot.DoneUnreadCount == 1 && snapshot.ApprovalWaitingCount == 1 &&
         snapshot.AggregateState == K15NormalizedState.Waiting,
@@ -606,7 +604,8 @@ Require(unrelated.Snapshot.DoneUnreadCount == 1 && unrelated.State == K15Normali
 var priority = new StateReducer();
 for (var i = 0; i < 10; i++) priority.Apply(Hook(t.AddSeconds(i), "UserPromptSubmit", $"run-{i}"));
 for (var i = 0; i < 3; i++) priority.Apply(Hook(t.AddSeconds(11 + i), "Stop", $"done-{i}"));
-priority.Apply(Hook(t.AddSeconds(20), "PermissionRequest", "approval"));
+priority.Apply(Hook(t.AddSeconds(19), "UserPromptSubmit", "approval", turn: "priority-turn", thread: "priority-thread"));
+priority.Apply(TypedRequest(t.AddSeconds(20), "priority-thread", "priority-turn"));
 Require(priority.State == K15NormalizedState.Waiting, "Scenario C: approval must outrank all other attention.");
 
 var blockedTimer = new StateReducer(30);
@@ -644,8 +643,8 @@ replayLedger.Rehydrate(new[]
     Hook(t, "UserPromptSubmit", "A"),
     Hook(t.AddSeconds(1), "UserPromptSubmit", "B"),
     Hook(t.AddSeconds(2), "Stop", "B"),
-    Hook(t.AddSeconds(3), "UserPromptSubmit", "C"),
-    Hook(t.AddSeconds(4), "PermissionRequest", "C")
+    Hook(t.AddSeconds(3), "UserPromptSubmit", "C", turn: "turn-C", thread: "thread-C"),
+    TypedRequest(t.AddSeconds(4), "thread-C", "turn-C")
 });
 Require(replayLedger.Snapshot.RunningCount == 1 && replayLedger.Snapshot.DoneUnreadCount == 1 &&
         replayLedger.Snapshot.ApprovalWaitingCount == 1 && replayLedger.State == K15NormalizedState.Waiting,
@@ -664,8 +663,7 @@ Require(livenessRunningTransition?.Reason == "codex_desktop_not_running" &&
 
 var livenessWaiting = new StateReducer();
 livenessWaiting.Apply(Hook(t, "UserPromptSubmit", "ghost-waiting", turn: "wait-turn", thread: "wait-thread"));
-livenessWaiting.Apply(Hook(t.AddSeconds(1), "PermissionRequest", "ghost-waiting",
-    turn: "wait-turn", thread: "wait-thread"));
+livenessWaiting.Apply(TypedRequest(t.AddSeconds(1), "wait-thread", "wait-turn"));
 livenessWaiting.ReconcileLiveness(CodexLivenessState.NotRunning, t.AddSeconds(10));
 Require(livenessWaiting.State == K15NormalizedState.Normal &&
         livenessWaiting.SessionSnapshots.Count == 0 &&
