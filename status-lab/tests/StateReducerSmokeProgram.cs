@@ -7,16 +7,17 @@ static void Require(bool condition, string message)
 }
 
 static StatusInputEvent Hook(DateTimeOffset t, string name, string session = "session-main", string cwd = @"C:\work\main", string turn = "", string thread = "") =>
-    new(t, "codex_hook", name, SessionId: session, TurnId: turn, Cwd: cwd, ThreadId: thread);
+    new(t, "codex_hook", name, SessionId: session, TurnId: turn, Cwd: cwd, ThreadId: thread, SourceInstanceId: "local:fc48c8bff668af187c6ae9b203b3321c");
 static StatusInputEvent Notification(DateTimeOffset t, string name, uint id, bool error = false) =>
     new(t, "windows_notification", name, id, "OpenAI.Codex_test", error);
 static StatusInputEvent Approval(DateTimeOffset t, string decision, string rpcId = "1", string threadId = "", string turnId = "") =>
     new(t, "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1",
-        Decision: decision, RpcIdType: "number", RpcId: rpcId, ThreadId: threadId, TurnId: turnId, ItemId: "item-1");
+        Decision: decision, RpcIdType: "number", RpcId: rpcId, ThreadId: threadId, TurnId: turnId, ItemId: "item-1",
+        SourceInstanceId: "local:fc48c8bff668af187c6ae9b203b3321c");
 static StatusInputEvent TypedRequest(DateTimeOffset t, string threadId, string turnId, string rpcId = "1") =>
     new(t, "codex_stdio_bridge", "approval_requested", SchemaVersion: "k15-codex-approval-request/v1",
         RpcIdType: "number", RpcId: rpcId, ThreadId: threadId, TurnId: turnId, ItemId: "item-1",
-        RequestFamily: "item/commandExecution", ApprovalsReviewer: "user");
+        RequestFamily: "item/commandExecution", ApprovalsReviewer: "user", SourceInstanceId: "local:fc48c8bff668af187c6ae9b203b3321c");
 static StatusInputEvent Completion(DateTimeOffset t, string threadId, string turnId, string status = "completed") =>
     new(t, "codex_stdio_bridge", "turn_completed", SchemaVersion: "k15-codex-completion/v1",
         CompletionStatus: status, ThreadId: threadId, TurnId: turnId);

@@ -32,7 +32,7 @@ Command execution and file change requests retain the existing contract:
 ```
 
 
-Those two families are correlated by method family, typed top-level JSON-RPC id, and present threadId/turnId/itemId metadata; number 1 and string "1" cannot alias. Only safe integer numbers and bounded non-empty strings are supported. Their live response has no method and must contain an object result.decision with one of accept, acceptForSession, decline, or cancel. The old fixture-only respondApproval/params.requestId model is REMOVED and never resolves a live pending request.
+Those two families are correlated by method family, typed top-level JSON-RPC id, and present threadId/turnId/itemId metadata; number 1 and string "1" cannot alias. A pending id may be used once across request families: reuse with different metadata is ignored and preserves the first exact correlation. Only safe integer numbers and bounded non-empty strings are supported. Their live response has no method and must contain an object result.decision with one of accept, acceptForSession, decline, or cancel. The old fixture-only respondApproval/params.requestId model is REMOVED and never resolves a live pending request.
 
 The permissions family has its own exact correlation path and requires all
 three bounded request identifiers. Only an unambiguous same-typed RPC id,
@@ -48,7 +48,11 @@ Valid command/file requests with bounded exact thread, turn, and item IDs emit
 `k15-codex-approval-request/v1` / `approval_requested` before the response
 when reviewer provenance for that exact turn is known as `user` or
 `auto_review`. The event contains only timestamp, source, family, reviewer
-enum, typed RPC ID, and those three opaque IDs. Unknown or malformed reviewer
+enum, typed RPC ID, those three opaque IDs, and a bounded `sourceInstanceId`
+(`local:` plus 32 lowercase hex characters) derived from the effective Codex
+home. The raw home path is never persisted. On Windows, `CODEX_HOME` is used
+when set and `%USERPROFILE%\\.codex` semantics are used otherwise. Identity
+derivation fails closed for unsupported or non-ASCII canonical paths. Unknown or malformed reviewer
 provenance emits no request event and never creates WAITING. The bridge tracks
 reviewer state from thread start/resume/fork responses, settings updates, and
 turn/start overrides scoped to the returned turn; turn state is cleared on
@@ -58,14 +62,19 @@ diagnostic only. The
 `item/permissions` family remains diagnostic-only and never emits
 `approval_requested`.
 
-Command/file response events sent to the optional sink retain the existing
-schema and contain only timestamp, source, event name, typed sanitized RPC
-correlation, decision, and present thread/turn/item IDs. Permissions events use the separate diagnostic schema
+Command/file response events sent to the optional sink contain only timestamp,
+source, event name, typed sanitized RPC correlation, decision, exact source
+identity for an admitted owner-wait request, and present thread/turn/item IDs.
+Status Lab requires exact source identity on both request and resolution; a
+legacy resolution without it is diagnostic only. Permissions events use the separate diagnostic schema
 below and never contain permission payloads. Request payloads are parsed
 transiently to read allowlisted values but are never persisted or forwarded to
 telemetry. JSONL framing retains at most 64 KiB of an incomplete record and
-256 pending IDs. The sink has at most one asynchronous write in flight; errors
-and overload drop telemetry without blocking the pipes.
+256 pending IDs. Owner-wait events use a bounded 512-entry lane backed by 256
+request credits, reserving one matching resolution slot for each admitted
+request; general telemetry has a separate bounded 256-entry lane. The sink has
+at most one asynchronous write in flight; errors and general telemetry
+overload remain fail-open without blocking the pipes.
 
 ## Configuration boundary
 
@@ -146,7 +155,9 @@ implementation (see the immutable upstream pin above):
 - item/fileChange/requestApproval with a top-level id
 - item/permissions/requestApproval with a top-level id
 
-Correlation is keyed by exact typed top-level RPC id plus family; `accept`,
+Correlation is keyed by exact typed top-level RPC id and family; while an id
+is pending, reuse across metadata or request families is ignored and the first
+correlation remains authoritative. `accept`,
 `acceptForSession`, `decline`, and `cancel` stay distinct. The legacy fixture-only
 respondApproval/params.requestId shape is REMOVED and never resolves a live
 pending request. The sanitized event uses rpcIdType and rpcId instead of

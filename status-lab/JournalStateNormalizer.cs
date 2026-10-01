@@ -558,10 +558,13 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
 
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
-            "schemaVersion", "timestampUtc", "source", "event", "decision",
+            "schemaVersion", "timestampUtc", "source", "event", "decision", "sourceInstanceId",
             "rpcIdType", "rpcId", "threadId", "turnId", "itemId"
         };
-        if (root.EnumerateObject().Any(property => !allowed.Contains(property.Name)))
+        var hasSource = root.TryGetProperty("sourceInstanceId", out _);
+        var sourceInstanceId = GetBoundedSourceInstanceId(root);
+        if (root.EnumerateObject().Any(property => !allowed.Contains(property.Name)) ||
+            (hasSource && !CodexSourceIdentity.IsValid(sourceInstanceId)))
             return null;
 
         return new StatusInputEvent(
@@ -574,7 +577,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             RpcId: rpcId,
             ThreadId: GetBoundedString(root, "threadId"),
             TurnId: GetBoundedString(root, "turnId"),
-            ItemId: GetBoundedString(root, "itemId"));
+            ItemId: GetBoundedString(root, "itemId"),
+            SourceInstanceId: sourceInstanceId);
     }
 
     private static StatusInputEvent? ParseBridgeInput(JsonElement root)
@@ -612,7 +616,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
             "schemaVersion", "timestampUtc", "source", "event", "requestFamily", "approvalsReviewer",
-            "rpcIdType", "rpcId", "threadId", "turnId", "itemId"
+            "rpcIdType", "rpcId", "threadId", "turnId", "itemId", "sourceInstanceId"
         };
         if (root.EnumerateObject().Any(p => !allowed.Contains(p.Name) || p.Value.ValueKind != JsonValueKind.String ||
                 Encoding.UTF8.GetByteCount(p.Value.GetString() ?? string.Empty) > 1024)) return null;
@@ -624,14 +628,16 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         var thread = GetBoundedString(root, "threadId");
         var turn = GetBoundedString(root, "turnId");
         var item = GetBoundedString(root, "itemId");
+        var sourceInstanceId = GetBoundedSourceInstanceId(root);
         if (schema != ApprovalRequestSchemaVersion || GetBoundedString(root, "event") != "approval_requested" ||
             family is not ("item/commandExecution" or "item/fileChange") || reviewer is not ("user" or "auto_review") || rpcType is not ("number" or "string") ||
+            !CodexSourceIdentity.IsValid(sourceInstanceId) ||
             string.IsNullOrWhiteSpace(rpc) || !CodexUnreadStateReader.Bounded(thread) ||
             !CodexUnreadStateReader.Bounded(turn) || !CodexUnreadStateReader.Bounded(item) ||
             !DateTimeOffset.TryParse(GetBoundedString(root, "timestampUtc"), out var timestamp)) return null;
         return new StatusInputEvent(timestamp.ToUniversalTime(), ApprovalSource, "approval_requested",
             SchemaVersion: schema, RpcIdType: rpcType, RpcId: rpc, ThreadId: thread, TurnId: turn,
-            ItemId: item, RequestFamily: family, ApprovalsReviewer: reviewer);
+            ItemId: item, RequestFamily: family, ApprovalsReviewer: reviewer, SourceInstanceId: sourceInstanceId);
     }
 
     private static string[] SafeReadReplayLines()

@@ -414,6 +414,9 @@ internal sealed class StateReducer
     private StateTransition? ApplyCodex(StatusInputEvent input)
     {
         var session = GetOrCreateSession(input);
+        if (input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd" ||
+            (input.TurnId.Length != 0 && input.TurnId != session.TurnId))
+            ClearApprovalCorrelation(session);
         var acknowledged = session.ReadAcknowledgedCompletion;
         if (input.EventName == "Stop" && acknowledged is not null && session.Completion == acknowledged &&
             session.CompletionGeneration == acknowledged.Generation && session.TurnId == acknowledged.TurnId &&
@@ -503,6 +506,7 @@ internal sealed class StateReducer
     {
         if (input.EventName != "approval_resolved" ||
             input.SchemaVersion != "k15-codex-approval/v1" ||
+            !CodexSourceIdentity.IsValid(input.SourceInstanceId) ||
             input.Decision is not ("accept" or "acceptForSession") ||
             input.RpcIdType is not ("number" or "string") ||
             string.IsNullOrWhiteSpace(input.RpcId))
@@ -514,8 +518,7 @@ internal sealed class StateReducer
 
         var candidates = _sessions.Values
             .Where(session => !session.Internal && !session.Ended &&
-                              (string.IsNullOrWhiteSpace(input.SourceInstanceId) ||
-                               session.SourceInstanceId == input.SourceInstanceId) &&
+                              session.SourceInstanceId == input.SourceInstanceId &&
                               session.State == K15NormalizedState.Waiting)
             .Where(session => MatchesApproval(session, input))
             .ToArray();
@@ -540,6 +543,7 @@ internal sealed class StateReducer
     private StateTransition? ApplyApprovalRequest(StatusInputEvent input)
     {
         if (input.SchemaVersion != "k15-codex-approval-request/v1" ||
+            !CodexSourceIdentity.IsValid(input.SourceInstanceId) ||
             input.ApprovalsReviewer != "user" ||
             input.RequestFamily is not ("item/commandExecution" or "item/fileChange") ||
             input.RpcIdType is not ("number" or "string") || string.IsNullOrWhiteSpace(input.RpcId) ||
@@ -547,7 +551,8 @@ internal sealed class StateReducer
             !CodexUnreadStateReader.Bounded(input.ItemId)) return null;
 
         var candidates = _sessions.Values.Where(session => !session.Internal && !session.Ended &&
-            (string.IsNullOrWhiteSpace(input.SourceInstanceId) || session.SourceInstanceId == input.SourceInstanceId) &&
+            session.SourceInstanceId == input.SourceInstanceId &&
+            session.State == K15NormalizedState.Running && input.TimestampUtc >= session.LastActivityUtc &&
             session.ThreadId == input.ThreadId && session.TurnId == input.TurnId).ToArray();
         if (candidates.Length != 1) return null;
 
@@ -629,6 +634,14 @@ internal sealed class StateReducer
         }
 
         return hasCorrelation;
+    }
+
+    private static void ClearApprovalCorrelation(SessionRuntime session)
+    {
+        session.ApprovalRpcIdType = string.Empty;
+        session.ApprovalRpcId = string.Empty;
+        session.ApprovalItemId = string.Empty;
+        session.ApprovalRequestFamily = string.Empty;
     }
 
     private SessionRuntime GetOrCreateSession(StatusInputEvent input)

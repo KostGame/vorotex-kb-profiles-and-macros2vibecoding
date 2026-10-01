@@ -1,4 +1,6 @@
 import { appendFile as appendFileAsync, mkdir as mkdirAsync, rename as renameAsync, unlink as unlinkAsync, writeFile as writeFileAsync } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 
 const REQUEST_FAMILIES = new Map([
@@ -47,6 +49,23 @@ function rpcId(value) {
     return { type: 'number', value: Object.is(value, -0) ? '-0' : String(value) };
   }
   return undefined;
+}
+
+// Match CodexSourceIdentity.ForHome on the Windows Status Lab host. Restrict
+// canonical input to ASCII so JS/.NET invariant casing differences fail closed.
+export function codexSourceInstanceId(env = process.env, platform = process.platform, homeDirectory = os.homedir()) {
+  if (platform !== 'win32') return undefined;
+  let home = typeof env.CODEX_HOME === 'string' && env.CODEX_HOME.length > 0
+    ? env.CODEX_HOME
+    : path.win32.join(homeDirectory, '.codex');
+  home = home.replace(/%([^%]+)%/g, (match, name) => env[name] ?? match);
+  if (!path.win32.isAbsolute(home) || /%[^%]+%/.test(home) || /[^\x00-\x7f]/.test(home)) return undefined;
+  let canonical = path.win32.resolve(home).replaceAll('/', '\\');
+  const root = path.win32.parse(canonical).root;
+  if (canonical.toUpperCase() !== root.toUpperCase()) canonical = canonical.replace(/[\\/]+$/, '');
+  canonical = canonical.toUpperCase();
+  const digest = createHash('sha256').update(`codex-home/v1\0${canonical}`, 'utf8').digest('hex');
+  return `local:${digest.slice(0, 32)}`;
 }
 
 function pendingKey(family, id, metadata = {}) {
@@ -160,14 +179,18 @@ export class ApprovalObserver {
   #clientPartial = Buffer.alloc(0);
   #sink;
   #sinkBusy = false;
-  #sinkQueue = [];
+  #ownerQueue = [];
+  #telemetryQueue = [];
+  #ownerCredits = 0;
   #reviewers = new Map();
   #reviewerRequests = new Map();
   #turnReviewers = new Map();
 
-  constructor({ telemetrySink = () => {} } = {}) {
+  constructor({ telemetrySink = () => {}, sourceInstanceId = codexSourceInstanceId() } = {}) {
     this.#sink = telemetrySink;
+    this.#sourceInstanceId = /^local:[0-9a-f]{32}$/.test(sourceInstanceId ?? '') ? sourceInstanceId : undefined;
   }
+  #sourceInstanceId;
 
   observeServerChunk(chunk) {
     this.#observeChunk(chunk, 'server', (message) => {
@@ -232,26 +255,28 @@ export class ApprovalObserver {
     }
     if (family === PERMISSIONS_REQUEST_FAMILY &&
         !['threadId', 'turnId', 'itemId'].every(key => metadata[key])) return;
+    const idKey = JSON.stringify([id.type, id.value]);
+    // JSON-RPC ids identify requests independently of method metadata. Keep
+    // the first pending correlation and fail closed on every reuse.
+    if ([...this.#pending.values()].some(request => request.idKey === idKey) || this.#pending.size >= MAX_PENDING) return;
     const key = pendingKey(family, id, metadata);
-    if (this.#pending.size >= MAX_PENDING && !this.#pending.has(key)) return;
-    // A duplicate request identity must not replace the original correlation
-    // metadata with a potentially stale or cross-turn record.
-    if (this.#pending.has(key)) return;
     const request = {
       rpcIdType: id.type,
       rpcId: id.value,
       family,
+      idKey,
+      ownerWaitAdmitted: false,
       timestampUtc: new Date().toISOString()
     };
     Object.assign(request, metadata);
     this.#pending.set(key, request);
     const turnKey = JSON.stringify([metadata.threadId, metadata.turnId]);
     const reviewer = this.#turnReviewers.has(turnKey) ? this.#turnReviewers.get(turnKey) : this.#reviewers.get(metadata.threadId);
-    if (family !== PERMISSIONS_REQUEST_FAMILY &&
+    if (this.#sourceInstanceId && family !== PERMISSIONS_REQUEST_FAMILY &&
         (reviewer === 'user' || reviewer === 'auto_review') &&
         ['threadId', 'turnId', 'itemId'].every(name => metadata[name] && Buffer.byteLength(metadata[name], 'utf8') <= 128) &&
         Buffer.byteLength(id.value, 'utf8') <= 128) {
-      this.#emitFailOpen({
+      const event = {
         schemaVersion: APPROVAL_REQUEST_SCHEMA_VERSION,
         timestampUtc: request.timestampUtc,
         source: 'codex_stdio_bridge',
@@ -262,8 +287,14 @@ export class ApprovalObserver {
         threadId: metadata.threadId,
         turnId: metadata.turnId,
         itemId: metadata.itemId,
-        approvalsReviewer: reviewer
-      });
+        approvalsReviewer: reviewer,
+        sourceInstanceId: this.#sourceInstanceId
+      };
+      if (this.#ownerCredits < MAX_PENDING) {
+        request.ownerWaitAdmitted = true;
+        this.#ownerCredits += 1;
+        this.#emitOwnerEvent(event, false);
+      }
     }
   }
 
@@ -362,10 +393,12 @@ export class ApprovalObserver {
       rpcId: request.rpcId,
       decision
     };
+    if (request.ownerWaitAdmitted) event.sourceInstanceId = this.#sourceInstanceId;
     for (const key of ['threadId', 'turnId', 'itemId']) {
       if (request[key]) event[key] = request[key];
     }
-    this.#emitFailOpen(event);
+    if (request.ownerWaitAdmitted) this.#emitOwnerEvent(event, true);
+    else this.#emitFailOpen(event);
   }
 
   #resolvePermissionsResponse(message, id, pendingKeyValue, request) {
@@ -401,18 +434,26 @@ export class ApprovalObserver {
   }
 
   #emitFailOpen(event) {
-    if (this.#sinkQueue.length >= MAX_PENDING) return;
-    this.#sinkQueue.push(event);
+    if (this.#telemetryQueue.length >= MAX_PENDING) return;
+    this.#telemetryQueue.push({ event, releasesOwnerCredit: false });
+    this.#drainSinkQueue();
+  }
+
+  #emitOwnerEvent(event, releasesOwnerCredit) {
+    // At most MAX_PENDING credits exist, with at most one request record and
+    // one resolution record per credit. This lane therefore needs <= 2N slots.
+    this.#ownerQueue.push({ event, releasesOwnerCredit });
     this.#drainSinkQueue();
   }
 
   #drainSinkQueue() {
-    if (this.#sinkBusy || this.#sinkQueue.length === 0) return;
+    if (this.#sinkBusy || (this.#ownerQueue.length === 0 && this.#telemetryQueue.length === 0)) return;
     this.#sinkBusy = true;
-    const event = this.#sinkQueue.shift();
+    const entry = this.#ownerQueue.length > 0 ? this.#ownerQueue.shift() : this.#telemetryQueue.shift();
     let result;
-    try { result = this.#sink(event); } catch { result = undefined; }
+    try { result = this.#sink(entry.event); } catch { result = undefined; }
     Promise.resolve(result).catch(() => {}).finally(() => {
+      if (entry.releasesOwnerCredit) this.#ownerCredits -= 1;
       this.#sinkBusy = false;
       this.#drainSinkQueue();
     });
@@ -568,6 +609,9 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
       rpcIdType: event.rpcIdType,
       rpcId: event.rpcId
     };
+    if ((event.schemaVersion === APPROVAL_REQUEST_SCHEMA_VERSION || event.schemaVersion === APPROVAL_SCHEMA_VERSION) &&
+        /^local:[0-9a-f]{32}$/.test(event.sourceInstanceId ?? ''))
+      sanitized.sourceInstanceId = event.sourceInstanceId;
     if (event.event === 'turn_completed') {
       sanitized.schemaVersion = COMPLETION_SCHEMA_VERSION;
       sanitized.threadId = event.threadId;

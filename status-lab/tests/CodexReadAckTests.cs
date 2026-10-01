@@ -5,6 +5,7 @@ using Vorotex.K15.StatusLab;
 internal static class CodexReadAckTests
 {
     private static readonly DateTimeOffset T = DateTimeOffset.Parse("2026-08-25T00:00:00Z");
+    private const string TestSourceInstanceId = "local:fc48c8bff668af187c6ae9b203b3321c";
     private static int _passed;
     private static void Check(bool value, string id)
     {
@@ -12,12 +13,13 @@ internal static class CodexReadAckTests
         _passed++;
         Console.WriteLine("READ_ACK_" + id + "=PASS");
     }
-    private static StatusInputEvent Hook(string name, int second, string session = "S", string thread = "T", string turn = "U", string sourceInstanceId = "") =>
+    private static StatusInputEvent Hook(string name, int second, string session = "S", string thread = "T", string turn = "U", string sourceInstanceId = TestSourceInstanceId) =>
         new(T.AddSeconds(second), "codex_hook", name, SessionId: session, ThreadId: thread, TurnId: turn,
             SourceInstanceId: sourceInstanceId);
     private static StatusInputEvent ApprovalRequest(int second, string thread = "T", string turn = "U", string item = "I", string rpc = "91", string family = "item/commandExecution", string reviewer = "user") =>
         new(T.AddSeconds(second), "codex_stdio_bridge", "approval_requested", SchemaVersion: "k15-codex-approval-request/v1",
-            RpcIdType: "number", RpcId: rpc, ThreadId: thread, TurnId: turn, ItemId: item, RequestFamily: family, ApprovalsReviewer: reviewer);
+            RpcIdType: "number", RpcId: rpc, ThreadId: thread, TurnId: turn, ItemId: item, RequestFamily: family,
+            ApprovalsReviewer: reviewer, SourceInstanceId: TestSourceInstanceId);
     private static StateReducer Done(string session = "S", string thread = "T", string turn = "U")
     {
         var reducer = new StateReducer(0, T);
@@ -63,6 +65,8 @@ internal static class CodexReadAckTests
     public static void Run()
     {
         SourceIdentityTests();
+        Check(CodexSourceIdentity.ForHome(@"C:\Users\Tester\.codex") == TestSourceInstanceId,
+            "SOURCE_IDENTITY_WINDOWS_GOLDEN_VECTOR");
         NormalizerLivenessTests();
         var authority = new StateReducer(0, T);
         authority.Apply(Hook("UserPromptSubmit", 1));
@@ -72,23 +76,55 @@ internal static class CodexReadAckTests
         Check(authority.State == K15NormalizedState.Waiting && authority.LastSessionTransitions.Single().PermissionEvidence?.RpcId == "91" &&
             authority.LastSessionTransitions.Single().PermissionEvidence?.RequestFamily == "item/commandExecution", "TYPED_COMMAND_REQUEST_WAITING");
         authority.Apply(new(T.AddSeconds(4), "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1",
-            Decision: "accept", RpcIdType: "number", RpcId: "91", ThreadId: "T", TurnId: "U", ItemId: "I"));
+            Decision: "accept", RpcIdType: "number", RpcId: "91", ThreadId: "T", TurnId: "U", ItemId: "I",
+            SourceInstanceId: TestSourceInstanceId));
         Check(authority.State == K15NormalizedState.Running, "EXACT_TYPED_ACCEPT_RESUMES");
         var automatic = new StateReducer(0, T); automatic.Apply(Hook("UserPromptSubmit", 1));
         automatic.Apply(ApprovalRequest(2, reviewer: "auto_review"));
-        automatic.Apply(new(T.AddSeconds(3), "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "91", ThreadId: "T", TurnId: "U", ItemId: "I"));
+        automatic.Apply(new(T.AddSeconds(3), "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "91", ThreadId: "T", TurnId: "U", ItemId: "I", SourceInstanceId: TestSourceInstanceId));
         Check(automatic.State == K15NormalizedState.Running, "AUTO_REVIEW_REQUEST_AND_ACCEPT_NEVER_WAIT");
         var unknownReviewer = new StateReducer(0, T); unknownReviewer.Apply(Hook("UserPromptSubmit", 1));
         unknownReviewer.Apply(ApprovalRequest(2, reviewer: ""));
         Check(unknownReviewer.State == K15NormalizedState.Running, "UNKNOWN_REVIEWER_FAILS_CALM");
         authority.Apply(ApprovalRequest(5, "T", "OTHER", "I2", "92", "item/fileChange"));
         Check(authority.State == K15NormalizedState.Running, "WRONG_TURN_REQUEST_FAILS_CALM");
-        var replay = new StateReducer(0, T);
-        replay.Rehydrate([Hook("UserPromptSubmit", 1), ApprovalRequest(3, family: "item/fileChange")]);
-        Check(replay.State == K15NormalizedState.Waiting && replay.LastSessionTransitions.Last().Reason == "codex_permission_request",
+        var typedReplayReducer = new StateReducer(0, T);
+        typedReplayReducer.Rehydrate([Hook("UserPromptSubmit", 1), ApprovalRequest(3, family: "item/fileChange")]);
+        Check(typedReplayReducer.State == K15NormalizedState.Waiting && typedReplayReducer.LastSessionTransitions.Last().Reason == "codex_permission_request",
             "TYPED_REQUEST_REHYDRATES_DETERMINISTICALLY");
-        replay.Apply(Hook("PostToolUse", 4));
-        Check(replay.State == K15NormalizedState.Running, "POST_TOOL_USE_CLEARS_WAITING");
+        typedReplayReducer.Apply(Hook("PostToolUse", 4));
+        Check(typedReplayReducer.State == K15NormalizedState.Running, "POST_TOOL_USE_CLEARS_WAITING");
+        typedReplayReducer.Apply(ApprovalRequest(3, rpc: "92"));
+        Check(typedReplayReducer.State == K15NormalizedState.Running,
+            "LATE_REQUEST_AFTER_POST_TOOL_USE_IGNORED");
+        var stoppedApproval = new StateReducer(0, T);
+        stoppedApproval.Apply(Hook("UserPromptSubmit", 1));
+        stoppedApproval.Apply(Hook("Stop", 4));
+        stoppedApproval.Apply(ApprovalRequest(3));
+        Check(stoppedApproval.State == K15NormalizedState.DonePendingAttention,
+            "LATE_REQUEST_AFTER_STOP_IGNORED");
+        var resumedApproval = new StateReducer(0, T);
+        resumedApproval.Apply(Hook("UserPromptSubmit", 1));
+        resumedApproval.Apply(ApprovalRequest(2));
+        resumedApproval.Apply(Hook("PreToolUse", 3));
+        resumedApproval.Apply(new(T.AddSeconds(4), "codex_stdio_bridge", "approval_resolved",
+            SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "91",
+            ThreadId: "T", TurnId: "U", ItemId: "I", SourceInstanceId: TestSourceInstanceId));
+        Check(resumedApproval.State == K15NormalizedState.Running &&
+              resumedApproval.LastSessionTransitions.Count == 0,
+            "STALE_RESOLUTION_AFTER_EXECUTION_RESUMED_IGNORED");
+        var wrongSourceResolution = new StateReducer(0, T);
+        wrongSourceResolution.Apply(Hook("UserPromptSubmit", 1));
+        wrongSourceResolution.Apply(ApprovalRequest(2));
+        wrongSourceResolution.Apply(new(T.AddSeconds(3), "codex_stdio_bridge", "approval_resolved",
+            SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "91",
+            ThreadId: "T", TurnId: "U", ItemId: "I", SourceInstanceId: "local:0123456789abcdef0123456789abcdef"));
+        Check(wrongSourceResolution.State == K15NormalizedState.Waiting,
+            "RESOLUTION_REQUIRES_EXACT_SOURCE_IDENTITY");
+        Check(JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:01Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"approval_resolved\",\"schemaVersion\":\"k15-codex-approval/v1\",\"decision\":\"accept\",\"rpcIdType\":\"number\",\"rpcId\":\"91\"}") is not null,
+            "LEGACY_RESOLUTION_REMAINS_DIAGNOSTIC_PARSEABLE");
+        Check(JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:01Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"approval_requested\",\"schemaVersion\":\"k15-codex-approval-request/v1\",\"requestFamily\":\"item/commandExecution\",\"approvalsReviewer\":\"user\",\"rpcIdType\":\"number\",\"rpcId\":\"1\",\"threadId\":\"T\",\"turnId\":\"U\",\"itemId\":\"I\",\"sourceInstanceId\":\"" + TestSourceInstanceId + "\"}") is not null,
+            "REQUEST_REQUIRES_VALID_SOURCE_IDENTITY");
         var ambiguous = new StateReducer(0, T);
         ambiguous.Apply(Hook("UserPromptSubmit", 1, "A"));
         ambiguous.Apply(Hook("UserPromptSubmit", 2, "B"));

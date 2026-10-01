@@ -6,7 +6,8 @@ import {
   NativeThreadMetadataObserver,
   createSanitizedJsonlSink,
   BridgeDiagnostics,
-  createSanitizedDiagnosticsSink
+  createSanitizedDiagnosticsSink,
+  codexSourceInstanceId
 } from './bridge-core.mjs';
 import { createNamedPipeAuthoritySink } from './runtime-process-authority.mjs';
 import { runTransparentWrapper } from './transparent-wrapper.mjs';
@@ -85,7 +86,8 @@ export async function runApprovalWrapper(options = {}) {
   }
 
   const observer = new ApprovalObserver({
-    telemetrySink: telemetrySink ?? createSanitizedJsonlSink(sinkPath)
+    telemetrySink: telemetrySink ?? createSanitizedJsonlSink(sinkPath),
+    sourceInstanceId: options.sourceInstanceId ?? codexSourceInstanceId(env)
   });
   const nativeStatusObserver = new NativeThreadStatusObserver({
     authoritySink: authoritySink ?? runtimeBoundary?.sink,

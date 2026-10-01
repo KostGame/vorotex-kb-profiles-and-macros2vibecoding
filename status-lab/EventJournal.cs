@@ -286,7 +286,7 @@ internal static class EventJournal
             var requestAllowed = new HashSet<string>(StringComparer.Ordinal)
             {
                 "schemaVersion", "timestampUtc", "source", "event", "requestFamily", "approvalsReviewer",
-                "rpcIdType", "rpcId", "threadId", "turnId", "itemId"
+                "rpcIdType", "rpcId", "threadId", "turnId", "itemId", "sourceInstanceId"
             };
             if (root.EnumerateObject().Any(property => !requestAllowed.Contains(property.Name) ||
                     property.Value.ValueKind != JsonValueKind.String ||
@@ -299,6 +299,7 @@ internal static class EventJournal
                 !string.IsNullOrWhiteSpace(GetString(root, "threadId")) &&
                 !string.IsNullOrWhiteSpace(GetString(root, "turnId")) &&
                 !string.IsNullOrWhiteSpace(GetString(root, "itemId")) &&
+                CodexSourceIdentity.IsValid(GetString(root, "sourceInstanceId")) &&
                 DateTimeOffset.TryParse(GetString(root, "timestampUtc"), out _);
         }
         if (schemaVersion == "k15-codex-completion/v1")
@@ -337,9 +338,12 @@ internal static class EventJournal
         var approvalAllowed = new HashSet<string>(StringComparer.Ordinal)
         {
             "schemaVersion", "timestampUtc", "source", "event", "decision",
-            "rpcIdType", "rpcId", "threadId", "turnId", "itemId"
+            "rpcIdType", "rpcId", "threadId", "turnId", "itemId", "sourceInstanceId"
         };
         if (root.EnumerateObject().Any(property => !approvalAllowed.Contains(property.Name)))
+            return false;
+        var hasSourceInstanceId = root.TryGetProperty("sourceInstanceId", out _);
+        if (hasSourceInstanceId && !CodexSourceIdentity.IsValid(GetString(root, "sourceInstanceId")))
             return false;
 
         if (GetString(root, "event") != "approval_resolved" ||

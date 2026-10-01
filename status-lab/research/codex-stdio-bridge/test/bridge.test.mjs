@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { ApprovalObserver, NativeThreadStatusObserver, NativeThreadMetadataObserver, connectTransparentBridge, createSanitizedJsonlSink } from '../src/bridge-core.mjs';
+import { ApprovalObserver, NativeThreadStatusObserver, NativeThreadMetadataObserver, connectTransparentBridge, createSanitizedJsonlSink, codexSourceInstanceId } from '../src/bridge-core.mjs';
 
 const request = (method, id, params = {}) => JSON.stringify({ jsonrpc: '2.0', id, method, params });
 const commandRequest = (id, extras = {}) => request('item/commandExecution/requestApproval', id, extras);
@@ -25,10 +25,19 @@ async function collect(stream) {
 }
 
 function observerWith(events, sink = (event) => events.push(event)) {
-  return new ApprovalObserver({ telemetrySink: sink });
+  return new ApprovalObserver({ telemetrySink: sink, sourceInstanceId: TEST_SOURCE_INSTANCE_ID });
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const TEST_SOURCE_INSTANCE_ID = 'local:fc48c8bff668af187c6ae9b203b3321c';
+
+test('Windows Codex source identity matches the Status Lab golden vector and fails closed on non-ASCII paths', () => {
+  assert.equal(codexSourceInstanceId({}, 'win32', 'C:\\Users\\Tester'), TEST_SOURCE_INSTANCE_ID);
+  assert.equal(codexSourceInstanceId({ CODEX_HOME: 'D:\\Codex\\' }, 'win32'),
+    codexSourceInstanceId({ CODEX_HOME: 'd:/codex' }, 'win32'));
+  assert.equal(codexSourceInstanceId({ CODEX_HOME: 'C:\\Users\\Tést' }, 'win32'), undefined);
+  assert.equal(codexSourceInstanceId({}, 'linux', '/home/tester'), undefined);
+});
 
 test('transport is byte-transparent in both directions and stderr remains separate', async () => {
   const clientInput = new PassThrough(); const childInput = new PassThrough();
@@ -202,11 +211,11 @@ test('live numeric approval request and exact result.decision response emit sani
   assert.deepEqual(events[0], {
     schemaVersion: 'k15-codex-approval-request/v1', source: 'codex_stdio_bridge', event: 'approval_requested',
     timestampUtc: events[0].timestampUtc, requestFamily: 'item/commandExecution', rpcIdType: 'number', rpcId: '1',
-    threadId: 'T', turnId: 'U', itemId: 'I', approvalsReviewer: 'user'
+    threadId: 'T', turnId: 'U', itemId: 'I', approvalsReviewer: 'user', sourceInstanceId: TEST_SOURCE_INSTANCE_ID
   });
   assert.deepEqual(Object.keys(events[1]).sort(), [
     'decision', 'event', 'itemId', 'rpcId', 'rpcIdType', 'schemaVersion',
-    'source', 'threadId', 'timestampUtc', 'turnId'
+    'source', 'sourceInstanceId', 'threadId', 'timestampUtc', 'turnId'
   ].sort());
   assert.deepEqual(events[1], {
     schemaVersion: 'k15-codex-approval/v1',
@@ -218,7 +227,8 @@ test('live numeric approval request and exact result.decision response emit sani
     decision: 'accept',
     threadId: 'T',
     turnId: 'U',
-    itemId: 'I'
+    itemId: 'I',
+    sourceInstanceId: TEST_SOURCE_INSTANCE_ID
   });
   assert.doesNotMatch(JSON.stringify(events), /MUST NOT REACH SIDE CHANNEL/);
   assert.equal(observer.pendingCount(), 0);
@@ -339,7 +349,7 @@ test('permissions malformed, duplicate, cross-family, and mismatched responses f
   ));
   await tick();
   assert.deepEqual(events.filter(event => event.event === 'permissions_approval_observed').map(event => event.rpcId), ['74', '76']);
-  assert.equal(observer.pendingCount(), 2);
+  assert.equal(observer.pendingCount(), 0);
 });
 
 test('permissions requests missing exact thread, turn, or item identity are rejected', () => {
@@ -445,15 +455,51 @@ test('numeric 1 and string "1" are separate typed correlations', async () => {
   ]);
 });
 
-test('same typed id with different request metadata remains ambiguous and fails closed', () => {
+test('same typed id reused with different metadata preserves the first exact pending correlation', async () => {
   const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
+    params: { threadId: 'thread-A', settings: { approvalsReviewer: 'user' } } }) + '\n'));
   observer.observeServerChunk(Buffer.from(
-    commandRequest(5, { threadId: 'thread-A', turnId: 'turn-A' }) + '\n' +
-    commandRequest(5, { threadId: 'thread-B', turnId: 'turn-B' }) + '\n'
+    commandRequest(5, { threadId: 'thread-A', turnId: 'turn-A', itemId: 'item-A' }) + '\n' +
+    commandRequest(5, { threadId: 'thread-B', turnId: 'turn-B', itemId: 'item-B' }) + '\n'
   ));
   observer.observeClientChunk(Buffer.from(response(5, 'accept') + '\n'));
-  assert.deepEqual(events, []);
-  assert.equal(observer.pendingCount(), 2);
+  await tick();
+  assert.equal(events.length, 2);
+  assert.equal(events[0].threadId, 'thread-A');
+  assert.equal(events[0].sourceInstanceId, TEST_SOURCE_INSTANCE_ID);
+  assert.equal(events[1].threadId, 'thread-A');
+  assert.equal(events[1].sourceInstanceId, TEST_SOURCE_INSTANCE_ID);
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('matching owner resolution survives a saturated bounded telemetry queue', async () => {
+  const events = [];
+  let releaseFirst;
+  const observer = new ApprovalObserver({
+    sourceInstanceId: TEST_SOURCE_INSTANCE_ID,
+    telemetrySink: event => {
+      events.push(event);
+      if (events.length === 1) return new Promise(resolve => { releaseFirst = resolve; });
+    }
+  });
+  observer.observeClientChunk(Buffer.from(request('thread/start', 900, {}) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ id: 900, result: { threadId: 'T', approvalsReviewer: 'user' } }) + '\n'));
+  const requests = Array.from({ length: 256 }, (_, index) => commandRequest(index + 1, {
+    threadId: 'T', turnId: 'U', itemId: `I${index}`
+  })).join('\n') + '\n';
+  observer.observeServerChunk(Buffer.from(requests));
+  observer.observeClientChunk(Buffer.from(Array.from({ length: 256 }, (_, index) =>
+    response(index + 1, 'accept')).join('\n') + '\n'));
+  assert.equal(observer.pendingCount(), 0);
+  assert.equal(events.length, 1, 'one sink write is held while bounded lanes queue the remaining events');
+  releaseFirst();
+  for (let attempt = 0; attempt < 20 && events.length < 512; attempt++) await tick();
+  assert.equal(events.length, 512);
+  assert.equal(events.filter(event => event.event === 'approval_requested').length, 256);
+  assert.equal(events.filter(event => event.event === 'approval_resolved').length, 256);
+  assert.equal(events.filter(event => event.event === 'approval_resolved')
+    .every(event => event.sourceInstanceId === TEST_SOURCE_INSTANCE_ID), true);
 });
 
 test('parallel approvals and same-thread concurrent approvals cannot cross-correlate', async () => {
