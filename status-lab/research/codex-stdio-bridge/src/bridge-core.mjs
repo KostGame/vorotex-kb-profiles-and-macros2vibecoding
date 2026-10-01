@@ -499,6 +499,21 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
     for (const key of ['threadId', 'turnId', 'itemId']) {
       if (event[key]) sanitized[key] = event[key];
     }
+    if (event.schemaVersion === PERMISSIONS_APPROVAL_DIAGNOSTIC_SCHEMA_VERSION &&
+        event.event === 'permissions_approval_observed') {
+      // Persist only schema-defined timing metadata. No raw permission profiles,
+      // commands, prompts, paths, reasons, or arbitrary event properties.
+      if (event.requestFamily === PERMISSIONS_REQUEST_FAMILY) {
+        sanitized.requestFamily = PERMISSIONS_REQUEST_FAMILY;
+      }
+      for (const key of ['requestObservedAtUtc', 'responseObservedAtUtc']) {
+        const value = event[key];
+        if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+            !Number.isNaN(Date.parse(value))) sanitized[key] = value;
+      }
+      if (event.scope === 'turn' || event.scope === 'session') sanitized.scope = event.scope;
+      if (typeof event.strictAutoReview === 'boolean') sanitized.strictAutoReview = event.strictAutoReview;
+    }
     const line = JSON.stringify(sanitized) + '\n';
     if (Buffer.byteLength(line, 'utf8') > MAX_PARTIAL_BYTES) return;
     if (!directoryReady) {
