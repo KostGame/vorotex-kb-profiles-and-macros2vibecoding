@@ -305,7 +305,7 @@ internal static class CodexReadAckTests
         reducer = new StateReducer(0, T.AddSeconds(10));
         reducer.Rehydrate(new[] { Hook("UserPromptSubmit", 1, thread: ""), Hook("Stop", 2, thread: "") });
         var persisted = new SessionStateTransition("S", K15NormalizedState.Running, K15NormalizedState.DonePendingAttention,
-            "codex_stop", T.AddSeconds(2), "T", "U", "", "", false);
+            "codex_stop", T.AddSeconds(2), "T", "U", "", "", false, SourceInstanceId: TestSourceInstanceId);
         Check(reducer.ReadAckCandidates.Count == 0, "REHYDRATION_MISSING_CORRELATION");
         reducer.RestoreCompletionCorrelations([persisted with { TimestampUtc = T }]);
         Check(reducer.ReadAckCandidates.Count == 0, "REHYDRATION_STALE_CORRELATION");
