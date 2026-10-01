@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { ApprovalObserver, NativeThreadStatusObserver, NativeThreadMetadataObserver, connectTransparentBridge } from '../src/bridge-core.mjs';
+import { ApprovalObserver, NativeThreadStatusObserver, NativeThreadMetadataObserver, connectTransparentBridge, createSanitizedJsonlSink } from '../src/bridge-core.mjs';
 
 const request = (method, id, params = {}) => JSON.stringify({ jsonrpc: '2.0', id, method, params });
 const commandRequest = (id, extras = {}) => request('item/commandExecution/requestApproval', id, extras);
@@ -531,4 +531,62 @@ test('fake-child bridge preserves stdout, stderr, and normal child exit lifecycl
   assert.equal(code, 0); assert.equal(signal, null);
   assert.equal(Buffer.concat(stdout).toString('utf8'), 'fixture-line\n');
   assert.match(Buffer.concat(stderr).toString('utf8'), /fake-app-server: started/);
+});
+
+test('permissions diagnostic file sink retains exact allowlisted timestamps and scope only', async () => {
+  const lines = [];
+  const sink = createSanitizedJsonlSink('C:\\test\\sanitized-events.jsonl', {
+    appendFile: async (_path, content) => { lines.push(content); },
+    makeDirectory: async () => {}
+  });
+  const event = {
+    schemaVersion: 'k15-codex-permissions-approval-diagnostic/v1',
+    source: 'codex_stdio_bridge', event: 'permissions_approval_observed',
+    requestFamily: 'item/permissions', rpcIdType: 'number', rpcId: '0',
+    threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1',
+    requestObservedAtUtc: '2026-10-01T07:03:26.722Z',
+    responseObservedAtUtc: '2026-10-01T07:03:26.723Z',
+    scope: 'turn', strictAutoReview: false,
+    cwd: 'PRIVATE_PATH', reason: 'PRIVATE_REASON',
+    permissions: { profile: 'PRIVATE_PERMISSION' }, command: 'PRIVATE_COMMAND'
+  };
+  await sink(event);
+  assert.equal(lines.length, 1);
+  assert.deepEqual(JSON.parse(lines[0]), {
+    schemaVersion: event.schemaVersion, source: event.source, event: event.event,
+    rpcIdType: 'number', rpcId: '0', threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1',
+    requestFamily: 'item/permissions', requestObservedAtUtc: event.requestObservedAtUtc,
+    responseObservedAtUtc: event.responseObservedAtUtc, scope: 'turn', strictAutoReview: false
+  });
+  assert.doesNotMatch(lines[0], /PRIVATE|cwd|reason|command/gi);
+});
+test('diagnostic sink rejects unknown timing and scope; legacy decision shape unchanged', async () => {
+  const lines = [];
+  const sink = createSanitizedJsonlSink('C:\\test\\sanitized-events.jsonl', {
+    appendFile: async (_path, content) => { lines.push(content); },
+    makeDirectory: async () => {}
+  });
+  await sink({
+    schemaVersion: 'k15-codex-permissions-approval-diagnostic/v1',
+    event: 'permissions_approval_observed', source: 'codex_stdio_bridge',
+    rpcIdType: 'string', rpcId: 'rpc-X', threadId: 'thread-2', turnId: 'turn-2', itemId: 'item-2',
+    requestFamily: 'unexpected/PRIVATE', requestObservedAtUtc: 'PRIVATE_TIMESTAMP',
+    responseObservedAtUtc: '2026-55-99T01:01:01.111Z',
+    scope: 'PRIVATE_SCOPE', strictAutoReview: 'PRIVATE', reason: 'PRIVATE_REASON'
+  });
+  assert.deepEqual(Object.keys(JSON.parse(lines[0])).sort(), [
+    'schemaVersion', 'event', 'source', 'rpcIdType', 'rpcId', 'threadId', 'turnId', 'itemId'
+  ].sort());
+  await sink({
+    schemaVersion: 'k15-codex-approval/v1', event: 'approval_resolved',
+    source: 'codex_stdio_bridge', timestampUtc: '2026-10-01T00:00:00.000Z',
+    decision: 'accept', rpcIdType: 'number', rpcId: '8', threadId: 'thread-3',
+    scope: 'session', requestObservedAtUtc: '2026-10-01T00:00:00.000Z'
+  });
+  assert.deepEqual(JSON.parse(lines[1]), {
+    schemaVersion: 'k15-codex-approval/v1', timestampUtc: '2026-10-01T00:00:00.000Z',
+    source: 'codex_stdio_bridge', event: 'approval_resolved',
+    decision: 'accept', rpcIdType: 'number', rpcId: '8', threadId: 'thread-3'
+  });
+  assert.doesNotMatch(lines.join(''), /PRIVATE/);
 });
