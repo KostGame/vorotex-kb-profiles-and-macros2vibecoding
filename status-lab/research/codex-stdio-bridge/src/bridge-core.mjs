@@ -319,17 +319,35 @@ export class ApprovalObserver {
     if (!['thread/start', 'thread/resume', 'thread/fork', 'turn/start'].includes(message.method)) return;
     const id = rpcId(message.id); if (!id || !message.params || typeof message.params !== 'object' || Array.isArray(message.params)) return;
     const key = `${id.type}:${id.value}`;
-    if (this.#reviewerRequests.size >= MAX_PENDING || this.#reviewerRequests.has(key)) return;
+    const requestThreadId = optionalString(message.params.threadId);
+    if (this.#reviewerRequests.size >= MAX_PENDING) {
+      // If reviewer request correlation cannot be retained, discard any
+      // thread-level provenance for the affected thread. Falling back to a
+      // stale reviewer would turn bounded-memory pressure into fail-open
+      // WAITING authority.
+      if (requestThreadId) this.#reviewers.delete(requestThreadId);
+      return;
+    }
+    if (this.#reviewerRequests.has(key)) return;
+    const hasTurnReviewer = message.method === 'turn/start' && Object.hasOwn(message.params, 'approvalsReviewer');
     const requestedReviewer = message.params.approvalsReviewer;
-    this.#reviewerRequests.set(key, { method: message.method, threadId: optionalString(message.params.threadId),
-      override: message.method === 'turn/start' && Object.hasOwn(message.params, 'approvalsReviewer')
-        ? (requestedReviewer === 'user' || requestedReviewer === 'auto_review' ? requestedReviewer : null) : undefined });
+    this.#reviewerRequests.set(key, { method: message.method, threadId: requestThreadId,
+      override: hasTurnReviewer
+        ? requestedReviewer === null ? null
+          : requestedReviewer === 'user' || requestedReviewer === 'auto_review' ? requestedReviewer : 'unsupported'
+        : undefined });
   }
 
   #observeReviewerServer(message) {
     if (!message || typeof message !== 'object' || Array.isArray(message)) return;
     if (message.method === 'thread/settings/updated') {
-      const threadId = optionalString(message.params?.threadId), reviewer = message.params?.settings?.approvalsReviewer ?? message.params?.approvalsReviewer;
+      const params = message.params;
+      const threadId = optionalString(params?.threadId);
+      const reviewer = Object.hasOwn(params?.threadSettings ?? {}, 'approvalsReviewer')
+        ? params.threadSettings.approvalsReviewer
+        : Object.hasOwn(params?.settings ?? {}, 'approvalsReviewer')
+          ? params.settings.approvalsReviewer
+          : params?.approvalsReviewer;
       if (threadId) this.#rememberThreadReviewer(threadId, reviewer);
       return;
     }
@@ -348,11 +366,34 @@ export class ApprovalObserver {
     if (req.method !== 'turn/start' && threadId) this.#rememberThreadReviewer(threadId, reviewer);
     if (req.method === 'turn/start' && threadId) {
       const turnId = optionalString(result.turnId) ?? optionalString(result.turn?.id);
+      if (!turnId) return;
       const turnKey = JSON.stringify([threadId, turnId]);
-      if (turnId && (this.#turnReviewers.has(turnKey) || this.#turnReviewers.size < MAX_REVIEWER_THREADS))
-        this.#turnReviewers.set(turnKey, req.override !== undefined
-          ? (req.override === 'user' || req.override === 'auto_review' ? req.override : null)
-          : (reviewer === 'user' || reviewer === 'auto_review' ? reviewer : null));
+      if (!this.#turnReviewers.has(turnKey) && this.#turnReviewers.size >= MAX_REVIEWER_THREADS) {
+        // A turn whose exact reviewer cannot be retained must not inherit a
+        // thread reviewer. Invalidate thread provenance so bounded state
+        // exhaustion remains fail-closed.
+        this.#reviewers.delete(threadId);
+        return;
+      }
+      if (req.override === 'user' || req.override === 'auto_review') {
+        this.#turnReviewers.set(turnKey, req.override);
+      } else if (req.override === 'unsupported') {
+        // Preserve an explicit unknown reviewer as a fail-closed turn scope;
+        // it must not fall through to a valid thread reviewer.
+        this.#turnReviewers.set(turnKey, null);
+      } else if (req.override === null) {
+        // Explicit null means preserve the thread reviewer, so remove any
+        // stale entry for a reused turn key and let lookup fall back.
+        this.#turnReviewers.delete(turnKey);
+      } else if (reviewer === 'user' || reviewer === 'auto_review') {
+        this.#turnReviewers.set(turnKey, reviewer);
+      } else if (Object.hasOwn(result, 'approvalsReviewer') && reviewer !== null && reviewer !== undefined) {
+        this.#turnReviewers.set(turnKey, null);
+      } else {
+        // TurnStartResponse commonly contains only { turn }. Avoid a null
+        // shadow so thread-level provenance remains effective.
+        this.#turnReviewers.delete(turnKey);
+      }
     }
   }
 

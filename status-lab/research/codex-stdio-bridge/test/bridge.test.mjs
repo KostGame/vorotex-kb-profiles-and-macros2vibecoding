@@ -262,6 +262,136 @@ test('settings can revoke user reviewer and malformed or oversized reviewer valu
   assert.deepEqual(events.map(e => [e.turnId, e.approvalsReviewer]), [['A', 'auto_review']]);
 });
 
+test('canonical thread reviewer survives ordinary turn/start and explicit reviewer semantics are preserved', async () => {
+  const events = []; const observer = observerWith(events);
+  const settings = reviewer => observer.observeServerChunk(Buffer.from(JSON.stringify({
+    method: 'thread/settings/updated', params: { threadId: 'T', threadSettings: { approvalsReviewer: reviewer } }
+  }) + '\n'));
+  const startTurn = (rpcId, turnId, reviewerMarker = undefined) => {
+    const params = { threadId: 'T' };
+    if (reviewerMarker !== undefined) params.approvalsReviewer = reviewerMarker;
+    observer.observeClientChunk(Buffer.from(request('turn/start', rpcId, params) + '\n'));
+    observer.observeServerChunk(Buffer.from(JSON.stringify({ id: rpcId, result: { turn: { id: turnId } } }) + '\n'));
+    observer.observeServerChunk(Buffer.from(commandRequest(100 + rpcId, {
+      threadId: 'T', turnId, itemId: `I${turnId}`
+    }) + '\n'));
+  };
+
+  // A, C: Canonical settings updates survive a protocol-shaped {turn} result.
+  settings('user'); startTurn(1, 'A');
+  settings('auto_review'); startTurn(2, 'B');
+  // D, E: Explicit turn values override the thread reviewer in both directions.
+  settings('auto_review'); startTurn(3, 'C', 'user');
+  settings('user'); startTurn(4, 'D', 'auto_review');
+  // F: Explicit null means no turn override and preserves thread provenance.
+  settings('user'); startTurn(5, 'E', null);
+  // G: Explicit unsupported values suppress fallback for that turn only.
+  settings('user'); startTurn(6, 'F', 'guardian_subagent');
+  // H: Both directions of canonical settings change apply immediately.
+  settings('user');
+  observer.observeServerChunk(Buffer.from(commandRequest(107, { threadId: 'T', turnId: 'G', itemId: 'IG' }) + '\n'));
+  settings('auto_review');
+  observer.observeServerChunk(Buffer.from(commandRequest(108, { threadId: 'T', turnId: 'H', itemId: 'IH' }) + '\n'));
+  await tick();
+
+  assert.deepEqual(events.filter(event => event.event === 'approval_requested').map(event => [event.turnId, event.approvalsReviewer]), [
+    ['A', 'user'], ['B', 'auto_review'], ['C', 'user'], ['D', 'auto_review'], ['E', 'user'],
+    ['G', 'user'], ['H', 'auto_review']
+  ]);
+  const requestA = events.find(event => event.event === 'approval_requested' && event.turnId === 'A');
+  assert.deepEqual({ rpcIdType: requestA.rpcIdType, rpcId: requestA.rpcId, threadId: requestA.threadId,
+    turnId: requestA.turnId, itemId: requestA.itemId, sourceInstanceId: requestA.sourceInstanceId }, {
+    rpcIdType: 'number', rpcId: '101', threadId: 'T', turnId: 'A', itemId: 'IA', sourceInstanceId: TEST_SOURCE_INSTANCE_ID
+  });
+});
+
+test('thread resume reviewer survives ordinary turn/start response without settings update', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeClientChunk(Buffer.from(request('thread/resume', 21, { threadId: 'T' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ id: 21, result: { threadId: 'T', approvalsReviewer: 'user' } }) + '\n'));
+  observer.observeClientChunk(Buffer.from(request('turn/start', 22, { threadId: 'T' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ id: 22, result: { turn: { id: 'U' } } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(23, { threadId: 'T', turnId: 'U', itemId: 'I' }) + '\n'));
+  await tick();
+  assert.deepEqual(events.filter(event => event.event === 'approval_requested').map(event => [event.approvalsReviewer, event.sourceInstanceId]),
+    [['user', TEST_SOURCE_INSTANCE_ID]]);
+});
+
+test('legacy thread settings notification reviewer fallbacks remain supported', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
+    params: { threadId: 'T', settings: { approvalsReviewer: 'user' } } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(31, { threadId: 'T', turnId: 'A', itemId: 'IA' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
+    params: { threadId: 'T', approvalsReviewer: 'auto_review' } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(32, { threadId: 'T', turnId: 'B', itemId: 'IB' }) + '\n'));
+  await tick();
+  assert.deepEqual(events.filter(event => event.event === 'approval_requested').map(event => [event.turnId, event.approvalsReviewer]),
+    [['A', 'user'], ['B', 'auto_review']]);
+});
+
+test('turn/completed clears an actual turn reviewer override', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
+    params: { threadId: 'T', threadSettings: { approvalsReviewer: 'auto_review' } } }) + '\n'));
+  observer.observeClientChunk(Buffer.from(request('turn/start', 41, { threadId: 'T', approvalsReviewer: 'user' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ id: 41, result: { turn: { id: 'U' } } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(42, { threadId: 'T', turnId: 'U', itemId: 'I1' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'turn/completed',
+    params: { threadId: 'T', turn: { id: 'U', status: 'completed' } } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(43, { threadId: 'T', turnId: 'U', itemId: 'I2' }) + '\n'));
+  await tick();
+  assert.deepEqual(events.filter(event => event.event === 'approval_requested').map(event => event.approvalsReviewer),
+    ['user', 'auto_review']);
+});
+
+test('reviewer request tracking saturation invalidates thread fallback instead of failing open', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
+    params: { threadId: 'TARGET', threadSettings: { approvalsReviewer: 'user' } } }) + '\n'));
+  for (let index = 0; index < 256; index++) {
+    observer.observeClientChunk(Buffer.from(request('turn/start', 1000 + index, {
+      threadId: `fill-${index}`
+    }) + '\n'));
+  }
+  observer.observeClientChunk(Buffer.from(request('turn/start', 2000, {
+    threadId: 'TARGET', approvalsReviewer: 'guardian_subagent'
+  }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({
+    id: 2000, result: { turn: { id: 'target-turn' } }
+  }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(3000, {
+    threadId: 'TARGET', turnId: 'target-turn', itemId: 'I'
+  }) + '\n'));
+  await tick();
+  assert.equal(events.filter(event => event.event === 'approval_requested').length, 0);
+});
+
+test('turn reviewer map saturation invalidates thread fallback instead of failing open', async () => {
+  const events = []; const observer = observerWith(events);
+  for (let index = 0; index < 512; index++) {
+    observer.observeClientChunk(Buffer.from(request('turn/start', 4000 + index, {
+      threadId: `fill-${index}`, approvalsReviewer: 'user'
+    }) + '\n'));
+    observer.observeServerChunk(Buffer.from(JSON.stringify({
+      id: 4000 + index, result: { turn: { id: `turn-${index}` } }
+    }) + '\n'));
+  }
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
+    params: { threadId: 'TARGET', threadSettings: { approvalsReviewer: 'user' } } }) + '\n'));
+  observer.observeClientChunk(Buffer.from(request('turn/start', 5000, {
+    threadId: 'TARGET', approvalsReviewer: 'guardian_subagent'
+  }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({
+    id: 5000, result: { turn: { id: 'target-turn' } }
+  }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(6000, {
+    threadId: 'TARGET', turnId: 'target-turn', itemId: 'I'
+  }) + '\n'));
+  await tick();
+  assert.equal(events.filter(event => event.event === 'approval_requested').length, 0);
+});
+
 test('reviewer unknown, malformed, permissions family, and auto_review acceptance never create owner wait', async () => {
   const events = []; const observer = observerWith(events);
   observer.observeServerChunk(Buffer.from(commandRequest(1, { threadId: 'T', turnId: 'U', itemId: 'I' }) + '\n'));

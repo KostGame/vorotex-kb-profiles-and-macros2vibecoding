@@ -53,10 +53,19 @@ enum, typed RPC ID, those three opaque IDs, and a bounded `sourceInstanceId`
 home. The raw home path is never persisted. On Windows, `CODEX_HOME` is used
 when set and `%USERPROFILE%\\.codex` semantics are used otherwise. Identity
 derivation fails closed for unsupported or non-ASCII canonical paths. Unknown or malformed reviewer
-provenance emits no request event and never creates WAITING. The bridge tracks
-reviewer state from thread start/resume/fork responses, settings updates, and
-turn/start overrides scoped to the returned turn; turn state is cleared on
-completion. Status Lab enters WAITING only for `approvalsReviewer=user` and an
+provenance emits no request event and never creates WAITING. Current
+`thread/settings/updated` notifications carry the reviewer at
+`params.threadSettings.approvalsReviewer`; this canonical field takes
+precedence, with the older `params.settings.approvalsReviewer` and direct
+`params.approvalsReviewer` shapes retained as compatibility fallbacks. The
+bridge tracks reviewer state from thread start/resume/fork responses, settings
+updates, and turn/start overrides scoped to the returned turn. An omitted or
+explicitly null `turn/start` reviewer preserves the thread reviewer; a
+supported explicit turn reviewer takes precedence, while an unsupported value
+fails closed for that turn. A turn/start response without reviewer provenance
+(the current `{ turn }` response shape) does not shadow the thread reviewer.
+Turn state is cleared on completion. Status Lab enters WAITING only for
+`approvalsReviewer=user` and an
 exact unique active non-internal session. Raw hook `PermissionRequest` is
 diagnostic only. The
 `item/permissions` family remains diagnostic-only and never emits
