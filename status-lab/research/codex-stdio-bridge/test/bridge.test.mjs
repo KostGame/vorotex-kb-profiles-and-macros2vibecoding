@@ -473,6 +473,30 @@ test('same typed id reused with different metadata preserves the first exact pen
   assert.equal(observer.pendingCount(), 0);
 });
 
+test('typed id reuse after resolution is permanently fail-closed within one observer', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
+    params: { threadId: 'thread-A', settings: { approvalsReviewer: 'user' } } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(77, {
+    threadId: 'thread-A', turnId: 'turn-A', itemId: 'item-A'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(77, 'accept') + '\n'));
+  await tick();
+  assert.equal(events.length, 2);
+  assert.equal(observer.pendingCount(), 0);
+
+  observer.observeServerChunk(Buffer.from(commandRequest(77, {
+    threadId: 'thread-A', turnId: 'turn-B', itemId: 'item-B'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(77, 'acceptForSession') + '\n'));
+  await tick();
+
+  assert.equal(events.length, 2, 'reused id emits neither a second wait nor a resolution');
+  assert.equal(events[0].turnId, 'turn-A');
+  assert.equal(events[1].turnId, 'turn-A');
+  assert.equal(observer.pendingCount(), 0);
+});
+
 test('matching owner resolution survives a saturated bounded telemetry queue', async () => {
   const events = [];
   let releaseFirst;

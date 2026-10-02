@@ -97,6 +97,14 @@ internal static class CodexReadAckTests
         typedReplayReducer.Apply(ApprovalRequest(3, rpc: "92"));
         Check(typedReplayReducer.State == K15NormalizedState.Running,
             "LATE_REQUEST_AFTER_POST_TOOL_USE_IGNORED");
+        var reorderedHook = new StateReducer(0, T);
+        reorderedHook.Apply(Hook("UserPromptSubmit", 1));
+        reorderedHook.Apply(Hook("PostToolUse", 10));
+        reorderedHook.Apply(Hook("PostToolUse", 8));
+        reorderedHook.Apply(ApprovalRequest(9, rpc: "93"));
+        Check(reorderedHook.State == K15NormalizedState.Running &&
+              reorderedHook.SessionSnapshots.Single().LastActivityUtc == T.AddSeconds(10),
+            "DELAYED_HOOK_CANNOT_REWIND_ACTIVITY_OR_REOPEN_WAITING");
         var stoppedApproval = new StateReducer(0, T);
         stoppedApproval.Apply(Hook("UserPromptSubmit", 1));
         stoppedApproval.Apply(Hook("Stop", 4));

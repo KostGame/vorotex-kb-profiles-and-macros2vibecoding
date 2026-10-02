@@ -414,6 +414,11 @@ internal sealed class StateReducer
     private StateTransition? ApplyCodex(StatusInputEvent input)
     {
         var session = GetOrCreateSession(input);
+        // Hook delivery may be delayed or reordered. Never let an older hook
+        // move the session watermark backward or mutate state after newer
+        // authoritative activity has already been observed.
+        if (input.TimestampUtc < session.LastActivityUtc)
+            return null;
         if (input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd" ||
             (input.TurnId.Length != 0 && input.TurnId != session.TurnId))
             ClearApprovalCorrelation(session);

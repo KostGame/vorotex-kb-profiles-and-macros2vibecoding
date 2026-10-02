@@ -12,6 +12,7 @@ const PERMISSIONS_REQUEST_FAMILY = 'item/permissions';
 
 const DECISIONS = new Set(['accept', 'acceptForSession', 'decline', 'cancel']);
 const MAX_PENDING = 256;
+const MAX_SEEN_REQUEST_IDS = 4096;
 const MAX_REVIEWER_THREADS = 512;
 const MAX_PARTIAL_BYTES = 64 * 1024;
 const MAX_FIELD_BYTES = 1024;
@@ -182,6 +183,8 @@ export class ApprovalObserver {
   #ownerQueue = [];
   #telemetryQueue = [];
   #ownerCredits = 0;
+  #seenRequestIds = new Set();
+  #requestIdHistorySaturated = false;
   #reviewers = new Map();
   #reviewerRequests = new Map();
   #turnReviewers = new Map();
@@ -256,9 +259,19 @@ export class ApprovalObserver {
     if (family === PERMISSIONS_REQUEST_FAMILY &&
         !['threadId', 'turnId', 'itemId'].every(key => metadata[key])) return;
     const idKey = JSON.stringify([id.type, id.value]);
-    // JSON-RPC ids identify requests independently of method metadata. Keep
-    // the first pending correlation and fail closed on every reuse.
-    if ([...this.#pending.values()].some(request => request.idKey === idKey) || this.#pending.size >= MAX_PENDING) return;
+    // JSON-RPC ids identify server->client requests independently of method
+    // metadata. A delayed duplicate response is indistinguishable from a
+    // response to a later request reusing the same typed id, so semantic
+    // approval authority rejects id reuse for the lifetime of this observer.
+    // The history is bounded; once saturated, stop admitting new requests
+    // rather than evicting history and reopening a cross-correlation window.
+    if (this.#requestIdHistorySaturated || this.#seenRequestIds.has(idKey)) return;
+    if (this.#seenRequestIds.size >= MAX_SEEN_REQUEST_IDS) {
+      this.#requestIdHistorySaturated = true;
+      return;
+    }
+    this.#seenRequestIds.add(idKey);
+    if (this.#pending.size >= MAX_PENDING) return;
     const key = pendingKey(family, id, metadata);
     const request = {
       rpcIdType: id.type,
