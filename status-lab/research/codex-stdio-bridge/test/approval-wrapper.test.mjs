@@ -36,6 +36,7 @@ test('opt-in approval wrapper preserves transport and emits only sanitized side-
   stderr.on('data', (chunk) => diagnostics.push(Buffer.from(chunk)));
   const run = runApprovalWrapper({
     argv: ['app-server'],
+    sourceInstanceId: 'local:fc48c8bff668af187c6ae9b203b3321c',
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CODEX_BRIDGE_'))),
       CODEX_BRIDGE_CHILD_PATH: fakeChild,

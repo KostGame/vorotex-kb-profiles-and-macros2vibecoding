@@ -215,7 +215,7 @@ internal static class EventJournal
     }
     private static bool IsSafePermissionEvidence(JsonElement value)
     {
-        var allowed = new[] { "eventSubtype", "requestKind", "requestId", "rpcIdType", "rpcId", "toolName", "permissionMode", "itemId", "threadId", "turnId", "sessionId", "eventSubtypePresent", "requestKindPresent", "requestIdPresent", "rpcIdPresent", "toolNamePresent", "permissionModePresent", "itemIdPresent", "threadIdPresent", "turnIdPresent", "sessionIdPresent" };
+        var allowed = new[] { "eventSubtype", "requestKind", "requestId", "rpcIdType", "rpcId", "requestFamily", "toolName", "permissionMode", "itemId", "threadId", "turnId", "sessionId", "eventSubtypePresent", "requestKindPresent", "requestIdPresent", "rpcIdPresent", "toolNamePresent", "permissionModePresent", "itemIdPresent", "threadIdPresent", "turnIdPresent", "sessionIdPresent" };
         if (value.ValueKind != JsonValueKind.Object || value.EnumerateObject().Any(p => !allowed.Contains(p.Name, StringComparer.Ordinal))) return false;
         foreach (var property in value.EnumerateObject())
         {
@@ -281,6 +281,27 @@ internal static class EventJournal
     private static bool IsSanitizedApprovalRecord(JsonElement root)
     {
         var schemaVersion = GetString(root, "schemaVersion");
+        if (schemaVersion == "k15-codex-approval-request/v1")
+        {
+            var requestAllowed = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "schemaVersion", "timestampUtc", "source", "event", "requestFamily", "approvalsReviewer",
+                "rpcIdType", "rpcId", "threadId", "turnId", "itemId", "sourceInstanceId"
+            };
+            if (root.EnumerateObject().Any(property => !requestAllowed.Contains(property.Name) ||
+                    property.Value.ValueKind != JsonValueKind.String ||
+                    Encoding.UTF8.GetByteCount(property.Value.GetString() ?? string.Empty) > 1024)) return false;
+            return GetString(root, "event") == "approval_requested" &&
+                (GetString(root, "requestFamily") is "item/commandExecution" or "item/fileChange") &&
+                (GetString(root, "approvalsReviewer") is "user" or "auto_review") &&
+                (GetString(root, "rpcIdType") is "number" or "string") &&
+                !string.IsNullOrWhiteSpace(GetString(root, "rpcId")) &&
+                !string.IsNullOrWhiteSpace(GetString(root, "threadId")) &&
+                !string.IsNullOrWhiteSpace(GetString(root, "turnId")) &&
+                !string.IsNullOrWhiteSpace(GetString(root, "itemId")) &&
+                CodexSourceIdentity.IsValid(GetString(root, "sourceInstanceId")) &&
+                DateTimeOffset.TryParse(GetString(root, "timestampUtc"), out _);
+        }
         if (schemaVersion == "k15-codex-completion/v1")
         {
             var completionAllowed = new HashSet<string>(StringComparer.Ordinal)
@@ -317,9 +338,12 @@ internal static class EventJournal
         var approvalAllowed = new HashSet<string>(StringComparer.Ordinal)
         {
             "schemaVersion", "timestampUtc", "source", "event", "decision",
-            "rpcIdType", "rpcId", "threadId", "turnId", "itemId"
+            "rpcIdType", "rpcId", "threadId", "turnId", "itemId", "sourceInstanceId"
         };
         if (root.EnumerateObject().Any(property => !approvalAllowed.Contains(property.Name)))
+            return false;
+        var hasSourceInstanceId = root.TryGetProperty("sourceInstanceId", out _);
+        if (hasSourceInstanceId && !CodexSourceIdentity.IsValid(GetString(root, "sourceInstanceId")))
             return false;
 
         if (GetString(root, "event") != "approval_resolved" ||

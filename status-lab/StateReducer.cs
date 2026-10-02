@@ -44,7 +44,9 @@ internal sealed record StatusInputEvent(
     string PermissionMode = "",
     bool ToolNameProvided = false,
     bool PermissionModeProvided = false,
-    string SourceInstanceId = "");
+    string SourceInstanceId = "",
+    string RequestFamily = "",
+    string ApprovalsReviewer = "");
 
 internal sealed record PermissionRequestEvidence(
     string EventSubtype = "",
@@ -58,6 +60,7 @@ internal sealed record PermissionRequestEvidence(
     string ThreadId = "",
     string TurnId = "",
     string SessionId = "",
+    string RequestFamily = "",
     bool EventSubtypePresent = false,
     bool RequestKindPresent = false,
     bool RequestIdPresent = false,
@@ -131,6 +134,10 @@ internal sealed class StateReducer
         public K15NormalizedState State { get; set; } = K15NormalizedState.Normal;
         public DateTimeOffset LastActivityUtc { get; set; }
         public DateTimeOffset? LastPermissionUtc { get; set; }
+        public string ApprovalRpcIdType { get; set; } = string.Empty;
+        public string ApprovalRpcId { get; set; } = string.Empty;
+        public string ApprovalItemId { get; set; } = string.Empty;
+        public string ApprovalRequestFamily { get; set; } = string.Empty;
         public DateTimeOffset? LastStopUtc { get; set; }
         public DateTimeOffset? DoneEnteredUtc { get; set; }
         public DateTimeOffset? AcknowledgedUtc { get; set; }
@@ -267,9 +274,13 @@ internal sealed class StateReducer
             return ApplyCodex(input);
 
         if (input.Source.Equals("codex_stdio_bridge", StringComparison.Ordinal))
-            return input.EventName == "turn_completed"
-                ? ApplyTurnCompletion(input)
-                : ApplyApprovalResolution(input);
+            return input.EventName switch
+            {
+                "turn_completed" => ApplyTurnCompletion(input),
+                "approval_requested" => ApplyApprovalRequest(input),
+                "approval_resolved" => ApplyApprovalResolution(input),
+                _ => null
+            };
 
         // Windows toasts are retained as diagnostics only. They are not an ACK
         // signal and must never erase session attention.
@@ -403,6 +414,14 @@ internal sealed class StateReducer
     private StateTransition? ApplyCodex(StatusInputEvent input)
     {
         var session = GetOrCreateSession(input);
+        // Hook delivery may be delayed or reordered. Never let an older hook
+        // move the session watermark backward or mutate state after newer
+        // authoritative activity has already been observed.
+        if (input.TimestampUtc < session.LastActivityUtc)
+            return null;
+        if (input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd" ||
+            (input.TurnId.Length != 0 && input.TurnId != session.TurnId))
+            ClearApprovalCorrelation(session);
         var acknowledged = session.ReadAcknowledgedCompletion;
         if (input.EventName == "Stop" && acknowledged is not null && session.Completion == acknowledged &&
             session.CompletionGeneration == acknowledged.Generation && session.TurnId == acknowledged.TurnId &&
@@ -445,6 +464,9 @@ internal sealed class StateReducer
         if (session.Internal)
             return null;
 
+        if (input.EventName == "PermissionRequest")
+            return null;
+
         session.Ended = false;
         switch (input.EventName)
         {
@@ -459,12 +481,8 @@ internal sealed class StateReducer
                 return RecomputeAggregate("codex_user_prompt_submit", input.TimestampUtc);
 
             case "PermissionRequest":
-                SetSessionState(session, K15NormalizedState.Waiting, "codex_permission_request", input.TimestampUtc, input);
-                session.LastPermissionUtc = input.TimestampUtc;
-                session.LastStopUtc = null;
-                session.DoneEnteredUtc = null;
-                _focusedSessionKey = session.IdentityKey;
-                return RecomputeAggregate("codex_permission_request", input.TimestampUtc);
+                // Raw hook callbacks are diagnostic/lifecycle evidence only.
+                return null;
 
             case "PreToolUse":
             case "PostToolUse":
@@ -493,6 +511,7 @@ internal sealed class StateReducer
     {
         if (input.EventName != "approval_resolved" ||
             input.SchemaVersion != "k15-codex-approval/v1" ||
+            !CodexSourceIdentity.IsValid(input.SourceInstanceId) ||
             input.Decision is not ("accept" or "acceptForSession") ||
             input.RpcIdType is not ("number" or "string") ||
             string.IsNullOrWhiteSpace(input.RpcId))
@@ -504,8 +523,7 @@ internal sealed class StateReducer
 
         var candidates = _sessions.Values
             .Where(session => !session.Internal && !session.Ended &&
-                              (string.IsNullOrWhiteSpace(input.SourceInstanceId) ||
-                               session.SourceInstanceId == input.SourceInstanceId) &&
+                              session.SourceInstanceId == input.SourceInstanceId &&
                               session.State == K15NormalizedState.Waiting)
             .Where(session => MatchesApproval(session, input))
             .ToArray();
@@ -513,13 +531,47 @@ internal sealed class StateReducer
             return null;
 
         var session = candidates[0];
+        if (session.ApprovalRpcId.Length == 0 ||
+            session.ApprovalRpcIdType != input.RpcIdType || session.ApprovalRpcId != input.RpcId ||
+            session.ApprovalItemId != input.ItemId || session.ThreadId != input.ThreadId ||
+            session.TurnId != input.TurnId) return null;
         SetSessionState(session, K15NormalizedState.Running, "codex_approval_resolved", input.TimestampUtc, input);
+        session.ApprovalRpcIdType = session.ApprovalRpcId = session.ApprovalItemId = session.ApprovalRequestFamily = string.Empty;
         session.LastPermissionUtc = null;
         session.LastStopUtc = null;
         session.DoneEnteredUtc = null;
         session.AcknowledgedUtc = input.TimestampUtc;
         _focusedSessionKey = session.IdentityKey;
         return RecomputeAggregate("codex_approval_resolved", input.TimestampUtc);
+    }
+
+    private StateTransition? ApplyApprovalRequest(StatusInputEvent input)
+    {
+        if (input.SchemaVersion != "k15-codex-approval-request/v1" ||
+            !CodexSourceIdentity.IsValid(input.SourceInstanceId) ||
+            input.ApprovalsReviewer != "user" ||
+            input.RequestFamily is not ("item/commandExecution" or "item/fileChange") ||
+            input.RpcIdType is not ("number" or "string") || string.IsNullOrWhiteSpace(input.RpcId) ||
+            !CodexUnreadStateReader.Bounded(input.ThreadId) || !CodexUnreadStateReader.Bounded(input.TurnId) ||
+            !CodexUnreadStateReader.Bounded(input.ItemId)) return null;
+
+        var candidates = _sessions.Values.Where(session => !session.Internal && !session.Ended &&
+            session.SourceInstanceId == input.SourceInstanceId &&
+            session.State == K15NormalizedState.Running && input.TimestampUtc >= session.LastActivityUtc &&
+            session.ThreadId == input.ThreadId && session.TurnId == input.TurnId).ToArray();
+        if (candidates.Length != 1) return null;
+
+        var session = candidates[0];
+        session.ApprovalRpcIdType = input.RpcIdType;
+        session.ApprovalRpcId = input.RpcId;
+        session.ApprovalItemId = input.ItemId;
+        session.ApprovalRequestFamily = input.RequestFamily;
+        SetSessionState(session, K15NormalizedState.Waiting, "codex_permission_request", input.TimestampUtc, input);
+        session.LastPermissionUtc = input.TimestampUtc;
+        session.LastStopUtc = null;
+        session.DoneEnteredUtc = null;
+        _focusedSessionKey = session.IdentityKey;
+        return RecomputeAggregate("codex_permission_request", input.TimestampUtc);
     }
 
     private StateTransition? ApplyTurnCompletion(StatusInputEvent input)
@@ -587,6 +639,14 @@ internal sealed class StateReducer
         }
 
         return hasCorrelation;
+    }
+
+    private static void ClearApprovalCorrelation(SessionRuntime session)
+    {
+        session.ApprovalRpcIdType = string.Empty;
+        session.ApprovalRpcId = string.Empty;
+        session.ApprovalItemId = string.Empty;
+        session.ApprovalRequestFamily = string.Empty;
     }
 
     private SessionRuntime GetOrCreateSession(StatusInputEvent input)
@@ -706,16 +766,18 @@ internal sealed class StateReducer
             input?.RpcIdType ?? string.Empty,
             input?.RpcId ?? string.Empty,
             false,
-            input?.EventName == "PermissionRequest"
+            input?.EventName == "approval_requested"
                 ? new PermissionRequestEvidence(
-                    ToolName: BoundedDiagnostic(input.ToolName),
-                    PermissionMode: BoundedDiagnostic(input.PermissionMode),
+                    EventSubtype: "typed_bridge_approval_request",
+                    RequestKind: BoundedDiagnostic(input.RequestFamily),
+                    RequestId: BoundedDiagnostic(input.RpcId),
+                    RpcIdType: BoundedDiagnostic(input.RpcIdType),
+                    RpcId: BoundedDiagnostic(input.RpcId),
+                    RequestFamily: BoundedDiagnostic(input.RequestFamily),
                     ItemId: BoundedDiagnostic(input.ItemId),
                     ThreadId: BoundedDiagnostic(input.ThreadId),
                     TurnId: BoundedDiagnostic(input.TurnId),
                     SessionId: BoundedDiagnostic(input.SessionId),
-                    ToolNamePresent: input.ToolNameProvided || !string.IsNullOrWhiteSpace(input.ToolName),
-                    PermissionModePresent: input.PermissionModeProvided || !string.IsNullOrWhiteSpace(input.PermissionMode),
                     ItemIdPresent: !string.IsNullOrWhiteSpace(input.ItemId),
                     ThreadIdPresent: !string.IsNullOrWhiteSpace(input.ThreadId),
                     TurnIdPresent: !string.IsNullOrWhiteSpace(input.TurnId),

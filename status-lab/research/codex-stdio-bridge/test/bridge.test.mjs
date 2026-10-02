@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { ApprovalObserver, NativeThreadStatusObserver, NativeThreadMetadataObserver, connectTransparentBridge, createSanitizedJsonlSink } from '../src/bridge-core.mjs';
+import { ApprovalObserver, NativeThreadStatusObserver, NativeThreadMetadataObserver, connectTransparentBridge, createSanitizedJsonlSink, codexSourceInstanceId } from '../src/bridge-core.mjs';
 
 const request = (method, id, params = {}) => JSON.stringify({ jsonrpc: '2.0', id, method, params });
 const commandRequest = (id, extras = {}) => request('item/commandExecution/requestApproval', id, extras);
@@ -25,10 +25,19 @@ async function collect(stream) {
 }
 
 function observerWith(events, sink = (event) => events.push(event)) {
-  return new ApprovalObserver({ telemetrySink: sink });
+  return new ApprovalObserver({ telemetrySink: sink, sourceInstanceId: TEST_SOURCE_INSTANCE_ID });
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const TEST_SOURCE_INSTANCE_ID = 'local:fc48c8bff668af187c6ae9b203b3321c';
+
+test('Windows Codex source identity matches the Status Lab golden vector and fails closed on non-ASCII paths', () => {
+  assert.equal(codexSourceInstanceId({}, 'win32', 'C:\\Users\\Tester'), TEST_SOURCE_INSTANCE_ID);
+  assert.equal(codexSourceInstanceId({ CODEX_HOME: 'D:\\Codex\\' }, 'win32'),
+    codexSourceInstanceId({ CODEX_HOME: 'd:/codex' }, 'win32'));
+  assert.equal(codexSourceInstanceId({ CODEX_HOME: 'C:\\Users\\Tést' }, 'win32'), undefined);
+  assert.equal(codexSourceInstanceId({}, 'linux', '/home/tester'), undefined);
+});
 
 test('transport is byte-transparent in both directions and stderr remains separate', async () => {
   const clientInput = new PassThrough(); const childInput = new PassThrough();
@@ -189,21 +198,28 @@ test('slow authority sink preserves order and reports bounded overflow', async (
   assert.equal(observer.authorityHealth().healthy, false);
 });
 
-test('live numeric approval request and exact result.decision response emit one sanitized event', async () => {
+test('live numeric approval request and exact result.decision response emit sanitized request and resolution', async () => {
   const events = []; const observer = observerWith(events);
+  observer.observeClientChunk(Buffer.from(request('thread/start', 900, {}) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 900, result: { threadId: 'T', approvalsReviewer: 'user' } }) + '\n'));
   observer.observeServerChunk(Buffer.from(commandRequest(1, {
     threadId: 'T', turnId: 'U', itemId: 'I', command: 'MUST NOT REACH SIDE CHANNEL'
   }) + '\n'));
   observer.observeClientChunk(Buffer.from(response(1, 'accept', { secret: 'MUST NOT REACH SIDE CHANNEL' }) + '\n'));
   await tick();
-  assert.equal(events.length, 1);
-  assert.deepEqual(Object.keys(events[0]).sort(), [
-    'decision', 'event', 'itemId', 'rpcId', 'rpcIdType', 'schemaVersion',
-    'source', 'threadId', 'timestampUtc', 'turnId'
-  ].sort());
+  assert.equal(events.length, 2);
   assert.deepEqual(events[0], {
+    schemaVersion: 'k15-codex-approval-request/v1', source: 'codex_stdio_bridge', event: 'approval_requested',
+    timestampUtc: events[0].timestampUtc, requestFamily: 'item/commandExecution', rpcIdType: 'number', rpcId: '1',
+    threadId: 'T', turnId: 'U', itemId: 'I', approvalsReviewer: 'user', sourceInstanceId: TEST_SOURCE_INSTANCE_ID
+  });
+  assert.deepEqual(Object.keys(events[1]).sort(), [
+    'decision', 'event', 'itemId', 'rpcId', 'rpcIdType', 'schemaVersion',
+    'source', 'sourceInstanceId', 'threadId', 'timestampUtc', 'turnId'
+  ].sort());
+  assert.deepEqual(events[1], {
     schemaVersion: 'k15-codex-approval/v1',
-    timestampUtc: events[0].timestampUtc,
+    timestampUtc: events[1].timestampUtc,
     source: 'codex_stdio_bridge',
     event: 'approval_resolved',
     rpcIdType: 'number',
@@ -211,10 +227,49 @@ test('live numeric approval request and exact result.decision response emit one 
     decision: 'accept',
     threadId: 'T',
     turnId: 'U',
-    itemId: 'I'
+    itemId: 'I',
+    sourceInstanceId: TEST_SOURCE_INSTANCE_ID
   });
-  assert.doesNotMatch(JSON.stringify(events[0]), /MUST NOT REACH SIDE CHANNEL/);
+  assert.doesNotMatch(JSON.stringify(events), /MUST NOT REACH SIDE CHANNEL/);
   assert.equal(observer.pendingCount(), 0);
+});
+
+test('reviewer provenance follows settings and scopes turn overrides to the returned turn', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeClientChunk(Buffer.from(request('thread/start', 1) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ id: 1, result: { threadId: 'T', approvalsReviewer: 'auto_review' } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(2, { threadId: 'T', turnId: 'A', itemId: 'IA' }) + '\n'));
+  assert.deepEqual(events.map(e => e.approvalsReviewer), ['auto_review'], 'auto_review request may be diagnostic but is never owner-waiting');
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated', params: { threadId: 'T', settings: { approvalsReviewer: 'user' } } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(3, { threadId: 'T', turnId: 'B', itemId: 'IB' }) + '\n'));
+  observer.observeClientChunk(Buffer.from(request('turn/start', 4, { threadId: 'T', approvalsReviewer: 'auto_review' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ id: 4, result: { threadId: 'T', turn: { id: 'C' }, approvalsReviewer: 'auto_review' } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(5, { threadId: 'T', turnId: 'C', itemId: 'IC' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(6, { threadId: 'T', turnId: 'D', itemId: 'ID' }) + '\n'));
+  await tick();
+  assert.deepEqual(events.map(e => [e.turnId, e.approvalsReviewer]), [['A', 'auto_review'], ['B', 'user'], ['C', 'auto_review'], ['D', 'user']]);
+});
+
+test('settings can revoke user reviewer and malformed or oversized reviewer values fail calm', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeClientChunk(Buffer.from(request('thread/start', 11) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ id: 11, result: { threadId: 'T', approvalsReviewer: 'user' } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated', params: { threadId: 'T', settings: { approvalsReviewer: 'auto_review' } } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(12, { threadId: 'T', turnId: 'A', itemId: 'I' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated', params: { threadId: 'T', settings: { approvalsReviewer: 'x'.repeat(2000) } } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(13, { threadId: 'T', turnId: 'B', itemId: 'J' }) + '\n'));
+  await tick();
+  assert.deepEqual(events.map(e => [e.turnId, e.approvalsReviewer]), [['A', 'auto_review']]);
+});
+
+test('reviewer unknown, malformed, permissions family, and auto_review acceptance never create owner wait', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(commandRequest(1, { threadId: 'T', turnId: 'U', itemId: 'I' }) + '\n'));
+  observer.observeServerChunk(Buffer.from(permissionsRequest(2, { threadId: 'T', turnId: 'U', itemId: 'P' }) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(1, 'accept') + '\n'));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, 'approval_resolved');
 });
 
 test('permissions request and response emit separate exact diagnostic without decision semantics', async () => {
@@ -293,8 +348,8 @@ test('permissions malformed, duplicate, cross-family, and mismatched responses f
     permissionsResponse(76, { scope: 'turn' }) + '\n'
   ));
   await tick();
-  assert.deepEqual(events.map(event => event.rpcId), ['74', '76']);
-  assert.equal(observer.pendingCount(), 2);
+  assert.deepEqual(events.filter(event => event.event === 'permissions_approval_observed').map(event => event.rpcId), ['74', '76']);
+  assert.equal(observer.pendingCount(), 0);
 });
 
 test('permissions requests missing exact thread, turn, or item identity are rejected', () => {
@@ -305,6 +360,16 @@ test('permissions requests missing exact thread, turn, or item identity are reje
     permissionsRequest(82, { threadId: 'T', turnId: 'U' }) + '\n'
   ));
   assert.equal(observer.pendingCount(), 0);
+});
+
+test('command and file requests missing exact IDs emit no authority event', () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(
+    commandRequest(83, { turnId: 'U', itemId: 'I', command: 'PRIVATE_COMMAND' }) + '\n' +
+    fileRequest(84, { threadId: 'T', itemId: 'I', path: 'PRIVATE_PATH' }) + '\n' +
+    commandRequest(85, { threadId: 'T', turnId: 'U', command: 'PRIVATE_COMMAND' }) + '\n'
+  ));
+  assert.deepEqual(events, []);
 });
 
 test('exact turn/completed notification emits only bounded sanitized completion metadata', async () => {
@@ -390,15 +455,98 @@ test('numeric 1 and string "1" are separate typed correlations', async () => {
   ]);
 });
 
-test('same typed id with different request metadata remains ambiguous and fails closed', () => {
+test('numeric -0 and 0 share one canonical request identity and cannot cross-correlate', async () => {
   const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({
+    jsonrpc: '2.0', id: -0, method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'T', turnId: 'negative-zero', itemId: 'I0' }
+  }).replace('"id":0', '"id":-0') + '\n'));
+  observer.observeClientChunk(Buffer.from(response(0, 'accept') + '\n'));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, 'approval_resolved');
+  assert.equal(events[0].rpcIdType, 'number');
+  assert.equal(events[0].rpcId, '0');
+  assert.equal(events[0].turnId, 'negative-zero');
+
+  observer.observeServerChunk(Buffer.from(commandRequest(0, {
+    threadId: 'T', turnId: 'positive-zero-reuse', itemId: 'I1'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(0, 'acceptForSession') + '\n'));
+  await tick();
+  assert.equal(events.length, 1, 'numeric zero reuse is rejected after canonical -0 resolution');
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('same typed id reused with different metadata preserves the first exact pending correlation', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
+    params: { threadId: 'thread-A', settings: { approvalsReviewer: 'user' } } }) + '\n'));
   observer.observeServerChunk(Buffer.from(
-    commandRequest(5, { threadId: 'thread-A', turnId: 'turn-A' }) + '\n' +
-    commandRequest(5, { threadId: 'thread-B', turnId: 'turn-B' }) + '\n'
+    commandRequest(5, { threadId: 'thread-A', turnId: 'turn-A', itemId: 'item-A' }) + '\n' +
+    commandRequest(5, { threadId: 'thread-B', turnId: 'turn-B', itemId: 'item-B' }) + '\n'
   ));
   observer.observeClientChunk(Buffer.from(response(5, 'accept') + '\n'));
-  assert.deepEqual(events, []);
-  assert.equal(observer.pendingCount(), 2);
+  await tick();
+  assert.equal(events.length, 2);
+  assert.equal(events[0].threadId, 'thread-A');
+  assert.equal(events[0].sourceInstanceId, TEST_SOURCE_INSTANCE_ID);
+  assert.equal(events[1].threadId, 'thread-A');
+  assert.equal(events[1].sourceInstanceId, TEST_SOURCE_INSTANCE_ID);
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('typed id reuse after resolution is permanently fail-closed within one observer', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
+    params: { threadId: 'thread-A', settings: { approvalsReviewer: 'user' } } }) + '\n'));
+  observer.observeServerChunk(Buffer.from(commandRequest(77, {
+    threadId: 'thread-A', turnId: 'turn-A', itemId: 'item-A'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(77, 'accept') + '\n'));
+  await tick();
+  assert.equal(events.length, 2);
+  assert.equal(observer.pendingCount(), 0);
+
+  observer.observeServerChunk(Buffer.from(commandRequest(77, {
+    threadId: 'thread-A', turnId: 'turn-B', itemId: 'item-B'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(77, 'acceptForSession') + '\n'));
+  await tick();
+
+  assert.equal(events.length, 2, 'reused id emits neither a second wait nor a resolution');
+  assert.equal(events[0].turnId, 'turn-A');
+  assert.equal(events[1].turnId, 'turn-A');
+  assert.equal(observer.pendingCount(), 0);
+});
+
+test('matching owner resolution survives a saturated bounded telemetry queue', async () => {
+  const events = [];
+  let releaseFirst;
+  const observer = new ApprovalObserver({
+    sourceInstanceId: TEST_SOURCE_INSTANCE_ID,
+    telemetrySink: event => {
+      events.push(event);
+      if (events.length === 1) return new Promise(resolve => { releaseFirst = resolve; });
+    }
+  });
+  observer.observeClientChunk(Buffer.from(request('thread/start', 900, {}) + '\n'));
+  observer.observeServerChunk(Buffer.from(JSON.stringify({ id: 900, result: { threadId: 'T', approvalsReviewer: 'user' } }) + '\n'));
+  const requests = Array.from({ length: 256 }, (_, index) => commandRequest(index + 1, {
+    threadId: 'T', turnId: 'U', itemId: `I${index}`
+  })).join('\n') + '\n';
+  observer.observeServerChunk(Buffer.from(requests));
+  observer.observeClientChunk(Buffer.from(Array.from({ length: 256 }, (_, index) =>
+    response(index + 1, 'accept')).join('\n') + '\n'));
+  assert.equal(observer.pendingCount(), 0);
+  assert.equal(events.length, 1, 'one sink write is held while bounded lanes queue the remaining events');
+  releaseFirst();
+  for (let attempt = 0; attempt < 20 && events.length < 512; attempt++) await tick();
+  assert.equal(events.length, 512);
+  assert.equal(events.filter(event => event.event === 'approval_requested').length, 256);
+  assert.equal(events.filter(event => event.event === 'approval_resolved').length, 256);
+  assert.equal(events.filter(event => event.event === 'approval_resolved')
+    .every(event => event.sourceInstanceId === TEST_SOURCE_INSTANCE_ID), true);
 });
 
 test('parallel approvals and same-thread concurrent approvals cannot cross-correlate', async () => {
@@ -479,22 +627,24 @@ test('invalid JSON and oversize records remain unobservable while transport obse
   assert.equal(observer.pendingCount(), 0);
 });
 
-test('telemetry sink failure and a busy sink do not break correlation', async () => {
-  const events = []; let release;
+test('telemetry sink failure and a busy sink do not break correlation or drop queued events', async () => {
+  const events = []; let release; let first = true;
   const observer = observerWith(events, (event) => {
     events.push(event);
-    if (event.rpcId === '50') return new Promise((resolve) => { release = resolve; });
+    if (first) { first = false; return new Promise((resolve) => { release = resolve; }); }
     throw new Error('sink unavailable');
   });
   observer.observeServerChunk(Buffer.from(commandRequest(50) + '\n' + commandRequest(51) + '\n'));
   observer.observeClientChunk(Buffer.from(response(50, 'accept') + '\n' + response(51, 'accept') + '\n'));
   await tick();
-  assert.deepEqual(events.map((event) => event.rpcId), ['50']);
-  release(); await tick();
+  assert.equal(events.length, 1);
+  release();
+  for (let attempt = 0; attempt < 10 && events.length < 2; attempt++) await tick();
+  assert.deepEqual(events.map((event) => event.rpcId), ['50', '51']);
   observer.observeServerChunk(Buffer.from(commandRequest(52) + '\n'));
   observer.observeClientChunk(Buffer.from(response(52, 'accept') + '\n'));
-  await tick();
-  assert.deepEqual(events.map((event) => event.rpcId), ['50', '52']);
+  for (let attempt = 0; attempt < 10 && events.length < 3; attempt++) await tick();
+  assert.deepEqual(events.map((event) => event.rpcId), ['50', '51', '52']);
 });
 
 test('a failing telemetry sink cannot block either transparent transport direction', async () => {
