@@ -550,7 +550,7 @@ internal sealed class StateReducer
         if (input.SchemaVersion != "k15-codex-approval-request/v1" ||
             !CodexSourceIdentity.IsValid(input.SourceInstanceId) ||
             input.ApprovalsReviewer != "user" ||
-            input.RequestFamily is not ("item/commandExecution" or "item/fileChange") ||
+            input.RequestFamily is not ("item/commandExecution" or "item/fileChange" or "item/permissions") ||
             input.RpcIdType is not ("number" or "string") || string.IsNullOrWhiteSpace(input.RpcId) ||
             !CodexUnreadStateReader.Bounded(input.ThreadId) || !CodexUnreadStateReader.Bounded(input.TurnId) ||
             !CodexUnreadStateReader.Bounded(input.ItemId)) return null;

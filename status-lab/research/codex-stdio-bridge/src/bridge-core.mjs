@@ -288,7 +288,7 @@ export class ApprovalObserver {
     this.#pending.set(key, request);
     const turnKey = JSON.stringify([metadata.threadId, metadata.turnId]);
     const reviewer = this.#turnReviewers.has(turnKey) ? this.#turnReviewers.get(turnKey) : this.#reviewers.get(metadata.threadId);
-    if (this.#sourceInstanceId && family !== PERMISSIONS_REQUEST_FAMILY &&
+    if (this.#sourceInstanceId &&
         (reviewer === 'user' || reviewer === 'auto_review') &&
         ['threadId', 'turnId', 'itemId'].every(name => metadata[name] && Buffer.byteLength(metadata[name], 'utf8') <= 128) &&
         Buffer.byteLength(id.value, 'utf8') <= 128) {
@@ -418,16 +418,46 @@ export class ApprovalObserver {
   }
 
   #resolvePermissionsResponse(message, id, pendingKeyValue, request) {
+    const hasResult = Object.hasOwn(message, 'result');
+    const hasError = Object.hasOwn(message, 'error');
+    if (hasResult === hasError) return;
+
+    // A unique JSON-RPC response terminally consumes this exact request even
+    // when the peer reports an error or the result is malformed. Never persist
+    // error/result payloads on those paths, but do release bounded owner credit.
+    if (hasError) {
+      this.#pending.delete(pendingKeyValue);
+      if (request.ownerWaitAdmitted) this.#emitOwnerRelease();
+      return;
+    }
+
     const result = message.result;
     if (!result || typeof result !== 'object' || Array.isArray(result) ||
         Object.hasOwn(result, 'decision') || !result.permissions || typeof result.permissions !== 'object' ||
-        Array.isArray(result.permissions) || !Object.hasOwn(result, 'scope')) return;
+        Array.isArray(result.permissions)) {
+      this.#pending.delete(pendingKeyValue);
+      if (request.ownerWaitAdmitted) this.#emitOwnerRelease();
+      return;
+    }
 
-    if (Object.hasOwn(result, 'scope') && result.scope !== 'turn' && result.scope !== 'session') return;
-    if (Object.hasOwn(result, 'strictAutoReview') && typeof result.strictAutoReview !== 'boolean') return;
+    const scope = Object.hasOwn(result, 'scope') ? result.scope : 'turn';
+    if (scope !== 'turn' && scope !== 'session') {
+      this.#pending.delete(pendingKeyValue);
+      if (request.ownerWaitAdmitted) this.#emitOwnerRelease();
+      return;
+    }
+    if (Object.hasOwn(result, 'strictAutoReview') && typeof result.strictAutoReview !== 'boolean') {
+      this.#pending.delete(pendingKeyValue);
+      if (request.ownerWaitAdmitted) this.#emitOwnerRelease();
+      return;
+    }
     for (const key of ['threadId', 'turnId', 'itemId']) {
-      if (Object.hasOwn(message, key) && message[key] !== request[key]) return;
-      if (Object.hasOwn(result, key) && result[key] !== request[key]) return;
+      if ((Object.hasOwn(message, key) && message[key] !== request[key]) ||
+          (Object.hasOwn(result, key) && result[key] !== request[key])) {
+        this.#pending.delete(pendingKeyValue);
+        if (request.ownerWaitAdmitted) this.#emitOwnerRelease();
+        return;
+      }
     }
 
     this.#pending.delete(pendingKeyValue);
@@ -443,10 +473,11 @@ export class ApprovalObserver {
       itemId: request.itemId,
       requestObservedAtUtc: request.timestampUtc,
       responseObservedAtUtc: new Date().toISOString(),
-      ...(Object.hasOwn(result, 'scope') ? { scope: result.scope } : {}),
+      scope,
       ...(Object.hasOwn(result, 'strictAutoReview') ? { strictAutoReview: result.strictAutoReview } : {})
     };
-    this.#emitFailOpen(event);
+    if (request.ownerWaitAdmitted) this.#emitOwnerEvent(event, true);
+    else this.#emitFailOpen(event);
   }
 
   #emitFailOpen(event) {
@@ -457,8 +488,15 @@ export class ApprovalObserver {
 
   #emitOwnerEvent(event, releasesOwnerCredit) {
     // At most MAX_PENDING credits exist, with at most one request record and
-    // one resolution record per credit. This lane therefore needs <= 2N slots.
+    // one resolution/release record per credit. This lane therefore needs <= 2N slots.
     this.#ownerQueue.push({ event, releasesOwnerCredit });
+    this.#drainSinkQueue();
+  }
+
+  #emitOwnerRelease() {
+    // Internal queue marker: releases one admitted owner credit in-order
+    // without exposing malformed/error response payload or inventing telemetry.
+    this.#ownerQueue.push({ event: null, releasesOwnerCredit: true });
     this.#drainSinkQueue();
   }
 
@@ -467,7 +505,7 @@ export class ApprovalObserver {
     this.#sinkBusy = true;
     const entry = this.#ownerQueue.length > 0 ? this.#ownerQueue.shift() : this.#telemetryQueue.shift();
     let result;
-    try { result = this.#sink(entry.event); } catch { result = undefined; }
+    try { result = entry.event === null ? undefined : this.#sink(entry.event); } catch { result = undefined; }
     Promise.resolve(result).catch(() => {}).finally(() => {
       if (entry.releasesOwnerCredit) this.#ownerCredits -= 1;
       this.#sinkBusy = false;
@@ -638,7 +676,8 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
       if (event[key]) sanitized[key] = event[key];
     }
     if (event.schemaVersion === APPROVAL_REQUEST_SCHEMA_VERSION && event.event === 'approval_requested' &&
-        (event.requestFamily === 'item/commandExecution' || event.requestFamily === 'item/fileChange')) {
+        (event.requestFamily === 'item/commandExecution' || event.requestFamily === 'item/fileChange' ||
+         event.requestFamily === PERMISSIONS_REQUEST_FAMILY)) {
       sanitized.requestFamily = event.requestFamily;
       if (event.approvalsReviewer === 'user' || event.approvalsReviewer === 'auto_review') sanitized.approvalsReviewer = event.approvalsReviewer;
     }

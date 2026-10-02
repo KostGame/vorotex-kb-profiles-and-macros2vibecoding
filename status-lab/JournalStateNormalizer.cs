@@ -630,7 +630,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         var item = GetBoundedString(root, "itemId");
         var sourceInstanceId = GetBoundedSourceInstanceId(root);
         if (schema != ApprovalRequestSchemaVersion || GetBoundedString(root, "event") != "approval_requested" ||
-            family is not ("item/commandExecution" or "item/fileChange") || reviewer is not ("user" or "auto_review") || rpcType is not ("number" or "string") ||
+            family is not ("item/commandExecution" or "item/fileChange" or "item/permissions") || reviewer is not ("user" or "auto_review") || rpcType is not ("number" or "string") ||
             !CodexSourceIdentity.IsValid(sourceInstanceId) ||
             string.IsNullOrWhiteSpace(rpc) || !CodexUnreadStateReader.Bounded(thread) ||
             !CodexUnreadStateReader.Bounded(turn) || !CodexUnreadStateReader.Bounded(item) ||

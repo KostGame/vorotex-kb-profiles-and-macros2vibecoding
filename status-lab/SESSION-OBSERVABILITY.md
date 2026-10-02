@@ -22,26 +22,26 @@ must correlate these records:
 The raw `PermissionRequest` alone is diagnostic/lifecycle evidence and does
 not enter WAITING. WAITING authority comes from a sanitized
 `codex_stdio_bridge/approval_requested` record with schema
-`k15-codex-approval-request/v1`, emitted for command execution and file change
-requests only after the effective reviewer for that exact turn is proven
-`user`. It must include bounded `rpcIdType`, `rpcId`, `requestFamily`,
-`approvalsReviewer` (`user` or `auto_review`), `threadId`, `turnId`, and
-`itemId`; private request payload fields are never persisted. The reducer
-independently requires `approvalsReviewer=user` and a unique active
-non-internal session matching
-the exact thread and turn. Missing or ambiguous matches fail closed. The
-permissions request family remains diagnostic-only. `auto_review`, unknown,
+`k15-codex-approval-request/v1`, emitted for command execution, file change,
+and permissions requests only after the effective reviewer for that exact turn
+is proven `user` or `auto_review`. It must include bounded `rpcIdType`,
+`rpcId`, `requestFamily`, `approvalsReviewer`, `threadId`, `turnId`,
+`itemId`, and `sourceInstanceId`; private request payload fields are never
+persisted. The reducer independently requires `approvalsReviewer=user` and a
+unique active non-internal session matching the exact source instance, thread,
+and turn. Missing or ambiguous matches fail closed. `auto_review`, unknown,
 or missing reviewer provenance never enters WAITING. Reviewer state comes from
 matching thread start/resume/fork responses, settings updates, and exact
-turn/start overrides; turn overrides are removed on turn completion. An
-accepted response resumes only a session already waiting from a proven user
-request and matching the typed RPC, thread, turn, and item correlation.
+turn/start overrides; turn overrides are removed on turn completion.
 
-An accepted `approval_resolved` record can move that exact WAITING session to
-RUNNING when its typed RPC ID and item match the request. Decline and cancel
-remain decisions without resume authority. `PreToolUse` and `PostToolUse` are
-independent exact resume evidence. This contract is preparatory; same-session
-live Desktop acceptance has not yet been established.
+For command/file approvals, an accepted `approval_resolved` record can move
+the exact WAITING session to RUNNING when its typed RPC ID and item match the
+request. Decline and cancel remain decisions without resume authority. The
+permissions family has different response semantics:
+`permissions_approval_observed` remains diagnostic-only and never claims
+RUNNING. After a permissions card resolves, exact `PreToolUse` or
+`PostToolUse` remains resume authority, while existing Stop/completion
+evidence remains terminal authority.
 
 For Issue #93, `codex_stdio_bridge/turn_completed` with schema
 `k15-codex-completion/v1` and status `completed` is the candidate authoritative
