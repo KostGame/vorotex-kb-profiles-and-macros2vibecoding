@@ -168,11 +168,14 @@ content and a sink error/overload is fail-open for transport.
 
 Permissions responses follow the separate diagnostic schema above. They are
 never converted into generic `approval_resolved` and do not directly alter
-reducer state. The pre-response typed `approval_requested` may enter WAITING;
-after the card resolves, exact existing execution evidence such as
-`PreToolUse`/`PostToolUse` resumes the session, while Stop/completion remains
-terminal authority. A valid permissions diagnostic response releases the
-bounded owner-queue credit associated with an admitted request.
+reducer state. The pinned protocol defaults an omitted response `scope` to
+`turn`, and the bridge mirrors that default. A unique matching JSON-RPC error
+or malformed permissions result terminally consumes only the in-memory
+correlation and releases its bounded owner-queue credit without persisting the
+error/result payload or inventing a semantic state event. The pre-response
+typed `approval_requested` may enter WAITING; after the card resolves, exact
+existing execution evidence such as `PreToolUse`/`PostToolUse` resumes the
+session, while Stop/completion remains terminal authority.
 
 Status Lab accepts only the exact sanitized schema from source
 `codex_stdio_bridge`. Only `accept` and `acceptForSession` can move a waiting

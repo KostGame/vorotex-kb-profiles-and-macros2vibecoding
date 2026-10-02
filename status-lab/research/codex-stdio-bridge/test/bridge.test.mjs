@@ -325,6 +325,21 @@ test('permissions response without decision is accepted only by its diagnostic p
   assert.equal(Object.hasOwn(events[0], 'decision'), false);
 });
 
+test('permissions response defaults omitted scope to turn', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(permissionsRequest('default-scope', {
+    threadId: 'T', turnId: 'U', itemId: 'I'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(JSON.stringify({
+    jsonrpc: '2.0', id: 'default-scope', result: { permissions: {} }
+  }) + '\n'));
+  await tick();
+  assert.equal(observer.pendingCount(), 0);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, 'permissions_approval_observed');
+  assert.equal(events[0].scope, 'turn');
+});
+
 test('permissions correlation requires exact IDs, typed RPC id, and unambiguous family', async () => {
   const events = []; const observer = observerWith(events);
   observer.observeServerChunk(Buffer.from(
@@ -343,7 +358,7 @@ test('permissions correlation requires exact IDs, typed RPC id, and unambiguous 
     { rpcIdType: 'string', rpcId: '72', threadId: 'thread-string', turnId: 'turn-string', itemId: 'item-string' },
     { rpcIdType: 'number', rpcId: '72', threadId: 'thread-number', turnId: 'turn-number', itemId: 'item-number' }
   ]);
-  assert.equal(observer.pendingCount(), 1);
+  assert.equal(observer.pendingCount(), 0);
 });
 
 test('permissions malformed, duplicate, cross-family, and mismatched responses fail closed', async () => {
@@ -362,7 +377,7 @@ test('permissions malformed, duplicate, cross-family, and mismatched responses f
     permissionsResponse(76, { scope: 'turn' }) + '\n'
   ));
   await tick();
-  assert.deepEqual(events.filter(event => event.event === 'permissions_approval_observed').map(event => event.rpcId), ['74', '76']);
+  assert.deepEqual(events.filter(event => event.event === 'permissions_approval_observed').map(event => event.rpcId), ['76']);
   assert.equal(observer.pendingCount(), 0);
 });
 
@@ -730,6 +745,35 @@ test('permissions owner-wait lane releases credits after valid responses', async
   observer.observeClientChunk(Buffer.from(permissionsResponse(2000, { scope: 'turn' }) + '\n'));
   for (let attempt = 0; attempt < 20 && events.length < 514; attempt++) await tick();
   assert.equal(events.length, 514, 'released owner credits admit a later permissions request and diagnostic');
+});
+
+
+test('matching permissions error responses release bounded owner credits without persisting error payload', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({
+    method: 'thread/settings/updated',
+    params: { threadId: 'permission-error-thread', settings: { approvalsReviewer: 'user' } }
+  }) + '\n'));
+  const requests = Array.from({ length: 256 }, (_, index) => permissionsRequest(index + 3000, {
+    threadId: 'permission-error-thread', turnId: 'permission-error-turn', itemId: `permission-error-${index}`
+  })).join('\n') + '\n';
+  observer.observeServerChunk(Buffer.from(requests));
+  observer.observeClientChunk(Buffer.from(Array.from({ length: 256 }, (_, index) => JSON.stringify({
+    jsonrpc: '2.0', id: index + 3000,
+    error: { code: -32000, message: 'PRIVATE_ERROR_MESSAGE', data: { private: 'PRIVATE_ERROR_DATA' } }
+  })).join('\n') + '\n'));
+  for (let attempt = 0; attempt < 40 && observer.pendingCount() !== 0; attempt++) await tick();
+  assert.equal(observer.pendingCount(), 0);
+  for (let attempt = 0; attempt < 40; attempt++) await tick();
+  assert.equal(events.filter(event => event.event === 'approval_requested').length, 256);
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE_ERROR_MESSAGE|PRIVATE_ERROR_DATA/);
+
+  observer.observeServerChunk(Buffer.from(permissionsRequest(4000, {
+    threadId: 'permission-error-thread', turnId: 'permission-error-turn-2', itemId: 'permission-error-final'
+  }) + '\n'));
+  for (let attempt = 0; attempt < 20 && events.length < 257; attempt++) await tick();
+  assert.equal(events.filter(event => event.event === 'approval_requested').length, 257,
+    'matching error responses release owner credits for later permissions requests');
 });
 
 test('permissions approval request file sink preserves bounded authority metadata only', async () => {
