@@ -288,7 +288,7 @@ export class ApprovalObserver {
     this.#pending.set(key, request);
     const turnKey = JSON.stringify([metadata.threadId, metadata.turnId]);
     const reviewer = this.#turnReviewers.has(turnKey) ? this.#turnReviewers.get(turnKey) : this.#reviewers.get(metadata.threadId);
-    if (this.#sourceInstanceId && family !== PERMISSIONS_REQUEST_FAMILY &&
+    if (this.#sourceInstanceId &&
         (reviewer === 'user' || reviewer === 'auto_review') &&
         ['threadId', 'turnId', 'itemId'].every(name => metadata[name] && Buffer.byteLength(metadata[name], 'utf8') <= 128) &&
         Buffer.byteLength(id.value, 'utf8') <= 128) {
@@ -446,7 +446,8 @@ export class ApprovalObserver {
       ...(Object.hasOwn(result, 'scope') ? { scope: result.scope } : {}),
       ...(Object.hasOwn(result, 'strictAutoReview') ? { strictAutoReview: result.strictAutoReview } : {})
     };
-    this.#emitFailOpen(event);
+    if (request.ownerWaitAdmitted) this.#emitOwnerEvent(event, true);
+    else this.#emitFailOpen(event);
   }
 
   #emitFailOpen(event) {
@@ -638,7 +639,8 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
       if (event[key]) sanitized[key] = event[key];
     }
     if (event.schemaVersion === APPROVAL_REQUEST_SCHEMA_VERSION && event.event === 'approval_requested' &&
-        (event.requestFamily === 'item/commandExecution' || event.requestFamily === 'item/fileChange')) {
+        (event.requestFamily === 'item/commandExecution' || event.requestFamily === 'item/fileChange' ||
+         event.requestFamily === PERMISSIONS_REQUEST_FAMILY)) {
       sanitized.requestFamily = event.requestFamily;
       if (event.approvalsReviewer === 'user' || event.approvalsReviewer === 'auto_review') sanitized.approvalsReviewer = event.approvalsReviewer;
     }

@@ -79,6 +79,20 @@ internal static class CodexReadAckTests
             Decision: "accept", RpcIdType: "number", RpcId: "91", ThreadId: "T", TurnId: "U", ItemId: "I",
             SourceInstanceId: TestSourceInstanceId));
         Check(authority.State == K15NormalizedState.Running, "EXACT_TYPED_ACCEPT_RESUMES");
+        var permissionsAuthority = new StateReducer(0, T);
+        permissionsAuthority.Apply(Hook("UserPromptSubmit", 1));
+        permissionsAuthority.Apply(ApprovalRequest(2, family: "item/permissions"));
+        Check(permissionsAuthority.State == K15NormalizedState.Waiting &&
+              permissionsAuthority.LastSessionTransitions.Single().PermissionEvidence?.RequestFamily == "item/permissions",
+            "TYPED_PERMISSIONS_REQUEST_WAITING");
+        permissionsAuthority.Apply(Hook("PostToolUse", 3));
+        Check(permissionsAuthority.State == K15NormalizedState.Running,
+            "PERMISSIONS_POST_TOOL_USE_RESUMES");
+        var automaticPermissions = new StateReducer(0, T);
+        automaticPermissions.Apply(Hook("UserPromptSubmit", 1));
+        automaticPermissions.Apply(ApprovalRequest(2, family: "item/permissions", reviewer: "auto_review"));
+        Check(automaticPermissions.State == K15NormalizedState.Running,
+            "AUTO_REVIEW_PERMISSIONS_NEVER_WAIT");
         var automatic = new StateReducer(0, T); automatic.Apply(Hook("UserPromptSubmit", 1));
         automatic.Apply(ApprovalRequest(2, reviewer: "auto_review"));
         automatic.Apply(new(T.AddSeconds(3), "codex_stdio_bridge", "approval_resolved", SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "91", ThreadId: "T", TurnId: "U", ItemId: "I", SourceInstanceId: TestSourceInstanceId));
@@ -94,6 +108,12 @@ internal static class CodexReadAckTests
             "TYPED_REQUEST_REHYDRATES_DETERMINISTICALLY");
         typedReplayReducer.Apply(Hook("PostToolUse", 4));
         Check(typedReplayReducer.State == K15NormalizedState.Running, "POST_TOOL_USE_CLEARS_WAITING");
+        var permissionsReplay = new StateReducer(0, T);
+        permissionsReplay.Rehydrate([Hook("UserPromptSubmit", 1), ApprovalRequest(2, family: "item/permissions")]);
+        Check(permissionsReplay.State == K15NormalizedState.Waiting &&
+              permissionsReplay.LastSessionTransitions.Last().PermissionEvidence?.RequestFamily == "item/permissions" &&
+              permissionsReplay.LastSessionTransitions.Last().IsRehydrated,
+            "TYPED_PERMISSIONS_REHYDRATES_DETERMINISTICALLY");
         typedReplayReducer.Apply(ApprovalRequest(3, rpc: "92"));
         Check(typedReplayReducer.State == K15NormalizedState.Running,
             "LATE_REQUEST_AFTER_POST_TOOL_USE_IGNORED");
@@ -133,6 +153,10 @@ internal static class CodexReadAckTests
             "LEGACY_RESOLUTION_REMAINS_DIAGNOSTIC_PARSEABLE");
         Check(JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:01Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"approval_requested\",\"schemaVersion\":\"k15-codex-approval-request/v1\",\"requestFamily\":\"item/commandExecution\",\"approvalsReviewer\":\"user\",\"rpcIdType\":\"number\",\"rpcId\":\"1\",\"threadId\":\"T\",\"turnId\":\"U\",\"itemId\":\"I\",\"sourceInstanceId\":\"" + TestSourceInstanceId + "\"}") is not null,
             "REQUEST_REQUIRES_VALID_SOURCE_IDENTITY");
+        Check(JournalStateNormalizer.ParseInput("{\"timestampUtc\":\"2026-08-25T00:00:01Z\",\"source\":\"codex_stdio_bridge\",\"event\":\"approval_requested\",\"schemaVersion\":\"k15-codex-approval-request/v1\",\"requestFamily\":\"item/permissions\",\"approvalsReviewer\":\"user\",\"rpcIdType\":\"number\",\"rpcId\":\"2\",\"threadId\":\"T\",\"turnId\":\"U\",\"itemId\":\"P\",\"sourceInstanceId\":\"" + TestSourceInstanceId + "\"}") is not null,
+            "PERMISSIONS_REQUEST_REQUIRES_VALID_SOURCE_IDENTITY");
+        Check(JournalStateNormalizer.ParseInput("{\"schemaVersion\":\"k15-codex-permissions-approval-diagnostic/v1\",\"source\":\"codex_stdio_bridge\",\"event\":\"permissions_approval_observed\",\"requestFamily\":\"item/permissions\",\"rpcIdType\":\"number\",\"rpcId\":\"2\",\"threadId\":\"T\",\"turnId\":\"U\",\"itemId\":\"P\",\"requestObservedAtUtc\":\"2026-08-25T00:00:01.000Z\",\"responseObservedAtUtc\":\"2026-08-25T00:00:02.000Z\",\"scope\":\"turn\",\"strictAutoReview\":false}") is null,
+            "PERMISSIONS_DIAGNOSTIC_REMAINS_STATE_NEUTRAL");
         var ambiguous = new StateReducer(0, T);
         ambiguous.Apply(Hook("UserPromptSubmit", 1, "A"));
         ambiguous.Apply(Hook("UserPromptSubmit", 2, "B"));

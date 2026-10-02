@@ -44,23 +44,21 @@ boolean `strictAutoReview` when present. Permission payloads and all other
 request/response fields are discarded. The diagnostic is not consumed by
 Status Lab state mapping.
 
-Valid command/file requests with bounded exact thread, turn, and item IDs emit
-`k15-codex-approval-request/v1` / `approval_requested` before the response
-when reviewer provenance for that exact turn is known as `user` or
-`auto_review`. The event contains only timestamp, source, family, reviewer
-enum, typed RPC ID, those three opaque IDs, and a bounded `sourceInstanceId`
-(`local:` plus 32 lowercase hex characters) derived from the effective Codex
-home. The raw home path is never persisted. On Windows, `CODEX_HOME` is used
-when set and `%USERPROFILE%\\.codex` semantics are used otherwise. Identity
-derivation fails closed for unsupported or non-ASCII canonical paths. Unknown or malformed reviewer
-provenance emits no request event and never creates WAITING. The bridge tracks
-reviewer state from thread start/resume/fork responses, settings updates, and
-turn/start overrides scoped to the returned turn; turn state is cleared on
-completion. Status Lab enters WAITING only for `approvalsReviewer=user` and an
-exact unique active non-internal session. Raw hook `PermissionRequest` is
-diagnostic only. The
-`item/permissions` family remains diagnostic-only and never emits
-`approval_requested`.
+Valid command, file-change, and permissions requests with bounded exact
+thread, turn, and item IDs emit `k15-codex-approval-request/v1` /
+`approval_requested` before the response when reviewer provenance for that
+exact turn is known as `user` or `auto_review`. The event contains only
+timestamp, source, family, reviewer enum, typed RPC ID, those three opaque IDs,
+and a bounded `sourceInstanceId` (`local:` plus 32 lowercase hex characters)
+derived from the effective Codex home. The raw home path is never persisted. On
+Windows, `CODEX_HOME` is used when set and `%USERPROFILE%\.codex` semantics
+are used otherwise. Identity derivation fails closed for unsupported or
+non-ASCII canonical paths. Unknown or malformed reviewer provenance emits no
+request event and never creates WAITING. The bridge tracks reviewer state from
+thread start/resume/fork responses, settings updates, and turn/start overrides
+scoped to the returned turn; turn state is cleared on completion. Status Lab
+enters WAITING only for `approvalsReviewer=user` and an exact unique active
+non-internal session. Raw hook `PermissionRequest` is diagnostic only.
 
 Command/file response events sent to the optional sink contain only timestamp,
 source, event name, typed sanitized RPC correlation, decision, exact source
@@ -168,8 +166,13 @@ focus/toast state, process polling, completion timing, or Desktop heuristics
 are used. The observer never persists or forwards raw protocol bytes or
 content and a sink error/overload is fail-open for transport.
 
-Permissions responses follow the separate diagnostic schema above; they are
-never converted into `approval_resolved` and do not alter reducer semantics.
+Permissions responses follow the separate diagnostic schema above. They are
+never converted into generic `approval_resolved` and do not directly alter
+reducer state. The pre-response typed `approval_requested` may enter WAITING;
+after the card resolves, exact existing execution evidence such as
+`PreToolUse`/`PostToolUse` resumes the session, while Stop/completion remains
+terminal authority. A valid permissions diagnostic response releases the
+bounded owner-queue credit associated with an admitted request.
 
 Status Lab accepts only the exact sanitized schema from source
 `codex_stdio_bridge`. Only `accept` and `acceptForSession` can move a waiting

@@ -262,7 +262,7 @@ test('settings can revoke user reviewer and malformed or oversized reviewer valu
   assert.deepEqual(events.map(e => [e.turnId, e.approvalsReviewer]), [['A', 'auto_review']]);
 });
 
-test('reviewer unknown, malformed, permissions family, and auto_review acceptance never create owner wait', async () => {
+test('unknown reviewer permissions request remains diagnostic-only', async () => {
   const events = []; const observer = observerWith(events);
   observer.observeServerChunk(Buffer.from(commandRequest(1, { threadId: 'T', turnId: 'U', itemId: 'I' }) + '\n'));
   observer.observeServerChunk(Buffer.from(permissionsRequest(2, { threadId: 'T', turnId: 'U', itemId: 'P' }) + '\n'));
@@ -272,26 +272,40 @@ test('reviewer unknown, malformed, permissions family, and auto_review acceptanc
   assert.equal(events[0].event, 'approval_resolved');
 });
 
-test('permissions request and response emit separate exact diagnostic without decision semantics', async () => {
+test('user-reviewed permissions request emits owner wait before exact diagnostic response', async () => {
   const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({
+    method: 'thread/settings/updated',
+    params: { threadId: 'thread-permission', settings: { approvalsReviewer: 'user' } }
+  }) + '\n'));
   observer.observeServerChunk(Buffer.from(permissionsRequest(71, {
     threadId: 'thread-permission', turnId: 'turn-permission', itemId: 'item-permission',
     permissions: { privateProfile: 'PRIVATE_PROFILE_MARKER' }, cwd: 'PRIVATE_CWD_MARKER',
     reason: 'PRIVATE_REASON_MARKER', host: 'PRIVATE_HOST_MARKER', path: 'PRIVATE_PATH_MARKER'
   }) + '\n'));
   assert.equal(observer.pendingCount(), 1);
+  await tick();
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0], {
+    schemaVersion: 'k15-codex-approval-request/v1',
+    timestampUtc: events[0].timestampUtc,
+    source: 'codex_stdio_bridge', event: 'approval_requested',
+    requestFamily: 'item/permissions', rpcIdType: 'number', rpcId: '71',
+    threadId: 'thread-permission', turnId: 'turn-permission', itemId: 'item-permission',
+    approvalsReviewer: 'user', sourceInstanceId: TEST_SOURCE_INSTANCE_ID
+  });
   observer.observeClientChunk(Buffer.from(permissionsResponse(71, {
     scope: 'session', strictAutoReview: true
   }) + '\n'));
   await tick();
-  assert.equal(events.length, 1);
-  assert.deepEqual(events[0], {
+  assert.equal(events.length, 2);
+  assert.deepEqual(events[1], {
     schemaVersion: 'k15-codex-permissions-approval-diagnostic/v1',
     source: 'codex_stdio_bridge', event: 'permissions_approval_observed',
     requestFamily: 'item/permissions', rpcIdType: 'number', rpcId: '71',
     threadId: 'thread-permission', turnId: 'turn-permission', itemId: 'item-permission',
-    requestObservedAtUtc: events[0].requestObservedAtUtc,
-    responseObservedAtUtc: events[0].responseObservedAtUtc,
+    requestObservedAtUtc: events[1].requestObservedAtUtc,
+    responseObservedAtUtc: events[1].responseObservedAtUtc,
     scope: 'session', strictAutoReview: true
   });
   assert.doesNotMatch(JSON.stringify(events), /PRIVATE_PROFILE_MARKER|PRIVATE_CWD_MARKER|PRIVATE_REASON_MARKER|PRIVATE_HOST_MARKER|PRIVATE_PATH_MARKER|MUST NOT REACH SIDE CHANNEL/);
@@ -681,6 +695,69 @@ test('fake-child bridge preserves stdout, stderr, and normal child exit lifecycl
   assert.equal(code, 0); assert.equal(signal, null);
   assert.equal(Buffer.concat(stdout).toString('utf8'), 'fixture-line\n');
   assert.match(Buffer.concat(stderr).toString('utf8'), /fake-app-server: started/);
+});
+
+test('permissions owner-wait lane releases credits after valid responses', async () => {
+  const events = []; let releaseFirst;
+  const observer = new ApprovalObserver({
+    sourceInstanceId: TEST_SOURCE_INSTANCE_ID,
+    telemetrySink: event => {
+      events.push(event);
+      if (events.length === 1) return new Promise(resolve => { releaseFirst = resolve; });
+    }
+  });
+  observer.observeServerChunk(Buffer.from(JSON.stringify({
+    method: 'thread/settings/updated',
+    params: { threadId: 'permission-thread', settings: { approvalsReviewer: 'user' } }
+  }) + '\n'));
+  const requests = Array.from({ length: 256 }, (_, index) => permissionsRequest(index + 1000, {
+    threadId: 'permission-thread', turnId: 'permission-turn', itemId: `permission-item-${index}`
+  })).join('\n') + '\n';
+  observer.observeServerChunk(Buffer.from(requests));
+  observer.observeClientChunk(Buffer.from(Array.from({ length: 256 }, (_, index) =>
+    permissionsResponse(index + 1000, { scope: 'turn' })).join('\n') + '\n'));
+  assert.equal(observer.pendingCount(), 0);
+  assert.equal(events.length, 1);
+  releaseFirst();
+  for (let attempt = 0; attempt < 40 && events.length < 512; attempt++) await tick();
+  assert.equal(events.length, 512);
+  assert.equal(events.filter(event => event.event === 'approval_requested').length, 256);
+  assert.equal(events.filter(event => event.event === 'permissions_approval_observed').length, 256);
+
+  observer.observeServerChunk(Buffer.from(permissionsRequest(2000, {
+    threadId: 'permission-thread', turnId: 'permission-turn-2', itemId: 'permission-item-final'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(permissionsResponse(2000, { scope: 'turn' }) + '\n'));
+  for (let attempt = 0; attempt < 20 && events.length < 514; attempt++) await tick();
+  assert.equal(events.length, 514, 'released owner credits admit a later permissions request and diagnostic');
+});
+
+test('permissions approval request file sink preserves bounded authority metadata only', async () => {
+  const lines = [];
+  const sink = createSanitizedJsonlSink('C:\\test\\sanitized-events.jsonl', {
+    appendFile: async (_path, content) => { lines.push(content); },
+    makeDirectory: async () => {}
+  });
+  await sink({
+    schemaVersion: 'k15-codex-approval-request/v1',
+    timestampUtc: '2026-10-02T22:28:14.413Z',
+    source: 'codex_stdio_bridge', event: 'approval_requested',
+    requestFamily: 'item/permissions', approvalsReviewer: 'user',
+    rpcIdType: 'number', rpcId: '2', threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1',
+    sourceInstanceId: TEST_SOURCE_INSTANCE_ID,
+    permissions: { network: 'PRIVATE_PERMISSION' }, cwd: 'PRIVATE_CWD', reason: 'PRIVATE_REASON',
+    path: 'PRIVATE_PATH', host: 'PRIVATE_HOST', url: 'https://private.invalid/'
+  });
+  assert.equal(lines.length, 1);
+  assert.deepEqual(JSON.parse(lines[0]), {
+    schemaVersion: 'k15-codex-approval-request/v1',
+    timestampUtc: '2026-10-02T22:28:14.413Z',
+    source: 'codex_stdio_bridge', event: 'approval_requested',
+    rpcIdType: 'number', rpcId: '2', threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1',
+    sourceInstanceId: TEST_SOURCE_INSTANCE_ID,
+    requestFamily: 'item/permissions', approvalsReviewer: 'user'
+  });
+  assert.doesNotMatch(lines[0], /PRIVATE|cwd|reason|path|host|url/gi);
 });
 
 test('permissions diagnostic file sink retains exact allowlisted timestamps and scope only', async () => {

@@ -292,7 +292,7 @@ internal static class EventJournal
                     property.Value.ValueKind != JsonValueKind.String ||
                     Encoding.UTF8.GetByteCount(property.Value.GetString() ?? string.Empty) > 1024)) return false;
             return GetString(root, "event") == "approval_requested" &&
-                (GetString(root, "requestFamily") is "item/commandExecution" or "item/fileChange") &&
+                (GetString(root, "requestFamily") is "item/commandExecution" or "item/fileChange" or "item/permissions") &&
                 (GetString(root, "approvalsReviewer") is "user" or "auto_review") &&
                 (GetString(root, "rpcIdType") is "number" or "string") &&
                 !string.IsNullOrWhiteSpace(GetString(root, "rpcId")) &&
