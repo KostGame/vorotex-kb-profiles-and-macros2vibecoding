@@ -47,7 +47,10 @@ function rpcId(value) {
       : undefined;
   }
   if (typeof value === 'number' && Number.isSafeInteger(value)) {
-    return { type: 'number', value: Object.is(value, -0) ? '-0' : String(value) };
+    // JSON numeric IDs use numeric equality. Canonicalize both +0 and -0 to
+    // the same identity so a delayed response cannot cross-correlate through
+    // alternate zero serialization.
+    return { type: 'number', value: value === 0 ? '0' : String(value) };
   }
   return undefined;
 }

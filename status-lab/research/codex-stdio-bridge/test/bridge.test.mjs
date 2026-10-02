@@ -455,6 +455,29 @@ test('numeric 1 and string "1" are separate typed correlations', async () => {
   ]);
 });
 
+test('numeric -0 and 0 share one canonical request identity and cannot cross-correlate', async () => {
+  const events = []; const observer = observerWith(events);
+  observer.observeServerChunk(Buffer.from(JSON.stringify({
+    jsonrpc: '2.0', id: -0, method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'T', turnId: 'negative-zero', itemId: 'I0' }
+  }).replace('"id":0', '"id":-0') + '\n'));
+  observer.observeClientChunk(Buffer.from(response(0, 'accept') + '\n'));
+  await tick();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, 'approval_resolved');
+  assert.equal(events[0].rpcIdType, 'number');
+  assert.equal(events[0].rpcId, '0');
+  assert.equal(events[0].turnId, 'negative-zero');
+
+  observer.observeServerChunk(Buffer.from(commandRequest(0, {
+    threadId: 'T', turnId: 'positive-zero-reuse', itemId: 'I1'
+  }) + '\n'));
+  observer.observeClientChunk(Buffer.from(response(0, 'acceptForSession') + '\n'));
+  await tick();
+  assert.equal(events.length, 1, 'numeric zero reuse is rejected after canonical -0 resolution');
+  assert.equal(observer.pendingCount(), 0);
+});
+
 test('same typed id reused with different metadata preserves the first exact pending correlation', async () => {
   const events = []; const observer = observerWith(events);
   observer.observeServerChunk(Buffer.from(JSON.stringify({ method: 'thread/settings/updated',
