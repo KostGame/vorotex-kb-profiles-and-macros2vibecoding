@@ -425,7 +425,8 @@ internal sealed class StateReducer
             session.State == K15NormalizedState.Waiting &&
             session.ApprovalRequestFamily == "item/permissions" &&
             input.TurnId.Length != 0 &&
-            input.TurnId == session.TurnId;
+            input.TurnId == session.TurnId &&
+            (input.ThreadId.Length == 0 || input.ThreadId == session.ThreadId);
         if (!pendingPermissionsPreTool &&
             (input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd" ||
              (input.TurnId.Length != 0 && input.TurnId != session.TurnId)))
@@ -445,6 +446,16 @@ internal sealed class StateReducer
             session.ReadAcknowledgedCompletion = null;
             session.CompletionGeneration++;
         }
+        // request_permissions PreToolUse is emitted while the native owner
+        // approval card is still blocking the turn. It advances only the
+        // activity watermark; it must not rewrite correlation/context or
+        // claim that execution resumed.
+        if (pendingPermissionsPreTool)
+        {
+            session.LastActivityUtc = input.TimestampUtc;
+            return null;
+        }
+
         if (!string.IsNullOrWhiteSpace(input.Cwd))
             session.Cwd = input.Cwd;
         if (!string.IsNullOrWhiteSpace(input.ThreadId))
@@ -453,12 +464,6 @@ internal sealed class StateReducer
             session.TurnId = input.TurnId;
         session.Internal = session.Internal || IsInternalCwd(session.Cwd);
         session.LastActivityUtc = input.TimestampUtc;
-
-        // request_permissions PreToolUse is emitted while the native owner
-        // approval card is still blocking the turn. It is evidence that the
-        // permission workflow started, not that execution resumed.
-        if (pendingPermissionsPreTool)
-            return null;
 
         if (input.EventName == "SessionEnd")
         {

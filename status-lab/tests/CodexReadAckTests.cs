@@ -97,6 +97,16 @@ internal static class CodexReadAckTests
             SourceInstanceId: TestSourceInstanceId));
         Check(permissionsAuthority.State == K15NormalizedState.Running,
             "PERMISSIONS_POST_TOOL_USE_RESUMES");
+
+        var wrongThreadPermissions = new StateReducer(0, T);
+        wrongThreadPermissions.Apply(Hook("UserPromptSubmit", 1));
+        wrongThreadPermissions.Apply(ApprovalRequest(2, family: "item/permissions"));
+        wrongThreadPermissions.Apply(new(T.AddMilliseconds(2500), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "OTHER", TurnId: "U", ToolName: "request_permissions",
+            SourceInstanceId: TestSourceInstanceId));
+        Check(wrongThreadPermissions.State == K15NormalizedState.Running &&
+              wrongThreadPermissions.LastSessionTransitions.Single().Reason == "codex_pre_tool_use",
+            "PERMISSIONS_PRE_TOOL_WRONG_THREAD_DOES_NOT_KEEP_WAITING");
         var automaticPermissions = new StateReducer(0, T);
         automaticPermissions.Apply(Hook("UserPromptSubmit", 1));
         automaticPermissions.Apply(ApprovalRequest(2, family: "item/permissions", reviewer: "auto_review"));
