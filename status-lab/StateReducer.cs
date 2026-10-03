@@ -419,7 +419,16 @@ internal sealed class StateReducer
         // authoritative activity has already been observed.
         if (input.TimestampUtc < session.LastActivityUtc)
             return null;
-        if (input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd" ||
+        var permissionsPreToolStillAwaitingOwner =
+            input.EventName == "PreToolUse" &&
+            session.State == K15NormalizedState.Waiting &&
+            session.ApprovalRequestFamily == "item/permissions" &&
+            input.ToolNameProvided &&
+            input.ToolName == "request_permissions" &&
+            input.TurnId.Length != 0 &&
+            input.TurnId == session.TurnId;
+        var clearsApprovalCorrelation = input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd";
+        if ((!permissionsPreToolStillAwaitingOwner && clearsApprovalCorrelation) ||
             (input.TurnId.Length != 0 && input.TurnId != session.TurnId))
             ClearApprovalCorrelation(session);
         var acknowledged = session.ReadAcknowledgedCompletion;
@@ -445,6 +454,15 @@ internal sealed class StateReducer
             session.TurnId = input.TurnId;
         session.Internal = session.Internal || IsInternalCwd(session.Cwd);
         session.LastActivityUtc = input.TimestampUtc;
+
+        // request_permissions is itself the operation waiting for the owner.
+        // Its PreToolUse hook arrives while the native approval card is still
+        // open, so it is activity evidence but not execution-resumed evidence.
+        if (permissionsPreToolStillAwaitingOwner)
+        {
+            _focusedSessionKey = session.IdentityKey;
+            return null;
+        }
 
         if (input.EventName == "SessionEnd")
         {

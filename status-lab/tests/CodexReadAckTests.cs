@@ -128,9 +128,49 @@ internal static class CodexReadAckTests
               ambiguousDesktopIdentity.SessionSnapshots.Single(session => session.SessionId == "LIVE").ThreadId.Length == 0,
             "DESKTOP_SESSION_ID_FALLBACK_AMBIGUOUS_FAILS_CLOSED");
 
-        permissionsAuthority.Apply(Hook("PostToolUse", 3));
+        permissionsAuthority.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
+        Check(permissionsAuthority.State == K15NormalizedState.Waiting &&
+              permissionsAuthority.LastSessionTransitions.Count == 0 &&
+              permissionsAuthority.SessionSnapshots.Single().LastActivityUtc == T.AddSeconds(3),
+            "PERMISSIONS_PRE_TOOL_REQUEST_STAYS_WAITING");
+        permissionsAuthority.Apply(new(T.AddSeconds(4), "codex_hook", "PostToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
         Check(permissionsAuthority.State == K15NormalizedState.Running,
             "PERMISSIONS_POST_TOOL_USE_RESUMES");
+
+        var commandWaitDoesNotUsePermissionsCarveout = new StateReducer(0, T);
+        commandWaitDoesNotUsePermissionsCarveout.Apply(Hook("UserPromptSubmit", 1));
+        commandWaitDoesNotUsePermissionsCarveout.Apply(ApprovalRequest(2, family: "item/commandExecution"));
+        commandWaitDoesNotUsePermissionsCarveout.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
+        Check(commandWaitDoesNotUsePermissionsCarveout.State == K15NormalizedState.Running,
+            "REQUEST_PERMISSIONS_PRE_TOOL_ONLY_PRESERVES_PERMISSIONS_WAIT");
+
+        var missingToolNameProvenance = new StateReducer(0, T);
+        missingToolNameProvenance.Apply(Hook("UserPromptSubmit", 1));
+        missingToolNameProvenance.Apply(ApprovalRequest(2, family: "item/permissions"));
+        missingToolNameProvenance.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: false, SourceInstanceId: TestSourceInstanceId));
+        Check(missingToolNameProvenance.State == K15NormalizedState.Running,
+            "PERMISSIONS_PRE_TOOL_CARVEOUT_REQUIRES_TOOLNAME_PROVENANCE");
+
+        var permissionsPreToolReplay = new StateReducer(0, T);
+        permissionsPreToolReplay.Rehydrate([
+            Hook("UserPromptSubmit", 1),
+            ApprovalRequest(2, family: "item/permissions"),
+            new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+                SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+                ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId)
+        ]);
+        Check(permissionsPreToolReplay.State == K15NormalizedState.Waiting &&
+              permissionsPreToolReplay.LastSessionTransitions.Last().Current == K15NormalizedState.Waiting,
+            "PERMISSIONS_PRE_TOOL_REHYDRATES_WAITING");
+
         var automaticPermissions = new StateReducer(0, T);
         automaticPermissions.Apply(Hook("UserPromptSubmit", 1));
         automaticPermissions.Apply(ApprovalRequest(2, family: "item/permissions", reviewer: "auto_review"));
