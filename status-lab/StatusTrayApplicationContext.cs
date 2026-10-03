@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -7,6 +8,8 @@ namespace Vorotex.K15.StatusLab;
 internal sealed class StatusTrayApplicationContext : ApplicationContext
 {
     private readonly StatusLabConfig _config;
+    private readonly BuildProvenance _buildProvenance = BuildProvenance.FromAssembly(typeof(StatusTrayApplicationContext).Assembly);
+    private BridgeProvenance _bridgeProvenance = BridgeProvenanceReader.ReadDefault();
     private readonly WindowsNotificationPoller _notificationPoller = new();
     private readonly JournalStateNormalizer _stateNormalizer;
     private readonly CodexUnreadSourceRegistry _unreadSources;
@@ -27,6 +30,12 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _deviceMenu;
     private readonly ToolStripMenuItem _rgbItem;
     private readonly ToolStripMenuItem _notificationStatusItem;
+    private readonly ToolStripMenuItem _buildChannelItem;
+    private readonly ToolStripMenuItem _buildVersionItem;
+    private readonly ToolStripMenuItem _buildCommitItem;
+    private readonly ToolStripMenuItem _buildSourceItem;
+    private readonly ToolStripMenuItem _buildUtcItem;
+    private readonly ToolStripMenuItem _bridgeProvenanceItem;
     private readonly ToolStripMenuItem _codexHookItem;
     private readonly ToolStripMenuItem _loggingItem;
     private readonly CancellationTokenSource _ipcCancellation = new();
@@ -73,6 +82,18 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _notificationStatusItem = new ToolStripMenuItem(_notificationStatusText) { Enabled = false };
         _rgbStatusItem = new ToolStripMenuItem(_rgbStatusText) { Enabled = false };
         _deviceStatusItem = new ToolStripMenuItem("Устройство: не подключено") { Enabled = false };
+        _buildChannelItem = new ToolStripMenuItem($"Сборка: {_buildProvenance.ChannelDisplay}") { Enabled = false };
+        _buildChannelItem.ForeColor = _buildProvenance.Channel switch
+        {
+            BuildChannel.Stable => Color.ForestGreen,
+            BuildChannel.Canary => Color.DarkOrange,
+            _ => SystemColors.GrayText
+        };
+        _buildVersionItem = new ToolStripMenuItem($"Версия: {(_buildProvenance.IsKnown ? BoundedMenuValue(_buildProvenance.Version, 64) : "неизвестна")}") { Enabled = false };
+        _buildCommitItem = new ToolStripMenuItem($"Commit: {(_buildProvenance.IsKnown ? _buildProvenance.Commit : "неизвестен")}") { Enabled = false };
+        _buildSourceItem = new ToolStripMenuItem($"Источник: {BoundedMenuValue(_buildProvenance.SourceDisplay, 160)}") { Enabled = false };
+        _buildUtcItem = new ToolStripMenuItem($"Сборка UTC: {(_buildProvenance.BuiltUtc is { } builtUtc ? builtUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : "неизвестно")}") { Enabled = false };
+        _bridgeProvenanceItem = new ToolStripMenuItem(BoundedMenuValue(_bridgeProvenance.FormatLine(), 380)) { Enabled = false };
         _deviceMenu = new ToolStripMenuItem("K15 устройство");
         _rgbItem = new ToolStripMenuItem("Включить RGB-индикацию статусов");
         _rgbItem.Click += async (_, _) => await ToggleRgbAsync();
@@ -85,7 +106,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _trayIcon = new NotifyIcon
         {
             Icon = _trackingOffIcon,
-            Text = "K15 Status Tray · NORMAL · RGB OFF",
+            Text = _buildProvenance.FormatTooltip("NORMAL", rgbEnabled: false),
             Visible = true,
             ContextMenuStrip = BuildMenu()
         };
@@ -120,6 +141,7 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
+        menu.Opening += (_, _) => RefreshBridgeProvenance();
         var control = new ToolStripMenuItem("Открыть K15 Control Center")
         {
             Font = new Font(SystemFonts.MenuFont, FontStyle.Bold)
@@ -127,6 +149,14 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         control.Click += (_, _) => OpenControlCenterProcess();
         menu.Items.Add(control);
         menu.Items.Add("Открыть Live Dashboard", null, (_, _) => OpenLiveDashboard());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(_buildChannelItem);
+        menu.Items.Add(_buildVersionItem);
+        menu.Items.Add(_buildCommitItem);
+        menu.Items.Add(_buildSourceItem);
+        menu.Items.Add(_buildUtcItem);
+        menu.Items.Add(_bridgeProvenanceItem);
+        menu.Items.Add("Копировать сведения о версии", null, (_, _) => CopyProvenanceSummary());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_stateStatusItem);
         menu.Items.Add(_trackingStatusItem);
@@ -837,9 +867,49 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
 
     private void RefreshTrayTooltip(string state)
     {
-        var rgb = _rgbCanary.Enabled ? "RGB ON" : "RGB OFF";
-        _trayIcon.Text = $"K15 Status Tray · {state} · {rgb}";
+        _trayIcon.Text = _buildProvenance.FormatTooltip(state, _rgbCanary.Enabled);
     }
+
+    private void CopyProvenanceSummary()
+    {
+        RefreshBridgeProvenance();
+        var summary = string.Join("\r\n", new[]
+        {
+            "VOROTEX K15 Status Tray",
+            _buildProvenance.FormatSummary(),
+            _bridgeProvenance.FormatLine(),
+            $"Состояние: {JournalStateNormalizer.ToWireName(_stateNormalizer.State)}",
+            $"RGB: {(_rgbCanary.Enabled ? "ВКЛ" : "ВЫКЛ")}"
+        });
+        if (summary.Length > 2048) summary = summary[..2048];
+
+        try
+        {
+            Clipboard.SetText(summary);
+            ShowBalloon("Сводка версии и диагностики скопирована.");
+        }
+        catch (Exception ex)
+        {
+            EventJournal.Append(new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                source = "status_tray",
+                @event = "provenance_copy_failed",
+                exception = ex.GetType().Name,
+                hresult = ex.HResult
+            });
+            ShowBalloon("Не удалось скопировать сведения о версии.");
+        }
+    }
+
+    private void RefreshBridgeProvenance()
+    {
+        _bridgeProvenance = BridgeProvenanceReader.ReadDefault();
+        _bridgeProvenanceItem.Text = BoundedMenuValue(_bridgeProvenance.FormatLine(), 380);
+    }
+
+    private static string BoundedMenuValue(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..Math.Max(0, maxLength - 1)] + "…";
 
     private void ToggleDetailedLogging()
     {
