@@ -85,15 +85,19 @@ export async function runApprovalWrapper(options = {}) {
     runtimeBoundary = undefined;
   }
 
+  const sourceInstanceId = options.sourceInstanceId ?? codexSourceInstanceId(env);
+  const journalSink = telemetrySink ?? createSanitizedJsonlSink(sinkPath);
   const observer = new ApprovalObserver({
-    telemetrySink: telemetrySink ?? createSanitizedJsonlSink(sinkPath),
-    sourceInstanceId: options.sourceInstanceId ?? codexSourceInstanceId(env)
+    telemetrySink: journalSink,
+    sourceInstanceId
   });
   const nativeStatusObserver = new NativeThreadStatusObserver({
     authoritySink: authoritySink ?? runtimeBoundary?.sink,
+    journalSink: sinkPath ? journalSink : undefined,
     classificationResolver, receiptClock,
     authorityDegraded: reason => runtimeBoundary?.markDegraded(reason),
-    diagnostics
+    diagnostics,
+    sourceInstanceId
   });
   const nativeThreadMetadataObserver = new NativeThreadMetadataObserver({
     metadataSink: authoritySink ?? runtimeBoundary?.sink

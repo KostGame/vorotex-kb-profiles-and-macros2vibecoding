@@ -14,6 +14,7 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
     private const string ApprovalSchemaVersion = "k15-codex-approval/v1";
     private const string ApprovalRequestSchemaVersion = "k15-codex-approval-request/v1";
     private const string CompletionSchemaVersion = "k15-codex-completion/v1";
+    private const string ThreadStatusSchemaVersion = "k15-codex-thread-status/v1";
 
     private readonly CancellationTokenSource _cts = new();
     private readonly StateReducer _reducer;
@@ -470,6 +471,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         {
             using var document = JsonDocument.Parse(line);
             var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
 
             var source = GetString(root, "source");
             if (source == ApprovalSource)
@@ -606,9 +609,80 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                     SchemaVersion: schemaVersion, ThreadId: threadId, TurnId: turnId, CompletionStatus: status);
         }
 
+        if (schemaVersion == ThreadStatusSchemaVersion && eventName == "thread_status_changed")
+            return ParseNativeThreadStatusInput(root);
         if (schemaVersion == ApprovalRequestSchemaVersion && eventName == "approval_requested")
             return ParseApprovalRequestInput(root);
         return ParseApprovalInput(root);
+    }
+
+    private static StatusInputEvent? ParseNativeThreadStatusInput(JsonElement root)
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "schemaVersion", "timestampUtc", "source", "event", "sourceInstanceId",
+            "threadId", "status", "activeFlags", "classification"
+        };
+        var properties = root.EnumerateObject().ToArray();
+        if (properties.Any(property => !allowed.Contains(property.Name)) ||
+            properties.Select(property => property.Name).Distinct(StringComparer.Ordinal).Count() != properties.Length)
+            return null;
+
+        foreach (var required in new[]
+                 {
+                     "schemaVersion", "timestampUtc", "source", "event", "sourceInstanceId",
+                     "threadId", "status", "activeFlags"
+                 })
+        {
+            if (!root.TryGetProperty(required, out _))
+                return null;
+        }
+
+        var schema = GetBoundedString(root, "schemaVersion");
+        var source = GetBoundedString(root, "source");
+        var eventName = GetBoundedString(root, "event");
+        var sourceInstanceId = GetBoundedSourceInstanceId(root);
+        var threadId = GetBoundedString(root, "threadId");
+        var status = GetBoundedString(root, "status");
+        var classification = root.TryGetProperty("classification", out var classificationNode)
+            ? GetBoundedString(root, "classification")
+            : string.Empty;
+        if (schema != ThreadStatusSchemaVersion ||
+            source != ApprovalSource ||
+            eventName != "thread_status_changed" ||
+            !CodexSourceIdentity.IsValid(sourceInstanceId) ||
+            !CodexUnreadStateReader.Bounded(threadId) ||
+            status is not ("notLoaded" or "idle" or "active" or "systemError") ||
+            (classificationNode.ValueKind != JsonValueKind.Undefined &&
+             classification is not ("user" or "service" or "canary")) ||
+            !DateTimeOffset.TryParse(GetBoundedString(root, "timestampUtc"), out var timestamp) ||
+            !root.TryGetProperty("activeFlags", out var flagsNode) ||
+            flagsNode.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var flags = flagsNode.EnumerateArray().ToArray();
+        if (flags.Length > 8 ||
+            flags.Any(flag => flag.ValueKind != JsonValueKind.String ||
+                              Encoding.UTF8.GetByteCount(flag.GetString() ?? string.Empty) > 1024))
+            return null;
+
+        var values = flags.Select(flag => flag.GetString() ?? string.Empty).ToArray();
+        if (values.Distinct(StringComparer.Ordinal).Count() != values.Length ||
+            values.Any(flag => flag is not ("waitingOnApproval" or "waitingOnUserInput")) ||
+            (status != "active" && values.Length != 0))
+            return null;
+
+        return new StatusInputEvent(
+            timestamp.ToUniversalTime(),
+            ApprovalSource,
+            "thread_status_changed",
+            SchemaVersion: schema,
+            ThreadId: threadId,
+            SourceInstanceId: sourceInstanceId,
+            NativeThreadStatus: status,
+            NativeWaitingOnApproval: values.Contains("waitingOnApproval", StringComparer.Ordinal),
+            NativeWaitingOnUserInput: values.Contains("waitingOnUserInput", StringComparer.Ordinal),
+            NativeClassification: classification);
     }
 
     private static StatusInputEvent? ParseApprovalRequestInput(JsonElement root)

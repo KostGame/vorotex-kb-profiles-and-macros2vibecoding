@@ -21,6 +21,12 @@ static StatusInputEvent TypedRequest(DateTimeOffset t, string threadId, string t
 static StatusInputEvent Completion(DateTimeOffset t, string threadId, string turnId, string status = "completed") =>
     new(t, "codex_stdio_bridge", "turn_completed", SchemaVersion: "k15-codex-completion/v1",
         CompletionStatus: status, ThreadId: threadId, TurnId: turnId);
+static StatusInputEvent NativeStatus(DateTimeOffset t, string threadId, string status = "active",
+    bool waitingOnApproval = false, bool waitingOnUserInput = false, string classification = "") =>
+    new(t, "codex_stdio_bridge", "thread_status_changed", SchemaVersion: "k15-codex-thread-status/v1",
+        ThreadId: threadId, SourceInstanceId: "local:fc48c8bff668af187c6ae9b203b3321c",
+        NativeThreadStatus: status, NativeWaitingOnApproval: waitingOnApproval,
+        NativeWaitingOnUserInput: waitingOnUserInput, NativeClassification: classification);
 static string HookJson(DateTimeOffset timestamp, string eventName, string? sessionId, string? turnId) =>
     JsonSerializer.Serialize(new
     {
@@ -437,6 +443,115 @@ Require(parallelApprovals.Apply(Approval(t.AddSeconds(5), "accept", rpcId: "1", 
 Require(parallelApprovals.Apply(new StatusInputEvent(t.AddSeconds(6), "codex_stdio_bridge", "serverRequest/resolved",
         SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "7", TurnId: "turn-a")) is null,
     "Generic serverRequest/resolved must never map to RUNNING.");
+var nativeApproval = new StateReducer();
+nativeApproval.Apply(Hook(t, "UserPromptSubmit", "native-thread", turn: "native-turn"));
+var nativeWait = nativeApproval.Apply(NativeStatus(t.AddSeconds(1), "native-thread", waitingOnApproval: true));
+Require(nativeWait?.Current == K15NormalizedState.Waiting &&
+        nativeWait.Reason == "codex_native_waiting_on_approval" &&
+        nativeApproval.Snapshot.ApprovalWaitingCount == 1 &&
+        nativeApproval.SessionSnapshots.Single().ThreadId == "native-thread",
+    "Native waitingOnApproval must bind the exact root thread and enter WAITING.");
+var nativeResume = nativeApproval.Apply(NativeStatus(t.AddSeconds(2), "native-thread"));
+Require(nativeResume?.Current == K15NormalizedState.Running &&
+        nativeResume.Reason == "codex_native_approval_resumed" &&
+        nativeApproval.Snapshot.ApprovalWaitingCount == 0,
+    "Native active[] must resume only the same native WAITING session.");
+
+var nativeParallel = new StateReducer();
+nativeParallel.Apply(Hook(t, "UserPromptSubmit", "native-a", turn: "native-turn-a"));
+nativeParallel.Apply(Hook(t.AddMilliseconds(100), "UserPromptSubmit", "native-b", turn: "native-turn-b"));
+nativeParallel.Apply(NativeStatus(t.AddSeconds(1), "native-a", waitingOnApproval: true));
+nativeParallel.Apply(NativeStatus(t.AddMilliseconds(1100), "native-b", waitingOnApproval: true));
+Require(nativeParallel.Snapshot.ApprovalWaitingCount == 2 && nativeParallel.Snapshot.RunningCount == 0,
+    "Two exact native approvals must produce WaitingCount=2.");
+nativeParallel.Apply(NativeStatus(t.AddSeconds(2), "native-a"));
+Require(nativeParallel.Snapshot.ApprovalWaitingCount == 1 && nativeParallel.Snapshot.RunningCount == 1 &&
+        nativeParallel.SessionSnapshots.Single(s => s.SessionId == "native-b").State == K15NormalizedState.Waiting,
+    "Resolving one native approval must leave the other WAITING.");
+nativeParallel.Apply(NativeStatus(t.AddSeconds(3), "native-b"));
+Require(nativeParallel.Snapshot.ApprovalWaitingCount == 0 && nativeParallel.Snapshot.RunningCount == 2,
+    "Parallel native approvals must resume independently.");
+
+var typedBeatsNative = new StateReducer();
+typedBeatsNative.Apply(Hook(t, "UserPromptSubmit", "typed-native", turn: "typed-turn", thread: "typed-thread"));
+typedBeatsNative.Apply(TypedRequest(t.AddSeconds(1), "typed-thread", "typed-turn"));
+Require(typedBeatsNative.State == K15NormalizedState.Waiting, "Typed approval setup must be WAITING.");
+typedBeatsNative.Apply(NativeStatus(t.AddSeconds(2), "typed-thread"));
+Require(typedBeatsNative.State == K15NormalizedState.Waiting &&
+        typedBeatsNative.Snapshot.ApprovalWaitingCount == 1,
+    "Native active[] must never clear WAITING established by typed approval_requested.");
+
+var nativeGuard = new StateReducer();
+nativeGuard.Apply(Hook(t, "UserPromptSubmit", "native-guard", turn: "native-guard-turn"));
+nativeGuard.Apply(NativeStatus(t.AddSeconds(1), "native-guard", waitingOnApproval: true));
+nativeGuard.Apply(NativeStatus(t.AddSeconds(2), "native-guard", status: "idle"));
+nativeGuard.Apply(NativeStatus(t.AddSeconds(3), "native-guard", status: "notLoaded"));
+nativeGuard.Apply(NativeStatus(t.AddSeconds(4), "native-guard", status: "systemError"));
+Require(nativeGuard.State == K15NormalizedState.Waiting,
+    "Non-active native statuses must not erase WAITING attention.");
+nativeGuard.Apply(NativeStatus(t.AddSeconds(5), "native-guard", waitingOnUserInput: true));
+Require(nativeGuard.State == K15NormalizedState.Waiting,
+    "waitingOnUserInput must not masquerade as approval resume.");
+var nativeUserInputOnly = new StateReducer();
+nativeUserInputOnly.Apply(Hook(t, "UserPromptSubmit", "native-user-input", turn: "native-user-input-turn"));
+nativeUserInputOnly.Apply(NativeStatus(t.AddSeconds(1), "native-user-input", waitingOnUserInput: true));
+Require(nativeUserInputOnly.State == K15NormalizedState.Running &&
+        nativeUserInputOnly.Snapshot.ApprovalWaitingCount == 0,
+    "waitingOnUserInput alone must not create approval WAITING.");
+
+var nativeDoneGuard = new StateReducer();
+nativeDoneGuard.Apply(Hook(t, "UserPromptSubmit", "native-done", turn: "native-done-turn", thread: "native-done"));
+nativeDoneGuard.Apply(Hook(t.AddSeconds(1), "Stop", "native-done", turn: "native-done-turn", thread: "native-done"));
+nativeDoneGuard.Apply(NativeStatus(t.AddSeconds(2), "native-done", status: "idle"));
+nativeDoneGuard.Apply(NativeStatus(t.AddSeconds(3), "native-done", status: "systemError"));
+nativeDoneGuard.Apply(NativeStatus(t.AddSeconds(4), "native-done", status: "notLoaded"));
+nativeDoneGuard.Apply(NativeStatus(t.AddSeconds(5), "native-done", waitingOnApproval: true));
+Require(nativeDoneGuard.State == K15NormalizedState.DonePendingAttention,
+    "Native idle/notLoaded/systemError or late waitingOnApproval must not erase DONE attention.");
+
+var parsedNativeStatus = JournalStateNormalizer.ParseInput("""
+{"schemaVersion":"k15-codex-thread-status/v1","timestampUtc":"2026-08-25T00:00:06Z","source":"codex_stdio_bridge","event":"thread_status_changed","sourceInstanceId":"local:fc48c8bff668af187c6ae9b203b3321c","threadId":"native-parser","status":"active","activeFlags":["waitingOnApproval"],"classification":"user"}
+""");
+Require(parsedNativeStatus?.NativeThreadStatus == "active" &&
+        parsedNativeStatus.NativeWaitingOnApproval &&
+        !parsedNativeStatus.NativeWaitingOnUserInput &&
+        parsedNativeStatus.ThreadId == "native-parser",
+    "Exact native thread status parser shape changed.");
+var nativeReplay = new StateReducer();
+nativeReplay.Rehydrate([
+    Hook(t, "UserPromptSubmit", "native-replay", turn: "native-replay-turn"),
+    parsedNativeStatus! with { ThreadId = "native-replay", TimestampUtc = t.AddSeconds(1) }
+]);
+Require(nativeReplay.State == K15NormalizedState.Waiting &&
+        nativeReplay.LastSessionTransitions.Count == 2 &&
+        nativeReplay.LastSessionTransitions[^1].IsRehydrated &&
+        nativeReplay.LastSessionTransitions[^1].Reason == "codex_native_waiting_on_approval",
+    "Exact parsed native thread status must participate in journal rehydration.");
+Require(JournalStateNormalizer.ParseInput("""
+{"schemaVersion":"k15-codex-thread-status/v1","timestampUtc":"2026-08-25T00:00:06Z","source":"codex_stdio_bridge","event":"thread_status_changed","sourceInstanceId":"local:fc48c8bff668af187c6ae9b203b3321c","threadId":"native-parser","status":"active","activeFlags":["waitingOnApproval"],"unexpected":"x"}
+""") is null, "Native status parser must reject unexpected fields.");
+Require(JournalStateNormalizer.ParseInput("""
+{"schemaVersion":"k15-codex-thread-status/v1","timestampUtc":"2026-08-25T00:00:06Z","source":"codex_stdio_bridge","event":"thread_status_changed","sourceInstanceId":"local:fc48c8bff668af187c6ae9b203b3321c","threadId":"native-parser","threadId":"duplicate","status":"active","activeFlags":["waitingOnApproval"]}
+""") is null, "Native status parser must reject duplicate properties.");
+Require(JournalStateNormalizer.ParseInput("""
+{"schemaVersion":"k15-codex-thread-status/v1","timestampUtc":"2026-08-25T00:00:06Z","source":"codex_stdio_bridge","event":"thread_status_changed","sourceInstanceId":"local:fc48c8bff668af187c6ae9b203b3321c","threadId":"native-parser","status":"active","activeFlags":["waitingOnApproval","waitingOnApproval"]}
+""") is null, "Native status parser must reject duplicate active flags.");
+Require(JournalStateNormalizer.ParseInput("""
+{"schemaVersion":"k15-codex-thread-status/v1","timestampUtc":"2026-08-25T00:00:06Z","source":"codex_stdio_bridge","event":"thread_status_changed","sourceInstanceId":"local:fc48c8bff668af187c6ae9b203b3321c","threadId":"native-parser","status":"idle","activeFlags":["waitingOnApproval"]}
+""") is null, "Non-active native status must reject active flags.");
+Require(JournalStateNormalizer.ParseInput("""
+{"schemaVersion":"k15-codex-thread-status/v1","timestampUtc":"2026-08-25T00:00:06Z","source":"codex_stdio_bridge","event":"thread_status_changed","sourceInstanceId":"invalid","threadId":"native-parser","status":"active","activeFlags":[]}
+""") is null, "Native status parser must require exact local source identity.");
+Require(JournalStateNormalizer.ParseInput("""
+{"schemaVersion":"k15-codex-thread-status/v1","timestampUtc":"2026-08-25T00:00:06Z","source":"codex_stdio_bridge","event":"thread_status_changed","sourceInstanceId":"local:fc48c8bff668af187c6ae9b203b3321c","threadId":"native-parser","status":"active","activeFlags":[],"classification":"other"}
+""") is null, "Native status parser must reject unknown classifications.");
+Require(JournalStateNormalizer.ParseInput("""
+{"schemaVersion":"k15-codex-thread-status/v1","timestampUtc":"2026-08-25T00:00:06Z","source":"codex_stdio_bridge","event":"thread_status_changed","sourceInstanceId":"local:fc48c8bff668af187c6ae9b203b3321c","threadId":"native-parser","status":"active","activeFlags":["unknown"]}
+""") is null, "Native status parser must reject unknown active flags.");
+Require(JournalStateNormalizer.ParseInput("[]") is null,
+    "Journal parser must reject non-object root values without throwing.");
+Console.WriteLine("NATIVE_THREAD_APPROVAL_STATUS=PASS");
+
 var parsedApproval = JournalStateNormalizer.ParseInput("""
 {"schemaVersion":"k15-codex-approval/v1","timestampUtc":"2026-08-25T00:00:07Z","source":"codex_stdio_bridge","event":"approval_resolved","decision":"accept","rpcIdType":"number","rpcId":"8","threadId":"session-a","turnId":"turn-a","itemId":"item-a"}
 """);

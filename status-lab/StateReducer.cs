@@ -46,7 +46,11 @@ internal sealed record StatusInputEvent(
     bool PermissionModeProvided = false,
     string SourceInstanceId = "",
     string RequestFamily = "",
-    string ApprovalsReviewer = "");
+    string ApprovalsReviewer = "",
+    string NativeThreadStatus = "",
+    bool NativeWaitingOnApproval = false,
+    bool NativeWaitingOnUserInput = false,
+    string NativeClassification = "");
 
 internal sealed record PermissionRequestEvidence(
     string EventSubtype = "",
@@ -138,6 +142,7 @@ internal sealed class StateReducer
         public string ApprovalRpcId { get; set; } = string.Empty;
         public string ApprovalItemId { get; set; } = string.Empty;
         public string ApprovalRequestFamily { get; set; } = string.Empty;
+        public bool NativeApprovalWaiting { get; set; }
         public DateTimeOffset? LastStopUtc { get; set; }
         public DateTimeOffset? DoneEnteredUtc { get; set; }
         public DateTimeOffset? AcknowledgedUtc { get; set; }
@@ -279,6 +284,7 @@ internal sealed class StateReducer
                 "turn_completed" => ApplyTurnCompletion(input),
                 "approval_requested" => ApplyApprovalRequest(input),
                 "approval_resolved" => ApplyApprovalResolution(input),
+                "thread_status_changed" => ApplyNativeThreadStatus(input),
                 _ => null
             };
 
@@ -526,6 +532,66 @@ internal sealed class StateReducer
         }
     }
 
+    private StateTransition? ApplyNativeThreadStatus(StatusInputEvent input)
+    {
+        if (input.SchemaVersion != "k15-codex-thread-status/v1" ||
+            !CodexSourceIdentity.IsValid(input.SourceInstanceId) ||
+            !CodexUnreadStateReader.Bounded(input.ThreadId) ||
+            input.NativeThreadStatus != "active")
+            return null;
+
+        var candidates = _sessions.Values.Where(session => !session.Internal && !session.Ended &&
+            session.SourceInstanceId == input.SourceInstanceId &&
+            input.TimestampUtc >= session.LastActivityUtc &&
+            (session.ThreadId == input.ThreadId ||
+             (session.ThreadId.Length == 0 && session.Id == input.ThreadId))).ToArray();
+        if (candidates.Length != 1)
+            return null;
+
+        var session = candidates[0];
+
+        if (input.NativeWaitingOnApproval)
+        {
+            if (session.State == K15NormalizedState.Waiting && session.NativeApprovalWaiting)
+            {
+                session.LastActivityUtc = input.TimestampUtc;
+                return null;
+            }
+            if (session.State != K15NormalizedState.Running)
+                return null;
+
+            if (session.ThreadId.Length == 0)
+                session.ThreadId = input.ThreadId;
+            session.NativeApprovalWaiting = true;
+            session.LastActivityUtc = input.TimestampUtc;
+            SetSessionState(session, K15NormalizedState.Waiting, "codex_native_waiting_on_approval", input.TimestampUtc, input);
+            session.LastPermissionUtc = input.TimestampUtc;
+            session.LastStopUtc = null;
+            session.DoneEnteredUtc = null;
+            _focusedSessionKey = session.IdentityKey;
+            return RecomputeAggregate("codex_native_waiting_on_approval", input.TimestampUtc);
+        }
+
+        if (!input.NativeWaitingOnUserInput &&
+            session.State == K15NormalizedState.Waiting &&
+            session.NativeApprovalWaiting)
+        {
+            session.NativeApprovalWaiting = false;
+            if (session.ThreadId.Length == 0)
+                session.ThreadId = input.ThreadId;
+            session.LastActivityUtc = input.TimestampUtc;
+            SetSessionState(session, K15NormalizedState.Running, "codex_native_approval_resumed", input.TimestampUtc, input);
+            session.LastPermissionUtc = null;
+            session.LastStopUtc = null;
+            session.DoneEnteredUtc = null;
+            session.AcknowledgedUtc = input.TimestampUtc;
+            _focusedSessionKey = session.IdentityKey;
+            return RecomputeAggregate("codex_native_approval_resumed", input.TimestampUtc);
+        }
+
+        return null;
+    }
+
     private StateTransition? ApplyApprovalResolution(StatusInputEvent input)
     {
         if (input.EventName != "approval_resolved" ||
@@ -593,6 +659,7 @@ internal sealed class StateReducer
         session.ApprovalRpcId = input.RpcId;
         session.ApprovalItemId = input.ItemId;
         session.ApprovalRequestFamily = input.RequestFamily;
+        session.NativeApprovalWaiting = false;
         SetSessionState(session, K15NormalizedState.Waiting, "codex_permission_request", input.TimestampUtc, input);
         session.LastPermissionUtc = input.TimestampUtc;
         session.LastStopUtc = null;
@@ -765,6 +832,8 @@ internal sealed class StateReducer
     private void SetSessionState(SessionRuntime session, K15NormalizedState next, string reason,
         DateTimeOffset timestampUtc, StatusInputEvent? input = null)
     {
+        if (next != K15NormalizedState.Waiting)
+            session.NativeApprovalWaiting = false;
         if (session.State == next)
             return;
 
