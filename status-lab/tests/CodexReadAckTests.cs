@@ -451,6 +451,72 @@ internal static class CodexReadAckTests
         Check(JournalStateNormalizer.ParseInput("{\"source\":\"state_normalizer\",\"event\":\"read_ack_evidence\"}") is null,
             "ACK_DIAGNOSTIC_NEVER_REPLAYED_AS_INPUT");
 
+        reducer = new StateReducer(0, T.AddSeconds(10));
+        reducer.Rehydrate(replay);
+        var durableCompletion = reducer.ReadAckCandidates.Single();
+        var durableAck = new CodexReadAckCheckpoint(
+            durableCompletion.SourceInstanceId,
+            durableCompletion.SessionId,
+            durableCompletion.ThreadId,
+            durableCompletion.TurnId,
+            durableCompletion.Generation,
+            durableCompletion.CompletedUtc,
+            T.AddSeconds(9));
+        reducer.RestoreReadAcknowledgments([durableAck]);
+        Check(reducer.State == K15NormalizedState.Normal &&
+              reducer.SessionSnapshots.Single().State == K15NormalizedState.Normal &&
+              reducer.LastSessionTransitions.Any(transition =>
+                  transition.Reason == "codex_read_ack" && transition.IsRehydrated),
+            "DURABLE_ACK_EXACT_REHYDRATION_RESTORES_NORMAL");
+
+        reducer = new StateReducer(0, T.AddSeconds(10));
+        reducer.Rehydrate(replay);
+        reducer.RestoreReadAcknowledgments([durableAck with
+        {
+            SourceInstanceId = "local:00000000000000000000000000000000"
+        }]);
+        Check(reducer.State == K15NormalizedState.DonePendingAttention,
+            "DURABLE_ACK_WRONG_SOURCE_FAILS_CLOSED");
+
+        reducer = new StateReducer(0, T.AddSeconds(10));
+        reducer.Rehydrate(replay);
+        reducer.RestoreReadAcknowledgments([durableAck with { Generation = durableAck.Generation + 1 }]);
+        Check(reducer.State == K15NormalizedState.DonePendingAttention,
+            "DURABLE_ACK_WRONG_GENERATION_FAILS_CLOSED");
+
+        reducer = new StateReducer(0, T.AddSeconds(10));
+        reducer.Rehydrate(replay);
+        reducer.RestoreReadAcknowledgments([durableAck, durableAck]);
+        Check(reducer.State == K15NormalizedState.DonePendingAttention,
+            "DURABLE_ACK_DUPLICATE_FAILS_CLOSED");
+
+        reducer = new StateReducer(0, T.AddSeconds(10));
+        reducer.Rehydrate(replay);
+        reducer.RestoreReadAcknowledgments([durableAck with { SourceInstanceId = string.Empty }]);
+        Check(reducer.State == K15NormalizedState.Normal,
+            "DURABLE_ACK_LEGACY_SOURCELESS_UNIQUE_COMPLETION_RESTORES");
+        reducer.Apply(Hook("UserPromptSubmit", 11, turn: "U2"));
+        Check(reducer.State == K15NormalizedState.Running,
+            "DURABLE_ACK_OLD_CHECKPOINT_DOES_NOT_SUPPRESS_NEW_TURN");
+
+        var checkpointJson =
+            "{\"timestampUtc\":\"2026-08-25T00:00:05.1000000Z\",\"source\":\"state_normalizer\",\"event\":\"read_ack_evidence\",\"reason\":\"codex_read_ack\",\"host\":\"local\",\"sessionId\":\"S\",\"threadId\":\"T\",\"turnId\":\"U\",\"sourceInstanceId\":\"" +
+            TestSourceInstanceId +
+            "\",\"runtimeEpoch\":\"11111111-1111-1111-1111-111111111111\",\"completionGeneration\":1,\"completedUtc\":\"2026-08-25T00:00:02Z\",\"hasUnreadUtc\":\"2026-08-25T00:00:03Z\",\"firstNoUnreadUtc\":\"2026-08-25T00:00:04Z\",\"secondNoUnreadUtc\":\"2026-08-25T00:00:05Z\"}";
+        var parsedCheckpoint = JournalStateNormalizer.ParseReadAckCheckpoint(checkpointJson);
+        Check(parsedCheckpoint?.SourceInstanceId == TestSourceInstanceId &&
+              parsedCheckpoint.SessionId == "S" && parsedCheckpoint.ThreadId == "T" &&
+              parsedCheckpoint.TurnId == "U" && parsedCheckpoint.Generation == 1,
+            "DURABLE_ACK_CHECKPOINT_PARSER_EXACT");
+        Check(JournalStateNormalizer.ParseReadAckCheckpoint(checkpointJson.Replace(
+                "\"secondNoUnreadUtc\":\"2026-08-25T00:00:05Z\"",
+                "\"secondNoUnreadUtc\":\"2026-08-25T00:00:05Z\",\"prompt\":\"PRIVATE\"")) is null,
+            "DURABLE_ACK_CHECKPOINT_REJECTS_UNEXPECTED_FIELD");
+        Check(JournalStateNormalizer.ParseReadAckCheckpoint(checkpointJson.Replace(
+                "\"threadId\":\"T\"",
+                "\"threadId\":\"T\",\"threadId\":\"OTHER\"")) is null,
+            "DURABLE_ACK_CHECKPOINT_REJECTS_DUPLICATE_FIELD");
+
         FileReaderTests();
         ArchitectRegressions();
         NormalizerTests();
@@ -673,6 +739,19 @@ internal static class CodexReadAckTests
                     "NORMALIZER_ACTUAL_POLL_A_ACK_B_RETAINED");
             }
             finally { normalizer.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+
+            var restarted = new JournalStateNormalizer(0, reader);
+            try
+            {
+                restarted.Start();
+                Check(restarted.AttentionSnapshot.DoneUnreadCount == 1 &&
+                      restarted.State == K15NormalizedState.DonePendingAttention &&
+                      restarted.SessionSnapshots.Single(s => s.SessionId == "S").State == K15NormalizedState.Normal &&
+                      restarted.SessionSnapshots.Single(s => s.SessionId == "B").State == K15NormalizedState.DonePendingAttention,
+                    "NORMALIZER_RESTART_DURABLE_ACK_PREVENTS_RESURRECTION");
+            }
+            finally { restarted.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+
             var lines = File.ReadAllLines(EventJournal.FilePath);
             var receipt = lines.Select(line => JsonDocument.Parse(line)).ToArray();
             try

@@ -6,6 +6,16 @@ internal sealed record CodexCompletionKey(string SessionId, string ThreadId, str
 internal sealed record CodexReadAckEvidence(CodexCompletionKey Completion, string Host,
     DateTimeOffset HasUnreadUtc, DateTimeOffset FirstNoUnreadUtc, DateTimeOffset SecondNoUnreadUtc);
 
+internal sealed record CodexReadAckCheckpoint(
+    string SourceInstanceId,
+    string SessionId,
+    string ThreadId,
+    string TurnId,
+    long Generation,
+    DateTimeOffset CompletedUtc,
+    DateTimeOffset AcknowledgedUtc);
+
+
 // Polling and I/O belong to the runtime. The reducer independently validates
 // causal evidence against its current completion before changing any state.
 internal sealed class CodexReadAckObserver(ICodexUnreadSourceRegistry sources, string host)

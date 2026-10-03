@@ -127,6 +127,8 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
         _reducer.Rehydrate(events);
         _reducer.RestoreCompletionCorrelations(lines.Skip(start).Select(ParseDoneCorrelation)
             .OfType<SessionStateTransition>().Where(record => record.TimestampUtc >= cutoff));
+        _reducer.RestoreReadAcknowledgments(lines.Skip(start).Select(ParseReadAckCheckpoint)
+            .OfType<CodexReadAckCheckpoint>().Where(record => record.AcknowledgedUtc >= cutoff));
         return _reducer.LastSessionTransitions;
     }
 
@@ -253,15 +255,31 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
             _readAckObserver.ConfirmApplied(item);
             foreach (var sessionTransition in _reducer.LastSessionTransitions) PublishSessionTransition(sessionTransition);
             if (transition is not null) PublishTransition(transition);
-            EventJournal.Append(new
+            if (CodexSourceIdentity.IsValid(item.Completion.SourceInstanceId))
             {
-                timestampUtc = DateTimeOffset.UtcNow, source = "state_normalizer", @event = "read_ack_evidence",
-                reason = "codex_read_ack", host = item.Host, sessionId = item.Completion.SessionId,
-                threadId = item.Completion.ThreadId, turnId = item.Completion.TurnId,
-                runtimeEpoch = item.Completion.RuntimeEpoch, completionGeneration = item.Completion.Generation,
-                completedUtc = item.Completion.CompletedUtc, hasUnreadUtc = item.HasUnreadUtc,
-                firstNoUnreadUtc = item.FirstNoUnreadUtc, secondNoUnreadUtc = item.SecondNoUnreadUtc
-            });
+                EventJournal.Append(new
+                {
+                    timestampUtc = DateTimeOffset.UtcNow, source = "state_normalizer", @event = "read_ack_evidence",
+                    reason = "codex_read_ack", host = item.Host, sessionId = item.Completion.SessionId,
+                    threadId = item.Completion.ThreadId, turnId = item.Completion.TurnId,
+                    sourceInstanceId = item.Completion.SourceInstanceId,
+                    runtimeEpoch = item.Completion.RuntimeEpoch, completionGeneration = item.Completion.Generation,
+                    completedUtc = item.Completion.CompletedUtc, hasUnreadUtc = item.HasUnreadUtc,
+                    firstNoUnreadUtc = item.FirstNoUnreadUtc, secondNoUnreadUtc = item.SecondNoUnreadUtc
+                });
+            }
+            else
+            {
+                EventJournal.Append(new
+                {
+                    timestampUtc = DateTimeOffset.UtcNow, source = "state_normalizer", @event = "read_ack_evidence",
+                    reason = "codex_read_ack", host = item.Host, sessionId = item.Completion.SessionId,
+                    threadId = item.Completion.ThreadId, turnId = item.Completion.TurnId,
+                    runtimeEpoch = item.Completion.RuntimeEpoch, completionGeneration = item.Completion.Generation,
+                    completedUtc = item.Completion.CompletedUtc, hasUnreadUtc = item.HasUnreadUtc,
+                    firstNoUnreadUtc = item.FirstNoUnreadUtc, secondNoUnreadUtc = item.SecondNoUnreadUtc
+                });
+            }
         }
     }
 
@@ -460,6 +478,77 @@ internal sealed class JournalStateNormalizer : IAsyncDisposable
                 SourceInstanceId: sourceInstanceId);
         }
         catch (JsonException) { return null; }
+    }
+
+    internal static CodexReadAckCheckpoint? ParseReadAckCheckpoint(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                GetString(root, "source") != "state_normalizer" ||
+                GetString(root, "event") != "read_ack_evidence" ||
+                GetString(root, "reason") != "codex_read_ack" ||
+                GetString(root, "host") != "local")
+                return null;
+
+            var allowed = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "timestampUtc", "source", "event", "reason", "host", "sessionId", "threadId", "turnId",
+                "sourceInstanceId", "runtimeEpoch", "completionGeneration", "completedUtc",
+                "hasUnreadUtc", "firstNoUnreadUtc", "secondNoUnreadUtc"
+            };
+            var properties = root.EnumerateObject().ToArray();
+            if (properties.Any(property => !allowed.Contains(property.Name)) ||
+                properties.Select(property => property.Name).Distinct(StringComparer.Ordinal).Count() != properties.Length)
+                return null;
+
+            foreach (var required in new[]
+                     {
+                         "timestampUtc", "source", "event", "reason", "host", "sessionId", "threadId", "turnId",
+                         "runtimeEpoch", "completionGeneration", "completedUtc", "hasUnreadUtc", "firstNoUnreadUtc",
+                         "secondNoUnreadUtc"
+                     })
+            {
+                if (!root.TryGetProperty(required, out _))
+                    return null;
+            }
+
+            var sessionId = GetBoundedString(root, "sessionId");
+            var threadId = GetBoundedString(root, "threadId");
+            var turnId = GetBoundedString(root, "turnId");
+            if (!CodexUnreadStateReader.Bounded(sessionId) ||
+                !CodexUnreadStateReader.Bounded(threadId) ||
+                !CodexUnreadStateReader.Bounded(turnId) ||
+                !Guid.TryParse(GetString(root, "runtimeEpoch"), out _) ||
+                !root.TryGetProperty("completionGeneration", out var generationNode) ||
+                generationNode.ValueKind != JsonValueKind.Number ||
+                !generationNode.TryGetInt64(out var generation) || generation < 1 ||
+                !DateTimeOffset.TryParse(GetString(root, "timestampUtc"), out var recordedUtc) ||
+                !DateTimeOffset.TryParse(GetString(root, "completedUtc"), out var completedUtc) ||
+                !DateTimeOffset.TryParse(GetString(root, "hasUnreadUtc"), out var hasUnreadUtc) ||
+                !DateTimeOffset.TryParse(GetString(root, "firstNoUnreadUtc"), out var firstNoUnreadUtc) ||
+                !DateTimeOffset.TryParse(GetString(root, "secondNoUnreadUtc"), out var secondNoUnreadUtc) ||
+                hasUnreadUtc <= completedUtc ||
+                firstNoUnreadUtc <= hasUnreadUtc ||
+                secondNoUnreadUtc <= firstNoUnreadUtc ||
+                recordedUtc < completedUtc)
+                return null;
+
+            var hasSource = root.TryGetProperty("sourceInstanceId", out _);
+            var sourceInstanceId = hasSource ? GetBoundedSourceInstanceId(root) : string.Empty;
+            if (hasSource && !CodexSourceIdentity.IsValid(sourceInstanceId))
+                return null;
+
+            return new(sourceInstanceId, sessionId, threadId, turnId, generation,
+                completedUtc.ToUniversalTime(), secondNoUnreadUtc.ToUniversalTime());
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     internal static StatusInputEvent? ParseInput(string line)

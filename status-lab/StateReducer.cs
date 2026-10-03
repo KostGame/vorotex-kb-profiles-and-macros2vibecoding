@@ -259,6 +259,71 @@ internal sealed class StateReducer
         }
     }
 
+    public void RestoreReadAcknowledgments(IEnumerable<CodexReadAckCheckpoint> persisted)
+    {
+        var checkpoints = persisted.ToArray();
+        if (checkpoints.Length == 0) return;
+
+        var transitionCountBefore = LastSessionTransitions.Count;
+        DateTimeOffset? latestAckUtc = null;
+
+        foreach (var session in _sessions.Values.Where(s =>
+                     !s.Internal && s.State == K15NormalizedState.DonePendingAttention &&
+                     !s.CompletionCorrelationRejected && s.Completion is not null))
+        {
+            var completion = session.Completion!;
+            var matches = checkpoints.Where(checkpoint =>
+                checkpoint.SessionId == completion.SessionId &&
+                checkpoint.ThreadId == completion.ThreadId &&
+                checkpoint.TurnId == completion.TurnId &&
+                checkpoint.Generation == completion.Generation &&
+                checkpoint.CompletedUtc == completion.CompletedUtc &&
+                (checkpoint.SourceInstanceId.Length == 0 ||
+                 checkpoint.SourceInstanceId == completion.SourceInstanceId)).ToArray();
+            if (matches.Length != 1) continue;
+
+            var checkpoint = matches[0];
+            if (checkpoint.AcknowledgedUtc <= checkpoint.CompletedUtc) continue;
+
+            // Legacy checkpoints written before sourceInstanceId was added are
+            // accepted only when the completion identity is globally unique.
+            if (checkpoint.SourceInstanceId.Length == 0)
+            {
+                var candidates = _sessions.Values.Count(other =>
+                    !other.Internal && other.State == K15NormalizedState.DonePendingAttention &&
+                    !other.CompletionCorrelationRejected && other.Completion is { } candidate &&
+                    candidate.SessionId == checkpoint.SessionId &&
+                    candidate.ThreadId == checkpoint.ThreadId &&
+                    candidate.TurnId == checkpoint.TurnId &&
+                    candidate.Generation == checkpoint.Generation &&
+                    candidate.CompletedUtc == checkpoint.CompletedUtc);
+                if (candidates != 1) continue;
+            }
+
+            session.ReadAcknowledgedCompletion = completion;
+            SetSessionState(session, K15NormalizedState.Normal, "codex_read_ack", checkpoint.AcknowledgedUtc,
+                new(checkpoint.AcknowledgedUtc, "codex_unread_observer", "read_ack",
+                    ThreadId: completion.ThreadId, TurnId: completion.TurnId,
+                    SourceInstanceId: completion.SourceInstanceId));
+            session.LastStopUtc = null;
+            session.DoneEnteredUtc = null;
+            session.AcknowledgedUtc = checkpoint.AcknowledgedUtc;
+            latestAckUtc = latestAckUtc is null || checkpoint.AcknowledgedUtc > latestAckUtc
+                ? checkpoint.AcknowledgedUtc
+                : latestAckUtc;
+        }
+
+        if (latestAckUtc is DateTimeOffset ackUtc)
+            RecomputeAggregate("codex_read_ack", ackUtc);
+
+        if (LastSessionTransitions.Count > transitionCountBefore)
+            LastSessionTransitions = LastSessionTransitions
+                .Select((transition, index) => index < transitionCountBefore
+                    ? transition
+                    : transition with { IsRehydrated = true })
+                .ToArray();
+    }
+
     private static bool ValidCorrelation(string session, string thread, string turn) =>
         session != LegacySessionId && CodexUnreadStateReader.Bounded(session) &&
         CodexUnreadStateReader.Bounded(thread) && CodexUnreadStateReader.Bounded(turn);
