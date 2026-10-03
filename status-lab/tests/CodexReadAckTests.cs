@@ -92,6 +92,12 @@ internal static class CodexReadAckTests
               permissionsAuthority.LastSessionTransitions.Count == 0 &&
               permissionsAuthority.SessionSnapshots.Single().LastActivityUtc == T.AddMilliseconds(2500),
             "PERMISSIONS_PRE_TOOL_USE_RETAINS_WAITING");
+        permissionsAuthority.Apply(new(T.AddMilliseconds(2750), "codex_stdio_bridge", "approval_resolved",
+            SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "91",
+            ThreadId: "T", TurnId: "U", ItemId: "I", SourceInstanceId: TestSourceInstanceId));
+        Check(permissionsAuthority.State == K15NormalizedState.Waiting &&
+              permissionsAuthority.LastSessionTransitions.Count == 0,
+            "PERMISSIONS_GENERIC_APPROVAL_RESOLUTION_IS_STATE_NEUTRAL");
         permissionsAuthority.Apply(new(T.AddSeconds(3), "codex_hook", "PostToolUse",
             SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
             SourceInstanceId: TestSourceInstanceId));

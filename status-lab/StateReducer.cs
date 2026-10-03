@@ -543,7 +543,8 @@ internal sealed class StateReducer
         var candidates = _sessions.Values
             .Where(session => !session.Internal && !session.Ended &&
                               session.SourceInstanceId == input.SourceInstanceId &&
-                              session.State == K15NormalizedState.Waiting)
+                              session.State == K15NormalizedState.Waiting &&
+                              session.ApprovalRequestFamily is "item/commandExecution" or "item/fileChange")
             .Where(session => MatchesApproval(session, input))
             .ToArray();
         if (candidates.Length != 1)
