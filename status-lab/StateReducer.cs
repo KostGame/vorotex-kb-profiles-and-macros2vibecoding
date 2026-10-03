@@ -431,6 +431,16 @@ internal sealed class StateReducer
             (input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd" ||
              (input.TurnId.Length != 0 && input.TurnId != session.TurnId)))
             ClearApprovalCorrelation(session);
+        // request_permissions PreToolUse is emitted while the native owner
+        // approval card is still blocking the turn. It advances only the
+        // activity watermark; it must not rewrite correlation/context,
+        // invalidate completion metadata, or claim that execution resumed.
+        if (pendingPermissionsPreTool)
+        {
+            session.LastActivityUtc = input.TimestampUtc;
+            return null;
+        }
+
         var acknowledged = session.ReadAcknowledgedCompletion;
         if (input.EventName == "Stop" && acknowledged is not null && session.Completion == acknowledged &&
             session.CompletionGeneration == acknowledged.Generation && session.TurnId == acknowledged.TurnId &&
@@ -446,16 +456,6 @@ internal sealed class StateReducer
             session.ReadAcknowledgedCompletion = null;
             session.CompletionGeneration++;
         }
-        // request_permissions PreToolUse is emitted while the native owner
-        // approval card is still blocking the turn. It advances only the
-        // activity watermark; it must not rewrite correlation/context or
-        // claim that execution resumed.
-        if (pendingPermissionsPreTool)
-        {
-            session.LastActivityUtc = input.TimestampUtc;
-            return null;
-        }
-
         if (!string.IsNullOrWhiteSpace(input.Cwd))
             session.Cwd = input.Cwd;
         if (!string.IsNullOrWhiteSpace(input.ThreadId))
