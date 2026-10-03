@@ -558,10 +558,18 @@ internal sealed class StateReducer
         var candidates = _sessions.Values.Where(session => !session.Internal && !session.Ended &&
             session.SourceInstanceId == input.SourceInstanceId &&
             session.State == K15NormalizedState.Running && input.TimestampUtc >= session.LastActivityUtc &&
-            session.ThreadId == input.ThreadId && session.TurnId == input.TurnId).ToArray();
+            session.TurnId == input.TurnId &&
+            (session.ThreadId == input.ThreadId ||
+             (session.ThreadId.Length == 0 && session.Id == input.ThreadId))).ToArray();
         if (candidates.Length != 1) return null;
 
         var session = candidates[0];
+        // Desktop hooks can expose the canonical Codex thread UUID only as
+        // sessionId. Once the typed bridge proves that the same UUID is the
+        // thread for this exact source+turn, retain it so all later approval
+        // correlation uses the normal exact thread path.
+        if (session.ThreadId.Length == 0)
+            session.ThreadId = input.ThreadId;
         session.ApprovalRpcIdType = input.RpcIdType;
         session.ApprovalRpcId = input.RpcId;
         session.ApprovalItemId = input.ItemId;

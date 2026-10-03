@@ -85,6 +85,39 @@ internal static class CodexReadAckTests
         Check(permissionsAuthority.State == K15NormalizedState.Waiting &&
               permissionsAuthority.LastSessionTransitions.Single().PermissionEvidence?.RequestFamily == "item/permissions",
             "TYPED_PERMISSIONS_REQUEST_WAITING");
+
+        var liveDesktopIdentity = new StateReducer(0, T);
+        liveDesktopIdentity.Apply(Hook("UserPromptSubmit", 1, session: "LIVE", thread: "", turn: "LIVE-TURN"));
+        liveDesktopIdentity.Apply(ApprovalRequest(2, thread: "LIVE", turn: "LIVE-TURN",
+            item: "LIVE-I", rpc: "201", family: "item/permissions"));
+        Check(liveDesktopIdentity.State == K15NormalizedState.Waiting &&
+              liveDesktopIdentity.SessionSnapshots.Single().ThreadId == "LIVE" &&
+              liveDesktopIdentity.LastSessionTransitions.Single().ThreadId == "LIVE",
+            "DESKTOP_SESSION_ID_PROMOTED_TO_TYPED_THREAD_FOR_WAITING");
+        liveDesktopIdentity.Apply(new(T.AddSeconds(3), "codex_stdio_bridge", "approval_resolved",
+            SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "201",
+            ThreadId: "LIVE", TurnId: "LIVE-TURN", ItemId: "LIVE-I", SourceInstanceId: TestSourceInstanceId));
+        Check(liveDesktopIdentity.State == K15NormalizedState.Running,
+            "DESKTOP_PROMOTED_THREAD_ACCEPT_RESUMES_EXACTLY");
+
+        var wrongDesktopThread = new StateReducer(0, T);
+        wrongDesktopThread.Apply(Hook("UserPromptSubmit", 1, session: "LIVE", thread: "", turn: "LIVE-TURN"));
+        wrongDesktopThread.Apply(ApprovalRequest(2, thread: "OTHER", turn: "LIVE-TURN",
+            item: "LIVE-I", rpc: "202", family: "item/permissions"));
+        Check(wrongDesktopThread.State == K15NormalizedState.Running &&
+              wrongDesktopThread.SessionSnapshots.Single().ThreadId.Length == 0,
+            "DESKTOP_SESSION_ID_FALLBACK_REQUIRES_EXACT_TYPED_THREAD");
+
+        var liveDesktopReplay = new StateReducer(0, T);
+        liveDesktopReplay.Rehydrate([
+            Hook("UserPromptSubmit", 1, session: "LIVE", thread: "", turn: "LIVE-TURN"),
+            ApprovalRequest(2, thread: "LIVE", turn: "LIVE-TURN", item: "LIVE-I", rpc: "203", family: "item/permissions")
+        ]);
+        Check(liveDesktopReplay.State == K15NormalizedState.Waiting &&
+              liveDesktopReplay.SessionSnapshots.Single().ThreadId == "LIVE" &&
+              liveDesktopReplay.LastSessionTransitions.Last().IsRehydrated,
+            "DESKTOP_SESSION_ID_TYPED_THREAD_REHYDRATES_DETERMINISTICALLY");
+
         permissionsAuthority.Apply(Hook("PostToolUse", 3));
         Check(permissionsAuthority.State == K15NormalizedState.Running,
             "PERMISSIONS_POST_TOOL_USE_RESUMES");
