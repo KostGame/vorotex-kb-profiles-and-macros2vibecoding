@@ -288,9 +288,9 @@ internal static class CodexReadAckTests
         Check(CodexPetAdapter.Map([Session(K15NormalizedState.Running)], "S", CodexUnreadState.Unknown).State == CodexPetVisualState.Running, "PET_RUNNING");
         Check(CodexPetAdapter.Map([Session(K15NormalizedState.Waiting)], "S", CodexUnreadState.Unknown).State == CodexPetVisualState.Waiting, "PET_WAITING");
         Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.HasUnread).State == CodexPetVisualState.Review, "PET_REVIEW_EXACT_THREAD");
-        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.NoUnread).State == CodexPetVisualState.Idle, "PET_NO_UNREAD_IDLE");
-        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.Unknown).State == CodexPetVisualState.Idle, "PET_UNKNOWN_IDLE");
-        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.NoUnread).State == CodexPetVisualState.Idle, "PET_DIFFERENT_THREAD_IDLE");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.NoUnread).State == CodexPetVisualState.Review, "PET_DONE_NOUNREAD_STAYS_REVIEW_UNTIL_REDUCER_ACK");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.Unknown).State == CodexPetVisualState.Review, "PET_DONE_UNKNOWN_STAYS_REVIEW_UNTIL_REDUCER_ACK");
+        Check(CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.NoUnread).State == CodexPetVisualState.Review, "PET_DONE_COMPAT_OVERLOAD_FOLLOWS_REDUCER");
         Check(CodexPetAdapter.Map([Session(K15NormalizedState.Running, "A"), Session(K15NormalizedState.Waiting, "B")], null, CodexUnreadState.HasUnread).Reason == "aggregate_waiting", "PET_MULTI_SESSION_WAITING_PRECEDENCE");
         var runningA = Session(K15NormalizedState.Running, "A", "TA");
         var runningB = Session(K15NormalizedState.Running, "B", "TB");
@@ -301,10 +301,10 @@ internal static class CodexReadAckTests
         Check(CodexPetAdapter.Map([runningA, waitingB], new Dictionary<string, CodexUnreadState>()).State == CodexPetVisualState.Waiting, "PET_WAITING_PLUS_RUNNING_PRECEDENCE");
         Check(CodexPetAdapter.Map([runningA, doneB], new Dictionary<string, CodexUnreadState> { ["TB"] = CodexUnreadState.HasUnread }).State == CodexPetVisualState.Review, "PET_REVIEW_PLUS_RUNNING_PRECEDENCE");
         Check(CodexPetAdapter.Map([waitingB, doneA], new Dictionary<string, CodexUnreadState> { ["TA"] = CodexUnreadState.HasUnread }).State == CodexPetVisualState.Waiting, "PET_WAITING_PLUS_REVIEW_PRECEDENCE");
-        Check(CodexPetAdapter.Map([runningA, doneB], new Dictionary<string, CodexUnreadState> { ["TB"] = CodexUnreadState.NoUnread }).State == CodexPetVisualState.Running, "PET_DONE_NOUNREAD_PLUS_RUNNING");
-        Check(CodexPetAdapter.Map([runningA, doneB], new Dictionary<string, CodexUnreadState> { ["TB"] = CodexUnreadState.Unknown }).State == CodexPetVisualState.Running, "PET_DONE_UNKNOWN_PLUS_RUNNING");
+        Check(CodexPetAdapter.Map([runningA, doneB], new Dictionary<string, CodexUnreadState> { ["TB"] = CodexUnreadState.NoUnread }).State == CodexPetVisualState.Review, "PET_DONE_NOUNREAD_PRECEDES_RUNNING_UNTIL_REDUCER_ACK");
+        Check(CodexPetAdapter.Map([runningA, doneB], new Dictionary<string, CodexUnreadState> { ["TB"] = CodexUnreadState.Unknown }).State == CodexPetVisualState.Review, "PET_DONE_UNKNOWN_PRECEDES_RUNNING_UNTIL_REDUCER_ACK");
         Check(CodexPetAdapter.Map([doneA, doneB], new Dictionary<string, CodexUnreadState> { ["TA"] = CodexUnreadState.NoUnread, ["TB"] = CodexUnreadState.HasUnread }).State == CodexPetVisualState.Review, "PET_MULTI_DONE_ANY_UNREAD_REVIEW");
-        Check(CodexPetAdapter.Map([doneA, doneB], new Dictionary<string, CodexUnreadState> { ["TA"] = CodexUnreadState.Unknown, ["TB"] = CodexUnreadState.Unavailable }).State == CodexPetVisualState.Idle, "PET_MULTI_DONE_UNKNOWN_FAILS_CLOSED");
+        Check(CodexPetAdapter.Map([doneA, doneB], new Dictionary<string, CodexUnreadState> { ["TA"] = CodexUnreadState.Unknown, ["TB"] = CodexUnreadState.Unavailable }).State == CodexPetVisualState.Review, "PET_MULTI_DONE_UNKNOWN_STAYS_REVIEW_UNTIL_REDUCER_ACK");
         var ended = new CodexSessionSnapshot("ended", K15NormalizedState.Normal, false, false, "C:\\ended", "", "", T);
         Check(CodexPetAdapter.Map([Session(K15NormalizedState.Normal), ended], new Dictionary<string, CodexUnreadState>()).State == CodexPetVisualState.Idle, "PET_MULTI_NORMAL_ENDED_IDLE");
         var snapshotReader = new Reader { Ids = ["TB"] };
@@ -314,9 +314,9 @@ internal static class CodexReadAckTests
         Check(CodexPetAdapter.ShouldPollUnread([Session(K15NormalizedState.DonePendingAttention)]), "PET_DONE_POLLING_STAYS_ON");
         Check(CodexPetAdapter.ShouldPollUnread([doneA, doneB]), "PET_MULTI_DONE_POLLING_STAYS_ON");
         Check(CodexPetAdapter.ShouldPollUnread([Session(K15NormalizedState.DonePendingAttention)]) &&
-            CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.Unknown).State == CodexPetVisualState.Idle &&
+            CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.Unknown).State == CodexPetVisualState.Review &&
             CodexPetAdapter.Map([Session(K15NormalizedState.DonePendingAttention)], "S", CodexUnreadState.HasUnread).State == CodexPetVisualState.Review,
-            "PET_UNKNOWN_RECOVERS_FROM_ONE_SNAPSHOT");
+            "PET_DONE_PRESENTATION_WAITS_FOR_REDUCER_ACK");
         Check(!CodexPetAdapter.ShouldPollUnread([Session(K15NormalizedState.Normal)]), "PET_POLLING_STOPS_AFTER_DONE");
         Check(Parse(Store("{\"local\":[\"T\"],\"remote\":[\"R\"]}")) == CodexUnreadState.HasUnread, "EXACT_HOST_THREAD");
         Check(Parse(Store("{\"local\":[],\"remote\":[\"T\"]}")) == CodexUnreadState.NoUnread, "HOST_ISOLATION");

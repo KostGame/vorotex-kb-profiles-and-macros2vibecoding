@@ -71,10 +71,11 @@ Require(rootSnapshot.ThreadId == "root-thread" && rootSnapshot.State == K15Norma
     "Startup replay must preserve the derived root Stop completion correlation.");
 Require(CodexPetAdapter.Map(rootReducer.SessionSnapshots, "root-thread", CodexUnreadState.HasUnread).State == CodexPetVisualState.Review,
     "A canonical unread root thread must map completion to REVIEW.");
-Require(CodexPetAdapter.Map(rootReducer.SessionSnapshots, "root-thread", CodexUnreadState.NoUnread).State == CodexPetVisualState.Idle,
-    "A root thread without unread state must remain IDLE.");
-var otherUnread = CodexPetAdapter.Map(rootReducer.SessionSnapshots, "root-thread", CodexUnreadState.NoUnread);
-Require(otherUnread.State != CodexPetVisualState.Review, "Unread state for another thread must not create REVIEW for root.");
+Require(CodexPetAdapter.Map(rootReducer.SessionSnapshots, "root-thread", CodexUnreadState.NoUnread).State == CodexPetVisualState.Review,
+    "Reducer DONE must remain REVIEW until codex_read_ack actually clears the reducer state.");
+var reducerAuthority = CodexPetAdapter.Map(rootReducer.SessionSnapshots, "root-thread", CodexUnreadState.NoUnread);
+Require(reducerAuthority.State == CodexPetVisualState.Review,
+    "Presentation must not pre-empt authoritative reducer DONE based on unread evidence alone.");
 var invalidRootStop = JournalStateNormalizer.ParseInput(HookJson(t, "Stop", null, "root-turn"));
 Require(invalidRootStop?.ThreadId is null or "", "Missing root session_id must fail closed.");
 var missingTurnRootStop = JournalStateNormalizer.ParseInput(HookJson(t, "Stop", "root-thread", null));
@@ -1231,10 +1232,13 @@ Require(taskPresentation.Tasks.Single(task => task.SessionId == "run").DisplayTi
 Require(CodexActivityNormalizer.FallbackTitle("run") == "Codex task run" &&
         CodexActivityNormalizer.FallbackTitle("") == "Codex task unknown" &&
         CodexPetAdapter.FormatTaskCount(100) == "99+", "Task labels and count formatting must be bounded.");
-Require(CodexPetAdapter.MapPresentation(
+var unknownDonePresentation = CodexPetAdapter.MapPresentation(
     [PetSession("unknown", K15NormalizedState.DonePendingAttention, @"D:\Unknown", testTime, "thread-unknown")],
-    new Dictionary<string, CodexUnreadState> { ["thread-unknown"] = CodexUnreadState.Unknown }).RelevantTaskCount == 0,
-    "Unknown unread DONE must be excluded.");
+    new Dictionary<string, CodexUnreadState> { ["thread-unknown"] = CodexUnreadState.Unknown });
+Require(unknownDonePresentation.Global.State == CodexPetVisualState.Review &&
+        unknownDonePresentation.RelevantTaskCount == 1 &&
+        unknownDonePresentation.Tasks[0].VisualState == CodexPetVisualState.Review,
+    "Authoritative reducer DONE must remain visible while unread evidence is unknown.");
 Require(CodexPetAdapter.MapPresentation(
     [PetSession("blank", K15NormalizedState.DonePendingAttention, @"D:\Blank", testTime)],
     new Dictionary<string, CodexUnreadState>()).RelevantTaskCount == 0,

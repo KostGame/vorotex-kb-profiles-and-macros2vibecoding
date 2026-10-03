@@ -187,7 +187,7 @@ internal static class CodexPetAdapter
         {
             CodexActivityState.Waiting => CodexPetVisualState.Waiting,
             CodexActivityState.Running => CodexPetVisualState.Running,
-            CodexActivityState.DonePendingAttention when activity.Unread == CodexUnreadState.HasUnread =>
+            CodexActivityState.DonePendingAttention when !string.IsNullOrWhiteSpace(activity.ThreadId) =>
                 CodexPetVisualState.Review,
             _ => (CodexPetVisualState?)null
         };
@@ -208,8 +208,8 @@ internal static class CodexPetAdapter
         if (rows.Any(row => row.State == CodexActivityState.Waiting))
             return Aggregate(rows, CodexPetVisualState.Waiting, "aggregate_waiting");
         if (rows.Any(row => row.State == CodexActivityState.DonePendingAttention &&
-                            row.Unread == CodexUnreadState.HasUnread))
-            return Aggregate(rows, CodexPetVisualState.Review, "aggregate_exact_unread_review");
+                            !string.IsNullOrWhiteSpace(row.ThreadId)))
+            return Aggregate(rows, CodexPetVisualState.Review, "aggregate_reducer_done_review");
         if (rows.Any(row => row.State == CodexActivityState.Running))
             return Aggregate(rows, CodexPetVisualState.Running, "aggregate_running");
         return Aggregate(rows, CodexPetVisualState.Idle, "aggregate_idle");
@@ -243,13 +243,9 @@ internal static class CodexPetAdapter
         if (relevant.Any(session => session.IsAlive && session.State == K15NormalizedState.Waiting))
             return Aggregate(relevant, CodexPetVisualState.Waiting, "aggregate_waiting");
 
-        var hasUnread = relevant.Any(session =>
-            session.State == K15NormalizedState.DonePendingAttention &&
-            !string.IsNullOrWhiteSpace(session.ThreadId) &&
-            TryGetUnread(unreadByThread, session.SourceInstanceId, session.ThreadId!, out var unread) &&
-            unread == CodexUnreadState.HasUnread);
-        if (hasUnread)
-            return Aggregate(relevant, CodexPetVisualState.Review, "aggregate_exact_unread_review");
+        if (relevant.Any(session => session.State == K15NormalizedState.DonePendingAttention &&
+                                    !string.IsNullOrWhiteSpace(session.ThreadId)))
+            return Aggregate(relevant, CodexPetVisualState.Review, "aggregate_reducer_done_review");
 
         if (relevant.Any(session => session.IsAlive && session.State == K15NormalizedState.Running))
             return Aggregate(relevant, CodexPetVisualState.Running, "aggregate_running");
