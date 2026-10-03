@@ -11,7 +11,24 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
+    <K15BuildVersion Condition="'$(K15BuildVersion)' == ''">UNKNOWN</K15BuildVersion>
+    <K15BuildCommit Condition="'$(K15BuildCommit)' == ''">UNKNOWN</K15BuildCommit>
+    <K15BuildChannel Condition="'$(K15BuildChannel)' == ''">unknown</K15BuildChannel>
+    <K15CanaryIssue Condition="'$(K15CanaryIssue)' == ''"></K15CanaryIssue>
+    <K15CanaryPullRequest Condition="'$(K15CanaryPullRequest)' == ''"></K15CanaryPullRequest>
+    <K15BuildUtc Condition="'$(K15BuildUtc)' == ''">UNKNOWN</K15BuildUtc>
+    <K15BuildSourceRef Condition="'$(K15BuildSourceRef)' == ''"></K15BuildSourceRef>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="K15.Build.Version" Value="$(K15BuildVersion)" />
+    <AssemblyMetadata Include="K15.Build.Commit" Value="$(K15BuildCommit)" />
+    <AssemblyMetadata Include="K15.Build.Channel" Value="$(K15BuildChannel)" />
+    <AssemblyMetadata Include="K15.Build.CanaryIssue" Value="$(K15CanaryIssue)" />
+    <AssemblyMetadata Include="K15.Build.CanaryPullRequest" Value="$(K15CanaryPullRequest)" />
+    <AssemblyMetadata Include="K15.Build.BuildUtc" Value="$(K15BuildUtc)" />
+    <AssemblyMetadata Include="K15.Build.SourceRef" Value="$(K15BuildSourceRef)" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Sibling apps and developer tools under status-lab are isolated projects, not Status Tray sources. -->
