@@ -118,6 +118,16 @@ internal static class CodexReadAckTests
               liveDesktopReplay.LastSessionTransitions.Last().IsRehydrated,
             "DESKTOP_SESSION_ID_TYPED_THREAD_REHYDRATES_DETERMINISTICALLY");
 
+        var ambiguousDesktopIdentity = new StateReducer(0, T);
+        ambiguousDesktopIdentity.Apply(Hook("UserPromptSubmit", 1, session: "LIVE", thread: "", turn: "LIVE-TURN"));
+        ambiguousDesktopIdentity.Apply(Hook("UserPromptSubmit", 1, session: "OTHER", thread: "LIVE", turn: "LIVE-TURN"));
+        ambiguousDesktopIdentity.Apply(ApprovalRequest(2, thread: "LIVE", turn: "LIVE-TURN",
+            item: "LIVE-I", rpc: "204", family: "item/permissions"));
+        Check(ambiguousDesktopIdentity.State == K15NormalizedState.Running &&
+              ambiguousDesktopIdentity.SessionSnapshots.All(session => session.State == K15NormalizedState.Running) &&
+              ambiguousDesktopIdentity.SessionSnapshots.Single(session => session.SessionId == "LIVE").ThreadId.Length == 0,
+            "DESKTOP_SESSION_ID_FALLBACK_AMBIGUOUS_FAILS_CLOSED");
+
         permissionsAuthority.Apply(Hook("PostToolUse", 3));
         Check(permissionsAuthority.State == K15NormalizedState.Running,
             "PERMISSIONS_POST_TOOL_USE_RESUMES");
