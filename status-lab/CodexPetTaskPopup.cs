@@ -14,6 +14,8 @@ internal sealed class CodexPetTaskPopup : Form
     private ProfileColorHint _profileHint;
     private PetTaskSurfaceState _surfaceState = CodexPetTaskSurfacePolicy.DefaultState;
     private readonly Action<string> _launchThreadLink;
+    private readonly System.Windows.Forms.Timer _waitingPulseTimer;
+    private readonly Stopwatch _waitingPulseClock = Stopwatch.StartNew();
 
     internal CodexPetTaskPopup(CodexPetWindow pet, StatusLabConfig config,
         Action<string>? launchThreadLink = null)
@@ -34,12 +36,23 @@ internal sealed class CodexPetTaskPopup : Form
         MouseMove += HandleMouseMove;
         MouseLeave += (_, _) => Cursor = Cursors.Default;
         MouseClick += HandleMouseClick;
+        _waitingPulseTimer = new System.Windows.Forms.Timer { Interval = 50 };
+        _waitingPulseTimer.Tick += (_, _) =>
+        {
+            if (!Visible || !_tasks.Any(row => row.VisualState == CodexPetVisualState.Waiting))
+            {
+                _waitingPulseTimer.Stop();
+                return;
+            }
+            Invalidate();
+        };
     }
 
     internal void SetPresentation(CodexPetPresentation presentation)
     {
         _tasks = presentation.Tasks;
         ApplySurfaceState(_surfaceState, _tasks.Count);
+        UpdateWaitingPulseTimer();
         Invalidate();
     }
 
@@ -66,6 +79,7 @@ internal sealed class CodexPetTaskPopup : Form
 
         PositionNearPet();
         if (!Visible) Show(_pet);
+        UpdateWaitingPulseTimer();
         Invalidate();
     }
 
@@ -76,9 +90,25 @@ internal sealed class CodexPetTaskPopup : Form
 
     internal void ClosePopup()
     {
+        _waitingPulseTimer.Stop();
         ReplaceRegion(null);
         Size = Size.Empty;
         Hide();
+    }
+
+    private void UpdateWaitingPulseTimer()
+    {
+        if (Visible && _tasks.Any(row => row.VisualState == CodexPetVisualState.Waiting))
+            _waitingPulseTimer.Start();
+        else
+            _waitingPulseTimer.Stop();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+            _waitingPulseTimer.Dispose();
+        base.Dispose(disposing);
     }
 
     protected override void OnPaintBackground(PaintEventArgs e)
@@ -117,10 +147,11 @@ internal sealed class CodexPetTaskPopup : Form
         var layout = CodexPetTaskSurfacePolicy.Layout(_surfaceState, _tasks.Count,
             new Size(CardWidth, CardHeight));
         var palette = PetPaletteResolver.Resolve(_config, _profileHint, DateTimeOffset.UtcNow);
+        var pulseElapsedSeconds = _waitingPulseClock.Elapsed.TotalSeconds;
         foreach (var card in layout.Cards)
         {
             var row = card.TaskIndex >= 0 && card.TaskIndex < _tasks.Count ? _tasks[card.TaskIndex] : null;
-            DrawCard(e.Graphics, card, row, palette);
+            DrawCard(e.Graphics, card, row, palette, pulseElapsedSeconds);
         }
 
         if (layout.State == PetTaskSurfaceState.Expanded && layout.OverflowCount > 0)
@@ -169,7 +200,7 @@ internal sealed class CodexPetTaskPopup : Form
         Process.Start(new ProcessStartInfo { FileName = deepLink, UseShellExecute = true });
 
     private static void DrawCard(Graphics graphics, TaskCardLayout card, CodexPetTaskRow? row,
-        PetPalette palette)
+        PetPalette palette, double pulseElapsedSeconds)
     {
         var fillColor = card.IsTopCard
             ? Color.FromArgb(248, 46, 53, 65)
@@ -177,8 +208,10 @@ internal sealed class CodexPetTaskPopup : Form
         var accent = row is null
             ? Color.FromArgb(95, 116, 132)
             : CodexPetPopupPolicy.Accent(palette, row.VisualState);
+        var outlineStyle = CodexPetPopupPolicy.OutlineFor(
+            row?.VisualState ?? CodexPetVisualState.Idle, card.IsTopCard, pulseElapsedSeconds);
         using var fill = new SolidBrush(fillColor);
-        using var outline = new Pen(Color.FromArgb(card.IsTopCard ? 220 : 130, accent), 1);
+        using var outline = new Pen(Color.FromArgb(outlineStyle.Alpha, accent), outlineStyle.Width);
         FillRounded(graphics, card.Bounds, 10, fill);
         DrawRounded(graphics, card.Bounds, 10, outline);
         if (!card.ShowsText || row is null) return;

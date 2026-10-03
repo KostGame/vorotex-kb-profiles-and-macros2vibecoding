@@ -1362,6 +1362,22 @@ Require(CodexPetPopupPolicy.Accent(paletteA, CodexPetVisualState.Waiting).R >= 0
                 paletteTime.AddMilliseconds(-1801)), paletteTime).IsNeutral,
     "Popup accents must reuse profile families and the 1800ms TTL.");
 
+var waitingOutlineMin = CodexPetPopupPolicy.OutlineFor(CodexPetVisualState.Waiting, isTopCard: true, elapsedSeconds: 0d);
+var waitingOutlineMax = CodexPetPopupPolicy.OutlineFor(CodexPetVisualState.Waiting, isTopCard: true,
+    elapsedSeconds: CodexPetPopupPolicy.WaitingOutlinePulsePeriodSeconds / 2d);
+var waitingOutlineLoop = CodexPetPopupPolicy.OutlineFor(CodexPetVisualState.Waiting, isTopCard: true,
+    elapsedSeconds: CodexPetPopupPolicy.WaitingOutlinePulsePeriodSeconds);
+var stackedWaitingMax = CodexPetPopupPolicy.OutlineFor(CodexPetVisualState.Waiting, isTopCard: false,
+    elapsedSeconds: CodexPetPopupPolicy.WaitingOutlinePulsePeriodSeconds / 2d);
+var runningOutlineA = CodexPetPopupPolicy.OutlineFor(CodexPetVisualState.Running, isTopCard: true, elapsedSeconds: 0d);
+var runningOutlineB = CodexPetPopupPolicy.OutlineFor(CodexPetVisualState.Running, isTopCard: true, elapsedSeconds: 99d);
+Require(waitingOutlineMin.Alpha == 180 && Math.Abs(waitingOutlineMin.Width - 1.2f) < 0.001f &&
+        waitingOutlineMax.Alpha == 255 && Math.Abs(waitingOutlineMax.Width - 2.6f) < 0.001f &&
+        waitingOutlineLoop == waitingOutlineMin &&
+        stackedWaitingMax.Alpha == 235 &&
+        runningOutlineA == runningOutlineB && runningOutlineA.Alpha == 220 && Math.Abs(runningOutlineA.Width - 1f) < 0.001f,
+    "Only WAITING task outlines may pulse, with bounded alpha/width and deterministic period.");
+
 CodexReadAckTests.Run();
 CodexLocalThreadTitleTests.Run();
 Console.WriteLine("RC1 approval + session-aware reducer + 30s DONE + RGB policy + HID tests: PASS");
