@@ -39,9 +39,12 @@ the exact WAITING session to RUNNING when its typed RPC ID and item match the
 request. Decline and cancel remain decisions without resume authority. The
 permissions family has different response semantics:
 `permissions_approval_observed` remains diagnostic-only and never claims
-RUNNING. After a permissions card resolves, exact `PreToolUse` or
-`PostToolUse` remains resume authority, while existing Stop/completion
-evidence remains terminal authority.
+RUNNING. While an exact `item/permissions` approval is pending,
+`PreToolUse(request_permissions)` is part of starting the owner-blocking
+permission workflow and does not clear WAITING. After the card resolves,
+`PostToolUse(request_permissions)` remains resume authority; other exact
+execution lifecycle evidence keeps its existing semantics, while
+Stop/completion remains terminal authority.
 
 For Issue #93, `codex_stdio_bridge/turn_completed` with schema
 `k15-codex-completion/v1` and status `completed` is the candidate authoritative

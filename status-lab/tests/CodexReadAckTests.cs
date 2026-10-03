@@ -85,7 +85,16 @@ internal static class CodexReadAckTests
         Check(permissionsAuthority.State == K15NormalizedState.Waiting &&
               permissionsAuthority.LastSessionTransitions.Single().PermissionEvidence?.RequestFamily == "item/permissions",
             "TYPED_PERMISSIONS_REQUEST_WAITING");
-        permissionsAuthority.Apply(Hook("PostToolUse", 3));
+        permissionsAuthority.Apply(new(T.AddMilliseconds(2500), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            SourceInstanceId: TestSourceInstanceId));
+        Check(permissionsAuthority.State == K15NormalizedState.Waiting &&
+              permissionsAuthority.LastSessionTransitions.Count == 0 &&
+              permissionsAuthority.SessionSnapshots.Single().LastActivityUtc == T.AddMilliseconds(2500),
+            "PERMISSIONS_PRE_TOOL_USE_RETAINS_WAITING");
+        permissionsAuthority.Apply(new(T.AddSeconds(3), "codex_hook", "PostToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            SourceInstanceId: TestSourceInstanceId));
         Check(permissionsAuthority.State == K15NormalizedState.Running,
             "PERMISSIONS_POST_TOOL_USE_RESUMES");
         var automaticPermissions = new StateReducer(0, T);

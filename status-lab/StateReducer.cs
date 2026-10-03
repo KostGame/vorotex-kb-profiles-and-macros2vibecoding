@@ -419,8 +419,16 @@ internal sealed class StateReducer
         // authoritative activity has already been observed.
         if (input.TimestampUtc < session.LastActivityUtc)
             return null;
-        if (input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd" ||
-            (input.TurnId.Length != 0 && input.TurnId != session.TurnId))
+        var pendingPermissionsPreTool =
+            input.EventName == "PreToolUse" &&
+            input.ToolName == "request_permissions" &&
+            session.State == K15NormalizedState.Waiting &&
+            session.ApprovalRequestFamily == "item/permissions" &&
+            input.TurnId.Length != 0 &&
+            input.TurnId == session.TurnId;
+        if (!pendingPermissionsPreTool &&
+            (input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd" ||
+             (input.TurnId.Length != 0 && input.TurnId != session.TurnId)))
             ClearApprovalCorrelation(session);
         var acknowledged = session.ReadAcknowledgedCompletion;
         if (input.EventName == "Stop" && acknowledged is not null && session.Completion == acknowledged &&
@@ -445,6 +453,12 @@ internal sealed class StateReducer
             session.TurnId = input.TurnId;
         session.Internal = session.Internal || IsInternalCwd(session.Cwd);
         session.LastActivityUtc = input.TimestampUtc;
+
+        // request_permissions PreToolUse is emitted while the native owner
+        // approval card is still blocking the turn. It is evidence that the
+        // permission workflow started, not that execution resumed.
+        if (pendingPermissionsPreTool)
+            return null;
 
         if (input.EventName == "SessionEnd")
         {
