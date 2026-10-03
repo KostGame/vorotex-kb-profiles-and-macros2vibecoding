@@ -426,7 +426,8 @@ internal sealed class StateReducer
             input.ToolNameProvided &&
             input.ToolName == "request_permissions" &&
             input.TurnId.Length != 0 &&
-            input.TurnId == session.TurnId;
+            input.TurnId == session.TurnId &&
+            (input.ThreadId.Length == 0 || input.ThreadId == session.ThreadId);
         var clearsApprovalCorrelation = input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd";
         if ((!permissionsPreToolStillAwaitingOwner && clearsApprovalCorrelation) ||
             (input.TurnId.Length != 0 && input.TurnId != session.TurnId))

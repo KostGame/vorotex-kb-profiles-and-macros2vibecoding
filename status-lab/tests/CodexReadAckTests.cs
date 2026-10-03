@@ -159,6 +159,26 @@ internal static class CodexReadAckTests
         Check(missingToolNameProvenance.State == K15NormalizedState.Running,
             "PERMISSIONS_PRE_TOOL_CARVEOUT_REQUIRES_TOOLNAME_PROVENANCE");
 
+        var conflictingPermissionsThread = new StateReducer(0, T);
+        conflictingPermissionsThread.Apply(Hook("UserPromptSubmit", 1));
+        conflictingPermissionsThread.Apply(ApprovalRequest(2, family: "item/permissions"));
+        conflictingPermissionsThread.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "OTHER", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
+        Check(conflictingPermissionsThread.State == K15NormalizedState.Running &&
+              conflictingPermissionsThread.LastSessionTransitions.Single().Reason == "codex_pre_tool_use",
+            "PERMISSIONS_PRE_TOOL_CARVEOUT_REQUIRES_NONCONFLICTING_THREAD");
+
+        var emptyThreadPermissionsPreTool = new StateReducer(0, T);
+        emptyThreadPermissionsPreTool.Apply(Hook("UserPromptSubmit", 1));
+        emptyThreadPermissionsPreTool.Apply(ApprovalRequest(2, family: "item/permissions"));
+        emptyThreadPermissionsPreTool.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
+        Check(emptyThreadPermissionsPreTool.State == K15NormalizedState.Waiting &&
+              emptyThreadPermissionsPreTool.SessionSnapshots.Single().ThreadId == "T",
+            "PERMISSIONS_PRE_TOOL_EMPTY_THREAD_PRESERVES_EXACT_WAIT");
+
         var permissionsPreToolReplay = new StateReducer(0, T);
         permissionsPreToolReplay.Rehydrate([
             Hook("UserPromptSubmit", 1),
