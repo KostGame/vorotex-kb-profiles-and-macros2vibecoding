@@ -85,9 +85,112 @@ internal static class CodexReadAckTests
         Check(permissionsAuthority.State == K15NormalizedState.Waiting &&
               permissionsAuthority.LastSessionTransitions.Single().PermissionEvidence?.RequestFamily == "item/permissions",
             "TYPED_PERMISSIONS_REQUEST_WAITING");
-        permissionsAuthority.Apply(Hook("PostToolUse", 3));
+
+        var liveDesktopIdentity = new StateReducer(0, T);
+        liveDesktopIdentity.Apply(Hook("UserPromptSubmit", 1, session: "LIVE", thread: "", turn: "LIVE-TURN"));
+        liveDesktopIdentity.Apply(ApprovalRequest(2, thread: "LIVE", turn: "LIVE-TURN",
+            item: "LIVE-I", rpc: "201", family: "item/permissions"));
+        Check(liveDesktopIdentity.State == K15NormalizedState.Waiting &&
+              liveDesktopIdentity.SessionSnapshots.Single().ThreadId == "LIVE" &&
+              liveDesktopIdentity.LastSessionTransitions.Single().ThreadId == "LIVE",
+            "DESKTOP_SESSION_ID_PROMOTED_TO_TYPED_THREAD_FOR_WAITING");
+        liveDesktopIdentity.Apply(new(T.AddSeconds(3), "codex_stdio_bridge", "approval_resolved",
+            SchemaVersion: "k15-codex-approval/v1", Decision: "accept", RpcIdType: "number", RpcId: "201",
+            ThreadId: "LIVE", TurnId: "LIVE-TURN", ItemId: "LIVE-I", SourceInstanceId: TestSourceInstanceId));
+        Check(liveDesktopIdentity.State == K15NormalizedState.Running,
+            "DESKTOP_PROMOTED_THREAD_ACCEPT_RESUMES_EXACTLY");
+
+        var wrongDesktopThread = new StateReducer(0, T);
+        wrongDesktopThread.Apply(Hook("UserPromptSubmit", 1, session: "LIVE", thread: "", turn: "LIVE-TURN"));
+        wrongDesktopThread.Apply(ApprovalRequest(2, thread: "OTHER", turn: "LIVE-TURN",
+            item: "LIVE-I", rpc: "202", family: "item/permissions"));
+        Check(wrongDesktopThread.State == K15NormalizedState.Running &&
+              wrongDesktopThread.SessionSnapshots.Single().ThreadId.Length == 0,
+            "DESKTOP_SESSION_ID_FALLBACK_REQUIRES_EXACT_TYPED_THREAD");
+
+        var liveDesktopReplay = new StateReducer(0, T);
+        liveDesktopReplay.Rehydrate([
+            Hook("UserPromptSubmit", 1, session: "LIVE", thread: "", turn: "LIVE-TURN"),
+            ApprovalRequest(2, thread: "LIVE", turn: "LIVE-TURN", item: "LIVE-I", rpc: "203", family: "item/permissions")
+        ]);
+        Check(liveDesktopReplay.State == K15NormalizedState.Waiting &&
+              liveDesktopReplay.SessionSnapshots.Single().ThreadId == "LIVE" &&
+              liveDesktopReplay.LastSessionTransitions.Last().IsRehydrated,
+            "DESKTOP_SESSION_ID_TYPED_THREAD_REHYDRATES_DETERMINISTICALLY");
+
+        var ambiguousDesktopIdentity = new StateReducer(0, T);
+        ambiguousDesktopIdentity.Apply(Hook("UserPromptSubmit", 1, session: "LIVE", thread: "", turn: "LIVE-TURN"));
+        ambiguousDesktopIdentity.Apply(Hook("UserPromptSubmit", 1, session: "OTHER", thread: "LIVE", turn: "LIVE-TURN"));
+        ambiguousDesktopIdentity.Apply(ApprovalRequest(2, thread: "LIVE", turn: "LIVE-TURN",
+            item: "LIVE-I", rpc: "204", family: "item/permissions"));
+        Check(ambiguousDesktopIdentity.State == K15NormalizedState.Running &&
+              ambiguousDesktopIdentity.SessionSnapshots.All(session => session.State == K15NormalizedState.Running) &&
+              ambiguousDesktopIdentity.SessionSnapshots.Single(session => session.SessionId == "LIVE").ThreadId.Length == 0,
+            "DESKTOP_SESSION_ID_FALLBACK_AMBIGUOUS_FAILS_CLOSED");
+
+        permissionsAuthority.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
+        Check(permissionsAuthority.State == K15NormalizedState.Waiting &&
+              permissionsAuthority.LastSessionTransitions.Count == 0 &&
+              permissionsAuthority.SessionSnapshots.Single().LastActivityUtc == T.AddSeconds(3),
+            "PERMISSIONS_PRE_TOOL_REQUEST_STAYS_WAITING");
+        permissionsAuthority.Apply(new(T.AddSeconds(4), "codex_hook", "PostToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
         Check(permissionsAuthority.State == K15NormalizedState.Running,
             "PERMISSIONS_POST_TOOL_USE_RESUMES");
+
+        var commandWaitDoesNotUsePermissionsCarveout = new StateReducer(0, T);
+        commandWaitDoesNotUsePermissionsCarveout.Apply(Hook("UserPromptSubmit", 1));
+        commandWaitDoesNotUsePermissionsCarveout.Apply(ApprovalRequest(2, family: "item/commandExecution"));
+        commandWaitDoesNotUsePermissionsCarveout.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
+        Check(commandWaitDoesNotUsePermissionsCarveout.State == K15NormalizedState.Running,
+            "REQUEST_PERMISSIONS_PRE_TOOL_ONLY_PRESERVES_PERMISSIONS_WAIT");
+
+        var missingToolNameProvenance = new StateReducer(0, T);
+        missingToolNameProvenance.Apply(Hook("UserPromptSubmit", 1));
+        missingToolNameProvenance.Apply(ApprovalRequest(2, family: "item/permissions"));
+        missingToolNameProvenance.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: false, SourceInstanceId: TestSourceInstanceId));
+        Check(missingToolNameProvenance.State == K15NormalizedState.Running,
+            "PERMISSIONS_PRE_TOOL_CARVEOUT_REQUIRES_TOOLNAME_PROVENANCE");
+
+        var conflictingPermissionsThread = new StateReducer(0, T);
+        conflictingPermissionsThread.Apply(Hook("UserPromptSubmit", 1));
+        conflictingPermissionsThread.Apply(ApprovalRequest(2, family: "item/permissions"));
+        conflictingPermissionsThread.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "OTHER", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
+        Check(conflictingPermissionsThread.State == K15NormalizedState.Running &&
+              conflictingPermissionsThread.LastSessionTransitions.Single().Reason == "codex_pre_tool_use",
+            "PERMISSIONS_PRE_TOOL_CARVEOUT_REQUIRES_NONCONFLICTING_THREAD");
+
+        var emptyThreadPermissionsPreTool = new StateReducer(0, T);
+        emptyThreadPermissionsPreTool.Apply(Hook("UserPromptSubmit", 1));
+        emptyThreadPermissionsPreTool.Apply(ApprovalRequest(2, family: "item/permissions"));
+        emptyThreadPermissionsPreTool.Apply(new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+            SessionId: "S", ThreadId: "", TurnId: "U", ToolName: "request_permissions",
+            ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId));
+        Check(emptyThreadPermissionsPreTool.State == K15NormalizedState.Waiting &&
+              emptyThreadPermissionsPreTool.SessionSnapshots.Single().ThreadId == "T",
+            "PERMISSIONS_PRE_TOOL_EMPTY_THREAD_PRESERVES_EXACT_WAIT");
+
+        var permissionsPreToolReplay = new StateReducer(0, T);
+        permissionsPreToolReplay.Rehydrate([
+            Hook("UserPromptSubmit", 1),
+            ApprovalRequest(2, family: "item/permissions"),
+            new(T.AddSeconds(3), "codex_hook", "PreToolUse",
+                SessionId: "S", ThreadId: "T", TurnId: "U", ToolName: "request_permissions",
+                ToolNameProvided: true, SourceInstanceId: TestSourceInstanceId)
+        ]);
+        Check(permissionsPreToolReplay.State == K15NormalizedState.Waiting &&
+              permissionsPreToolReplay.LastSessionTransitions.Last().Current == K15NormalizedState.Waiting,
+            "PERMISSIONS_PRE_TOOL_REHYDRATES_WAITING");
+
         var automaticPermissions = new StateReducer(0, T);
         automaticPermissions.Apply(Hook("UserPromptSubmit", 1));
         automaticPermissions.Apply(ApprovalRequest(2, family: "item/permissions", reviewer: "auto_review"));

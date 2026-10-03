@@ -173,9 +173,12 @@ reducer state. The pinned protocol defaults an omitted response `scope` to
 or malformed permissions result terminally consumes only the in-memory
 correlation and releases its bounded owner-queue credit without persisting the
 error/result payload or inventing a semantic state event. The pre-response
-typed `approval_requested` may enter WAITING; after the card resolves, exact
-existing execution evidence such as `PreToolUse`/`PostToolUse` resumes the
-session, while Stop/completion remains terminal authority.
+typed `approval_requested` may enter WAITING. Live Desktop evidence shows
+that exact same-turn `PreToolUse(toolName=request_permissions)` can arrive
+while the native owner card is still open, so that hook preserves WAITING.
+`PostToolUse(request_permissions)`, or a later exact same-turn `PreToolUse`
+for another tool, resumes the session; Stop/completion remains terminal
+authority.
 
 Status Lab accepts only the exact sanitized schema from source
 `codex_stdio_bridge`. Only `accept` and `acceptForSession` can move a waiting

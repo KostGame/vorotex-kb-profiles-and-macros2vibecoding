@@ -419,7 +419,17 @@ internal sealed class StateReducer
         // authoritative activity has already been observed.
         if (input.TimestampUtc < session.LastActivityUtc)
             return null;
-        if (input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd" ||
+        var permissionsPreToolStillAwaitingOwner =
+            input.EventName == "PreToolUse" &&
+            session.State == K15NormalizedState.Waiting &&
+            session.ApprovalRequestFamily == "item/permissions" &&
+            input.ToolNameProvided &&
+            input.ToolName == "request_permissions" &&
+            input.TurnId.Length != 0 &&
+            input.TurnId == session.TurnId &&
+            (input.ThreadId.Length == 0 || input.ThreadId == session.ThreadId);
+        var clearsApprovalCorrelation = input.EventName is "PreToolUse" or "PostToolUse" or "UserPromptSubmit" or "Stop" or "SessionEnd";
+        if ((!permissionsPreToolStillAwaitingOwner && clearsApprovalCorrelation) ||
             (input.TurnId.Length != 0 && input.TurnId != session.TurnId))
             ClearApprovalCorrelation(session);
         var acknowledged = session.ReadAcknowledgedCompletion;
@@ -445,6 +455,15 @@ internal sealed class StateReducer
             session.TurnId = input.TurnId;
         session.Internal = session.Internal || IsInternalCwd(session.Cwd);
         session.LastActivityUtc = input.TimestampUtc;
+
+        // request_permissions is itself the operation waiting for the owner.
+        // Its PreToolUse hook arrives while the native approval card is still
+        // open, so it is activity evidence but not execution-resumed evidence.
+        if (permissionsPreToolStillAwaitingOwner)
+        {
+            _focusedSessionKey = session.IdentityKey;
+            return null;
+        }
 
         if (input.EventName == "SessionEnd")
         {
@@ -558,10 +577,18 @@ internal sealed class StateReducer
         var candidates = _sessions.Values.Where(session => !session.Internal && !session.Ended &&
             session.SourceInstanceId == input.SourceInstanceId &&
             session.State == K15NormalizedState.Running && input.TimestampUtc >= session.LastActivityUtc &&
-            session.ThreadId == input.ThreadId && session.TurnId == input.TurnId).ToArray();
+            session.TurnId == input.TurnId &&
+            (session.ThreadId == input.ThreadId ||
+             (session.ThreadId.Length == 0 && session.Id == input.ThreadId))).ToArray();
         if (candidates.Length != 1) return null;
 
         var session = candidates[0];
+        // Desktop hooks can expose the canonical Codex thread UUID only as
+        // sessionId. Once the typed bridge proves that the same UUID is the
+        // thread for this exact source+turn, retain it so all later approval
+        // correlation uses the normal exact thread path.
+        if (session.ThreadId.Length == 0)
+            session.ThreadId = input.ThreadId;
         session.ApprovalRpcIdType = input.RpcIdType;
         session.ApprovalRpcId = input.RpcId;
         session.ApprovalItemId = input.ItemId;
