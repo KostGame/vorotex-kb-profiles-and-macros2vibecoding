@@ -90,6 +90,30 @@ internal static class CodexReadAckTests
         Check(CodexDesktopFocusedCompletionReader.ParseLog(backgroundLog, completion, 1234, T.AddSeconds(-1)) is null,
             "BACKGROUND_COMPLETION_NEVER_FOCUSED_PROOF");
 
+        var liveTurnStartLog =
+            $"{T.AddSeconds(1):O} info [electron-message-handler] Reasoning summary turn-start config resolved " +
+            "conversationId=T rendererWebContentsId=1 rendererWindowAppearance=primary rendererWindowFocused=true " +
+            "rendererWindowId=1 rendererWindowVisible=true\n" +
+            $"{focusedLineUtc:O} info [electron-message-handler] [desktop-notifications] received turn-complete " +
+            "conversationId=T rendererWebContentsId=1 rendererWindowAppearance=primary rendererWindowFocused=true " +
+            "rendererWindowId=1 rendererWindowVisible=true turnId=U\n";
+        Check(CodexDesktopFocusedCompletionReader.ParseLog(liveTurnStartLog, completion, 1234,
+                  T.AddSeconds(-1)) is not null,
+            "FOCUSED_TURN_START_SEEDS_ACTIVE_CONVERSATION");
+
+        var switchedAwayAfterTurnStart =
+            $"{T.AddSeconds(1):O} info [electron-message-handler] Reasoning summary turn-start config resolved " +
+            "conversationId=T rendererWebContentsId=1 rendererWindowAppearance=primary rendererWindowFocused=true " +
+            "rendererWindowId=1 rendererWindowVisible=true\n" +
+            $"{T.AddMilliseconds(1800):O} info [electron-message-handler] IAB_LIFECYCLE received browser sidebar owner sync " +
+            "browserTabId=null conversationId=client originWebContentsId=1 ownerRoutePath=/local/OTHER windowId=1\n" +
+            $"{focusedLineUtc:O} info [electron-message-handler] [desktop-notifications] received turn-complete " +
+            "conversationId=T rendererWebContentsId=1 rendererWindowAppearance=primary rendererWindowFocused=true " +
+            "rendererWindowId=1 rendererWindowVisible=true turnId=U\n";
+        Check(CodexDesktopFocusedCompletionReader.ParseLog(switchedAwayAfterTurnStart, completion, 1234,
+                  T.AddSeconds(-1)) is null,
+            "LATER_ROUTE_CHANGE_INVALIDATES_TURN_START_ACTIVE_CONVERSATION");
+
         var wrongActiveLog =
             $"{T:O} info websocket_reconnect_recovery_done currentConversationId=OTHER rendererWindowAppearance=primary\n" +
             focusedLog.Split('\n')[1] + "\n";

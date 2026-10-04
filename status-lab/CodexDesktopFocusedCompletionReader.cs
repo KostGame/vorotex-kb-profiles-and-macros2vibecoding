@@ -142,6 +142,17 @@ internal sealed class CodexDesktopFocusedCompletionReader : ICodexFocusedComplet
                 activeConversation = ParseLocalRoute(route);
             }
 
+            if (line.Contains("Reasoning summary turn-start config resolved", StringComparison.Ordinal) &&
+                TryField(line, "conversationId=", out var turnStartConversationId) &&
+                CodexUnreadStateReader.Bounded(turnStartConversationId) &&
+                line.Contains("rendererWindowAppearance=primary", StringComparison.Ordinal) &&
+                line.Contains("rendererWindowFocused=true", StringComparison.Ordinal) &&
+                line.Contains("rendererWindowVisible=true", StringComparison.Ordinal))
+            {
+                activeKnown = true;
+                activeConversation = turnStartConversationId;
+            }
+
             if (!line.Contains("[desktop-notifications] received turn-complete", StringComparison.Ordinal) ||
                 !TryField(line, "conversationId=", out var conversationId) ||
                 !TryField(line, "turnId=", out var turnId) ||
