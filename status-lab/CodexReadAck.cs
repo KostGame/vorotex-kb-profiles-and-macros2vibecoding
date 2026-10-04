@@ -130,7 +130,6 @@ internal sealed class CodexFocusedReadAckObserver(
 
     private readonly Dictionary<CodexCompletionKey, Observation> _observations = new();
     private readonly Dictionary<CodexCompletionKey, CodexFocusedReadAckEvidence> _ready = new();
-    private readonly HashSet<CodexCompletionKey> _blockedByUnread = new();
     private readonly Dictionary<string, DateTimeOffset> _lastFinishedBySource = new(StringComparer.Ordinal);
     private DateTimeOffset _nextPollUtc;
 
@@ -142,7 +141,6 @@ internal sealed class CodexFocusedReadAckObserver(
         {
             _observations.Clear();
             _ready.Clear();
-            _blockedByUnread.Clear();
             return Array.Empty<CodexFocusedReadAckEvidence>();
         }
 
@@ -151,7 +149,6 @@ internal sealed class CodexFocusedReadAckObserver(
             _observations.Remove(old);
         foreach (var old in _ready.Keys.Where(key => !keys.Contains(key)).ToArray())
             _ready.Remove(old);
-        _blockedByUnread.RemoveWhere(key => !keys.Contains(key));
         if (completions.Count > MaxCompletions)
         {
             _observations.Clear();
@@ -186,7 +183,7 @@ internal sealed class CodexFocusedReadAckObserver(
             _lastFinishedBySource[sourceInstanceId] = snapshot.FinishedUtc;
             foreach (var key in group)
             {
-                if (_ready.ContainsKey(key) || _blockedByUnread.Contains(key)) continue;
+                if (_ready.ContainsKey(key)) continue;
                 if (snapshot.StartedUtc <= key.CompletedUtc)
                 {
                     _observations.Remove(key);
@@ -196,11 +193,12 @@ internal sealed class CodexFocusedReadAckObserver(
                 var unread = snapshot.ForThread(key.ThreadId);
                 if (unread == CodexUnreadState.HasUnread)
                 {
-                    // Once an unread phase exists, the ordinary causal
-                    // HasUnread -> NoUnread -> NoUnread path owns this ACK
-                    // for the rest of this exact completion generation.
+                    // A brief unread pulse can occur even for the exact focused
+                    // conversation. Treat it as a reset of focused confirmation,
+                    // not as a permanent veto. If unread persists, this path can
+                    // never accumulate the two fresh NoUnread observations it
+                    // still requires.
                     _observations.Remove(key);
-                    _blockedByUnread.Add(key);
                     continue;
                 }
 

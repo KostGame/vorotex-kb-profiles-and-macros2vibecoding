@@ -170,11 +170,16 @@ internal static class CodexReadAckTests
         observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(3));
         unread.Ids = ["T"];
         Check(observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(4)).Count == 0,
-            "DELAYED_HASUNREAD_BLOCKS_FOCUSED_PATH");
+            "TRANSIENT_HASUNREAD_RESETS_FOCUSED_CONFIRMATION");
+        Check(observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(5)).Count == 0,
+            "PERSISTENT_HASUNREAD_NEVER_FOCUSED_ACKS");
         unread.Ids = [];
-        Check(observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(5)).Count == 0 &&
-              observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(6)).Count == 0,
-            "FOCUSED_PATH_STAYS_BLOCKED_AFTER_HASUNREAD");
+        Check(observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(6)).Count == 0,
+            "POST_UNREAD_FIRST_NOUNREAD_NO_ACK");
+        var afterTransientUnread = observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(7)).Single();
+        Check(afterTransientUnread.FirstNoUnreadUtc < afterTransientUnread.SecondNoUnreadUtc &&
+              afterTransientUnread.DesktopProcessId == 4321,
+            "POST_UNREAD_SECOND_NOUNREAD_RESTORES_FOCUSED_ACK");
 
         reducer = Done();
         completion = reducer.ReadAckCandidates.Single();
