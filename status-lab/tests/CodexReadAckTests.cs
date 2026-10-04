@@ -52,6 +52,16 @@ internal static class CodexReadAckTests
                 Ids?.ToHashSet(StringComparer.Ordinal), Failure);
         }
     }
+    private sealed class FocusedReader : ICodexFocusedCompletionReader
+    {
+        public CodexFocusedCompletionProof? Proof;
+        public int Calls;
+        public CodexFocusedCompletionProof? Read(CodexCompletionKey completion, DateTimeOffset nowUtc)
+        {
+            Calls++;
+            return Proof is not null && Proof.Completion == completion ? Proof : null;
+        }
+    }
     private static CodexReadAckEvidence Evidence(StateReducer reducer, int second = 3) =>
         new(reducer.ReadAckCandidates.Single(), "local", T.AddSeconds(second), T.AddSeconds(second + 1), T.AddSeconds(second + 2));
     private static CodexUnreadState Parse(string json, string thread = "T") =>
@@ -62,9 +72,113 @@ internal static class CodexReadAckTests
     private static CodexSessionSnapshot Session(K15NormalizedState state, string id = "S", string thread = "T") =>
         new(id, state, true, true, "C:\\synthetic", thread, "U", T);
 
+    private static void FocusedCompletionAckTests()
+    {
+        var reducer = Done();
+        var completion = reducer.ReadAckCandidates.Single();
+        var focusedLineUtc = T.AddMilliseconds(2500);
+        var focusedLog =
+            $"{T:O} info websocket_reconnect_recovery_done currentConversationId=T rendererWindowAppearance=primary\n" +
+            $"{focusedLineUtc:O} info [electron-message-handler] [desktop-notifications] received turn-complete " +
+            "conversationId=T rendererWebContentsId=1 rendererWindowAppearance=primary rendererWindowFocused=true " +
+            "rendererWindowId=1 rendererWindowVisible=true turnId=U\n";
+        var proof = CodexDesktopFocusedCompletionReader.ParseLog(focusedLog, completion, 1234, T.AddSeconds(-1));
+        Check(proof is not null && proof.DesktopProcessId == 1234 &&
+              proof.DesktopCompletedUtc == focusedLineUtc, "FOCUSED_LOG_EXACT_PROOF");
+
+        var backgroundLog = focusedLog.Replace("rendererWindowFocused=true", "rendererWindowFocused=false");
+        Check(CodexDesktopFocusedCompletionReader.ParseLog(backgroundLog, completion, 1234, T.AddSeconds(-1)) is null,
+            "BACKGROUND_COMPLETION_NEVER_FOCUSED_PROOF");
+
+        var wrongActiveLog =
+            $"{T:O} info websocket_reconnect_recovery_done currentConversationId=OTHER rendererWindowAppearance=primary\n" +
+            focusedLog.Split('\n')[1] + "\n";
+        Check(CodexDesktopFocusedCompletionReader.ParseLog(wrongActiveLog, completion, 1234, T.AddSeconds(-1)) is null,
+            "FOCUSED_WINDOW_WRONG_ACTIVE_THREAD_REJECTED");
+
+        var routeLog =
+            $"{T:O} info websocket_reconnect_recovery_done currentConversationId=OTHER rendererWindowAppearance=primary\n" +
+            $"{T.AddSeconds(1):O} info [electron-message-handler] IAB_LIFECYCLE received browser sidebar owner sync " +
+            "browserTabId=null conversationId=client originWebContentsId=1 ownerRoutePath=/local/T windowId=1\n" +
+            focusedLog.Split('\n')[1] + "\n";
+        Check(CodexDesktopFocusedCompletionReader.ParseLog(routeLog, completion, 1234, T.AddSeconds(-1)) is not null,
+            "ROUTE_CHANGE_EXACT_THREAD_ESTABLISHES_ACTIVE_CONVERSATION");
+
+        var settingsLog = routeLog.Replace("ownerRoutePath=/local/T", "ownerRoutePath=/settings/general");
+        Check(CodexDesktopFocusedCompletionReader.ParseLog(settingsLog, completion, 1234, T.AddSeconds(-1)) is null,
+            "NON_LOCAL_ROUTE_CLEARS_ACTIVE_CONVERSATION");
+
+        var wrongTurn = focusedLog.Replace("turnId=U", "turnId=OTHER");
+        Check(CodexDesktopFocusedCompletionReader.ParseLog(wrongTurn, completion, 1234, T.AddSeconds(-1)) is null,
+            "FOCUSED_COMPLETION_TURN_MUST_MATCH");
+        Check(CodexDesktopFocusedCompletionReader.ParseLog(focusedLog, completion with { CompletedUtc = T.AddSeconds(10) },
+            1234, T.AddSeconds(-1)) is null, "FOCUSED_COMPLETION_TIMESTAMP_MUST_MATCH");
+        Check(CodexDesktopFocusedCompletionReader.ParseLocalRoute("/local/T?x=1") == "T" &&
+              CodexDesktopFocusedCompletionReader.ParseLocalRoute("/settings") is null,
+            "LOCAL_ROUTE_PARSER_FAIL_CLOSED");
+        Check(CodexDesktopFocusedCompletionReader.TryParseProcessId(
+                  "codex-desktop-f9f0fbf3-f816-401b-a3c5-a272bf547200-3220-t0-i1-194136-0.log", out var parsedPid) &&
+              parsedPid == 3220 &&
+              !CodexDesktopFocusedCompletionReader.TryParseProcessId("codex-desktop-no-pid-t0-i1.log", out _),
+            "T0_LOG_PID_PARSER");
+        Check(CodexDesktopFocusedCompletionReader.IsCodexDesktopExecutable(
+                  @"C:\Program Files\WindowsApps\OpenAI.Codex_26.930.3930.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe") &&
+              !CodexDesktopFocusedCompletionReader.IsCodexDesktopExecutable(@"C:\Windows\ChatGPT.exe"),
+            "CODEX_DESKTOP_PROCESS_IDENTITY_GUARD");
+
+        var unread = new Reader { Ids = [] };
+        var focus = new FocusedReader { Proof = proof };
+        var observer = new CodexFocusedReadAckObserver(new SingleCodexUnreadSourceRegistry(unread), focus, "local");
+        Check(observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(3)).Count == 0,
+            "FOCUSED_FIRST_NOUNREAD_NO_ACK");
+        var focusedEvidence = observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(4)).Single();
+        Check(focusedEvidence.DesktopCompletedUtc == focusedLineUtc &&
+              focusedEvidence.FirstNoUnreadUtc < focusedEvidence.SecondNoUnreadUtc &&
+              focusedEvidence.DesktopProcessId == 1234, "FOCUSED_SECOND_NOUNREAD_READY");
+        Check(reducer.ApplyFocusedReadAck(focusedEvidence)?.Reason == "codex_focused_read_ack" &&
+              reducer.State == K15NormalizedState.Normal, "FOCUSED_EXACT_ACK_APPLIES");
+
+        reducer = Done();
+        completion = reducer.ReadAckCandidates.Single();
+        unread = new Reader { Ids = [] };
+        focus = new FocusedReader { Proof = new(completion, T.AddMilliseconds(2500), 4321) };
+        observer = new(new SingleCodexUnreadSourceRegistry(unread), focus, "local");
+        observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(3));
+        unread.Ids = ["T"];
+        Check(observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(4)).Count == 0,
+            "DELAYED_HASUNREAD_BLOCKS_FOCUSED_PATH");
+        unread.Ids = [];
+        Check(observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(5)).Count == 0 &&
+              observer.Poll(reducer.ReadAckCandidates, T.AddSeconds(6)).Count == 0,
+            "FOCUSED_PATH_STAYS_BLOCKED_AFTER_HASUNREAD");
+
+        reducer = Done();
+        completion = reducer.ReadAckCandidates.Single();
+        var invalid = new CodexFocusedReadAckEvidence(completion, "remote", T.AddMilliseconds(2500),
+            T.AddSeconds(3), T.AddSeconds(4), 1234);
+        Check(reducer.ApplyFocusedReadAck(invalid) is null && reducer.State == K15NormalizedState.DonePendingAttention,
+            "FOCUSED_ACK_REJECTS_NONLOCAL_HOST");
+        invalid = new(completion, "local", T.AddMilliseconds(2500),
+            T.AddMilliseconds(2400), T.AddSeconds(4), 1234);
+        Check(reducer.ApplyFocusedReadAck(invalid) is null, "FOCUSED_ACK_REJECTS_BAD_CHRONOLOGY");
+
+        var focusedCheckpointJson =
+            $$"""{"timestampUtc":"{{T.AddSeconds(5):O}}","source":"state_normalizer","event":"focused_read_ack_evidence","reason":"codex_focused_read_ack","host":"local","sessionId":"S","threadId":"T","turnId":"U","sourceInstanceId":"{{TestSourceInstanceId}}","runtimeEpoch":"{{completion.RuntimeEpoch}}","completionGeneration":{{completion.Generation}},"completedUtc":"{{completion.CompletedUtc:O}}","desktopCompletedUtc":"{{T.AddMilliseconds(2500):O}}","firstNoUnreadUtc":"{{T.AddSeconds(3):O}}","secondNoUnreadUtc":"{{T.AddSeconds(4):O}}","desktopProcessId":1234}""";
+        var checkpoint = JournalStateNormalizer.ParseReadAckCheckpoint(focusedCheckpointJson);
+        Check(checkpoint is not null && checkpoint.ThreadId == "T" &&
+              checkpoint.AcknowledgedUtc == T.AddSeconds(4), "FOCUSED_ACK_DURABLE_CHECKPOINT");
+        Check(JournalStateNormalizer.ParseReadAckCheckpoint(
+              focusedCheckpointJson.Replace("\"desktopProcessId\":1234", "\"desktopProcessId\":0")) is null,
+            "FOCUSED_ACK_CHECKPOINT_REJECTS_BAD_PID");
+        Check(JournalStateNormalizer.ParseReadAckCheckpoint(
+              focusedCheckpointJson[..^1] + ",\"unexpected\":true}") is null,
+            "FOCUSED_ACK_CHECKPOINT_REJECTS_UNEXPECTED_FIELDS");
+    }
+
     public static void Run()
     {
         SourceIdentityTests();
+        FocusedCompletionAckTests();
         Check(CodexSourceIdentity.ForHome(@"C:\Users\Tester\.codex") == TestSourceInstanceId,
             "SOURCE_IDENTITY_WINDOWS_GOLDEN_VECTOR");
         NormalizerLivenessTests();

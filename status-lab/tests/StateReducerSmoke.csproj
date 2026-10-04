@@ -12,6 +12,7 @@
     <Compile Include="CodexReadAckTests.cs" />
     <Compile Include="CodexLocalThreadTitleTests.cs" />
     <Compile Include="..\CodexReadAck.cs" Link="CodexReadAck.cs" />
+    <Compile Include="..\CodexDesktopFocusedCompletionReader.cs" Link="CodexDesktopFocusedCompletionReader.cs" />
     <Compile Include="..\CodexUnreadStateReader.cs" Link="CodexUnreadStateReader.cs" />
     <Compile Include="..\CodexUnreadSourceRegistry.cs" Link="CodexUnreadSourceRegistry.cs" />
     <Compile Include="..\CodexSourceIdentity.cs" Link="CodexSourceIdentity.cs" />

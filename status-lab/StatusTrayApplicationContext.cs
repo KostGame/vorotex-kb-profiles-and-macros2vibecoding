@@ -54,7 +54,8 @@ internal sealed class StatusTrayApplicationContext : ApplicationContext
         _stateNormalizer = new JournalStateNormalizer(
             _config.StaleAttentionTimeoutSeconds,
             _unreadSources,
-            new WindowsCodexLivenessProvider());
+            new WindowsCodexLivenessProvider(),
+            CodexDesktopFocusedCompletionReader.CreateDefault());
         _deviceManager = new K15DeviceManager(Path.Combine(EventJournal.DirectoryPath, "preferred-device.json"));
         _layoutAuthority = new K15LayoutAuthoritySession(_deviceManager);
         _rgbCanary = new K15RgbCanary(_config, _deviceManager);

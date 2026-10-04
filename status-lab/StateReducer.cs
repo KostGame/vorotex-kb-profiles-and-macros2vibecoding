@@ -231,6 +231,32 @@ internal sealed class StateReducer
         return RecomputeAggregate("codex_read_ack", evidence.SecondNoUnreadUtc);
     }
 
+    public StateTransition? ApplyFocusedReadAck(CodexFocusedReadAckEvidence evidence)
+    {
+        LastSessionTransitions = Array.Empty<SessionStateTransition>();
+        var key = evidence.Completion;
+        if (evidence.Host != "local" || key.RuntimeEpoch != _runtimeEpoch ||
+            evidence.DesktopProcessId <= 0 ||
+            evidence.DesktopCompletedUtc < key.CompletedUtc ||
+            evidence.DesktopCompletedUtc - key.CompletedUtc > TimeSpan.FromSeconds(5) ||
+            evidence.DesktopCompletedUtc <= _runtimeStartedUtc ||
+            evidence.FirstNoUnreadUtc <= evidence.DesktopCompletedUtc ||
+            evidence.SecondNoUnreadUtc <= evidence.FirstNoUnreadUtc ||
+            !ReadAckCandidates.Contains(key))
+            return null;
+        if (!_sessions.TryGetValue(CodexSourceIdentity.CompositeKey(key.SourceInstanceId, key.SessionId), out var session))
+            return null;
+
+        session.ReadAcknowledgedCompletion = key;
+        SetSessionState(session, K15NormalizedState.Normal, "codex_focused_read_ack", evidence.SecondNoUnreadUtc,
+            new(evidence.SecondNoUnreadUtc, "codex_desktop_focus_observer", "focused_read_ack",
+                ThreadId: key.ThreadId, TurnId: key.TurnId));
+        session.LastStopUtc = null;
+        session.DoneEnteredUtc = null;
+        session.AcknowledgedUtc = evidence.SecondNoUnreadUtc;
+        return RecomputeAggregate("codex_focused_read_ack", evidence.SecondNoUnreadUtc);
+    }
+
     // Journal diagnostics can restore correlation, never unread observations or
     // an ACK. Only the exact replayed DONE transition may receive that binding.
     public void RestoreCompletionCorrelations(IEnumerable<SessionStateTransition> persisted)

@@ -102,3 +102,154 @@ internal sealed class CodexReadAckObserver(ICodexUnreadSourceRegistry sources, s
 
     public void ConfirmApplied(CodexReadAckEvidence evidence) => _ready.Remove(evidence.Completion);
 }
+
+
+internal sealed record CodexFocusedReadAckEvidence(
+    CodexCompletionKey Completion,
+    string Host,
+    DateTimeOffset DesktopCompletedUtc,
+    DateTimeOffset FirstNoUnreadUtc,
+    DateTimeOffset SecondNoUnreadUtc,
+    int DesktopProcessId);
+
+// Separate fail-closed path for a completion that Codex Desktop itself proves
+// happened in the exact visible, focused local thread. The ordinary unread
+// transition observer above remains unchanged.
+internal sealed class CodexFocusedReadAckObserver(
+    ICodexUnreadSourceRegistry sources,
+    ICodexFocusedCompletionReader focusedCompletionReader,
+    string host)
+{
+    internal const int MaxCompletions = CodexReadAckObserver.MaxCompletions;
+
+    private sealed class Observation
+    {
+        public CodexFocusedCompletionProof? Proof;
+        public DateTimeOffset? FirstNoUnreadUtc;
+    }
+
+    private readonly Dictionary<CodexCompletionKey, Observation> _observations = new();
+    private readonly Dictionary<CodexCompletionKey, CodexFocusedReadAckEvidence> _ready = new();
+    private readonly HashSet<CodexCompletionKey> _blockedByUnread = new();
+    private readonly Dictionary<string, DateTimeOffset> _lastFinishedBySource = new(StringComparer.Ordinal);
+    private DateTimeOffset _nextPollUtc;
+
+    public IReadOnlyList<CodexFocusedReadAckEvidence> Poll(
+        IReadOnlyList<CodexCompletionKey> completions,
+        DateTimeOffset nowUtc)
+    {
+        if (completions.Count == 0)
+        {
+            _observations.Clear();
+            _ready.Clear();
+            _blockedByUnread.Clear();
+            return Array.Empty<CodexFocusedReadAckEvidence>();
+        }
+
+        var keys = completions.ToHashSet();
+        foreach (var old in _observations.Keys.Where(key => !keys.Contains(key)).ToArray())
+            _observations.Remove(old);
+        foreach (var old in _ready.Keys.Where(key => !keys.Contains(key)).ToArray())
+            _ready.Remove(old);
+        _blockedByUnread.RemoveWhere(key => !keys.Contains(key));
+        if (completions.Count > MaxCompletions)
+        {
+            _observations.Clear();
+            return _ready.Values.ToArray();
+        }
+
+        if (nowUtc < _nextPollUtc || keys.All(key => _ready.ContainsKey(key)))
+            return _ready.Values.ToArray();
+        _nextPollUtc = nowUtc.AddSeconds(1);
+
+        var snapshotBySource = new Dictionary<string, CodexUnreadSnapshot>(StringComparer.Ordinal);
+        foreach (var sourceInstanceId in completions.Select(key => key.SourceInstanceId).Distinct(StringComparer.Ordinal))
+            snapshotBySource[sourceInstanceId] = sources.Read(sourceInstanceId, nowUtc);
+
+        foreach (var group in completions.GroupBy(key => key.SourceInstanceId, StringComparer.Ordinal))
+        {
+            var sourceInstanceId = group.Key;
+            var snapshot = snapshotBySource[sourceInstanceId];
+            var previousFinished = _lastFinishedBySource.TryGetValue(sourceInstanceId, out var previous)
+                ? previous
+                : DateTimeOffset.MinValue;
+            var validEnvelope = snapshot.Host == host && snapshot.StartedUtc >= nowUtc &&
+                snapshot.FinishedUtc >= snapshot.StartedUtc &&
+                snapshot.FinishedUtc - snapshot.StartedUtc <= TimeSpan.FromSeconds(2) &&
+                snapshot.StartedUtc > previousFinished;
+            if (!validEnvelope)
+            {
+                foreach (var key in group) _observations.Remove(key);
+                continue;
+            }
+
+            _lastFinishedBySource[sourceInstanceId] = snapshot.FinishedUtc;
+            foreach (var key in group)
+            {
+                if (_ready.ContainsKey(key) || _blockedByUnread.Contains(key)) continue;
+                if (snapshot.StartedUtc <= key.CompletedUtc)
+                {
+                    _observations.Remove(key);
+                    continue;
+                }
+
+                var unread = snapshot.ForThread(key.ThreadId);
+                if (unread == CodexUnreadState.HasUnread)
+                {
+                    // Once an unread phase exists, the ordinary causal
+                    // HasUnread -> NoUnread -> NoUnread path owns this ACK
+                    // for the rest of this exact completion generation.
+                    _observations.Remove(key);
+                    _blockedByUnread.Add(key);
+                    continue;
+                }
+
+                if (unread != CodexUnreadState.NoUnread)
+                {
+                    _observations.Remove(key);
+                    continue;
+                }
+
+                var proof = focusedCompletionReader.Read(key, nowUtc);
+                if (proof is null ||
+                    proof.Completion != key ||
+                    proof.DesktopCompletedUtc < key.CompletedUtc ||
+                    proof.DesktopCompletedUtc - key.CompletedUtc > TimeSpan.FromSeconds(5) ||
+                    proof.DesktopProcessId <= 0)
+                {
+                    _observations.Remove(key);
+                    continue;
+                }
+
+                if (!_observations.TryGetValue(key, out var observation) ||
+                    observation.Proof is null ||
+                    observation.Proof.DesktopProcessId != proof.DesktopProcessId ||
+                    observation.Proof.DesktopCompletedUtc != proof.DesktopCompletedUtc)
+                {
+                    observation = new() { Proof = proof };
+                    _observations[key] = observation;
+                }
+
+                if (snapshot.StartedUtc <= proof.DesktopCompletedUtc)
+                    continue;
+
+                if (observation.FirstNoUnreadUtc is DateTimeOffset first)
+                {
+                    if (snapshot.StartedUtc <= first)
+                        continue;
+                    _ready[key] = new(key, host, proof.DesktopCompletedUtc, first,
+                        snapshot.FinishedUtc, proof.DesktopProcessId);
+                    _observations.Remove(key);
+                }
+                else
+                {
+                    observation.FirstNoUnreadUtc = snapshot.FinishedUtc;
+                }
+            }
+        }
+
+        return _ready.Values.ToArray();
+    }
+
+    public void ConfirmApplied(CodexFocusedReadAckEvidence evidence) => _ready.Remove(evidence.Completion);
+}
