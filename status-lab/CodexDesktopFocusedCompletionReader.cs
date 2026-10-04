@@ -8,6 +8,21 @@ internal sealed record CodexFocusedCompletionProof(
     DateTimeOffset DesktopCompletedUtc,
     int DesktopProcessId);
 
+internal sealed record CodexFocusedCompletionReadDiagnostics(
+    CodexFocusedCompletionProof? Proof,
+    string? MatchedLogFileName,
+    bool CompletionIdentityRejected,
+    int CandidateLogs,
+    int FileMetadataRejected,
+    int ProcessIdRejected,
+    int ProcessLookupRejected,
+    int ExecutableRejected,
+    int ProcessCreationRejected,
+    int LastWriteRejected,
+    int ParseRejected,
+    int IoRejected,
+    int UnauthorizedRejected);
+
 internal interface ICodexFocusedCompletionReader
 {
     CodexFocusedCompletionProof? Read(CodexCompletionKey completion, DateTimeOffset nowUtc);
@@ -39,40 +54,111 @@ internal sealed class CodexDesktopFocusedCompletionReader : ICodexFocusedComplet
         return Directory.Exists(root) ? new(root) : null;
     }
 
-    public CodexFocusedCompletionProof? Read(CodexCompletionKey completion, DateTimeOffset nowUtc)
+    public CodexFocusedCompletionProof? Read(CodexCompletionKey completion, DateTimeOffset nowUtc) =>
+        ReadWithDiagnostics(completion, nowUtc).Proof;
+
+    internal CodexFocusedCompletionReadDiagnostics ReadWithDiagnostics(
+        CodexCompletionKey completion,
+        DateTimeOffset nowUtc)
     {
         if (!CodexSourceIdentity.IsValid(completion.SourceInstanceId) ||
             !CodexUnreadStateReader.Bounded(completion.ThreadId) ||
             !CodexUnreadStateReader.Bounded(completion.TurnId))
-            return null;
+        {
+            return new(null, null, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+
+        var candidateLogs = 0;
+        var fileMetadataRejected = 0;
+        var processIdRejected = 0;
+        var processLookupRejected = 0;
+        var executableRejected = 0;
+        var processCreationRejected = 0;
+        var lastWriteRejected = 0;
+        var parseRejected = 0;
+        var ioRejected = 0;
+        var unauthorizedRejected = 0;
 
         foreach (var path in CandidateLogs(completion.CompletedUtc, nowUtc))
         {
-            CodexFocusedCompletionProof? proof;
+            candidateLogs++;
             try
             {
                 var info = new FileInfo(path);
                 if (!info.Exists || info.Length <= 0 || info.Length > MaxLogBytes)
+                {
+                    fileMetadataRejected++;
                     continue;
-                if (!TryParseProcessId(info.Name, out var processId))
-                    continue;
-                var process = _processLookup(processId);
-                if (process is null || !IsCodexDesktopExecutable(process.ExecutablePath))
-                    continue;
-                if (info.CreationTimeUtc < process.StartedUtc.UtcDateTime.AddSeconds(-10) ||
-                    info.CreationTimeUtc > process.StartedUtc.UtcDateTime.AddMinutes(2) ||
-                    info.LastWriteTimeUtc < completion.CompletedUtc.UtcDateTime.AddSeconds(-2))
-                    continue;
+                }
 
-                var text = File.ReadAllText(path);
-                proof = ParseLog(text, completion, processId, process.StartedUtc);
+                if (!TryParseProcessId(info.Name, out var processId))
+                {
+                    processIdRejected++;
+                    continue;
+                }
+
+                var process = _processLookup(processId);
+                if (process is null)
+                {
+                    processLookupRejected++;
+                    continue;
+                }
+
+                if (!IsCodexDesktopExecutable(process.ExecutablePath))
+                {
+                    executableRejected++;
+                    continue;
+                }
+
+                if (info.CreationTimeUtc < process.StartedUtc.UtcDateTime.AddSeconds(-10) ||
+                    info.CreationTimeUtc > process.StartedUtc.UtcDateTime.AddMinutes(2))
+                {
+                    processCreationRejected++;
+                    continue;
+                }
+
+                if (info.LastWriteTimeUtc < completion.CompletedUtc.UtcDateTime.AddSeconds(-2))
+                {
+                    lastWriteRejected++;
+                    continue;
+                }
+
+                var text = ReadAllTextShared(path);
+                var proof = ParseLog(text, completion, processId, process.StartedUtc);
+                if (proof is not null)
+                {
+                    return new(proof, info.Name, false, candidateLogs, fileMetadataRejected,
+                        processIdRejected, processLookupRejected, executableRejected,
+                        processCreationRejected, lastWriteRejected, parseRejected,
+                        ioRejected, unauthorizedRejected);
+                }
+
+                parseRejected++;
             }
-            catch (IOException) { continue; }
-            catch (UnauthorizedAccessException) { continue; }
-            if (proof is not null)
-                return proof;
+            catch (IOException)
+            {
+                ioRejected++;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                unauthorizedRejected++;
+            }
         }
-        return null;
+
+        return new(null, null, false, candidateLogs, fileMetadataRejected, processIdRejected,
+            processLookupRejected, executableRejected, processCreationRejected, lastWriteRejected,
+            parseRejected, ioRejected, unauthorizedRejected);
+    }
+
+    private static string ReadAllTextShared(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private IEnumerable<string> CandidateLogs(DateTimeOffset completedUtc, DateTimeOffset nowUtc)

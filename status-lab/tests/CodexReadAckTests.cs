@@ -150,6 +150,99 @@ internal static class CodexReadAckTests
               !CodexDesktopFocusedCompletionReader.IsCodexDesktopExecutable(@"C:\Windows\ChatGPT.exe"),
             "CODEX_DESKTOP_PROCESS_IDENTITY_GUARD");
 
+        var focusedFixtureRoot = Path.Combine(Path.GetTempPath(),
+            "k15-focused-reader-" + Guid.NewGuid().ToString("N"));
+        var focusedFixtureDay = Path.Combine(focusedFixtureRoot, "2026", "08", "25");
+        Directory.CreateDirectory(focusedFixtureDay);
+        var focusedFixtureName =
+            "codex-desktop-30a922c7-d464-4e77-b8f8-a1aecc060cf7-1234-t0-i1-203835-0.log";
+        var focusedFixturePath = Path.Combine(focusedFixtureDay, focusedFixtureName);
+        var trustedDesktopPath =
+            @"C:\Program Files\WindowsApps\OpenAI.Codex_26.930.3930.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe";
+        var trustedStartedUtc = T.AddMinutes(-1);
+
+        void WriteFocusedFixture(string text, DateTimeOffset lastWriteUtc)
+        {
+            File.WriteAllText(focusedFixturePath, text);
+            File.SetCreationTimeUtc(focusedFixturePath, T.AddSeconds(-30).UtcDateTime);
+            File.SetLastWriteTimeUtc(focusedFixturePath, lastWriteUtc.UtcDateTime);
+        }
+
+        try
+        {
+            WriteFocusedFixture(liveTurnStartLog, T.AddSeconds(3));
+            var diagnosticReader = new CodexDesktopFocusedCompletionReader(
+                focusedFixtureRoot,
+                pid => pid == 1234
+                    ? new(pid, trustedDesktopPath, trustedStartedUtc)
+                    : null);
+            var diagnostics = diagnosticReader.ReadWithDiagnostics(completion, T.AddSeconds(4));
+            Check(diagnostics.Proof is not null &&
+                  diagnostics.MatchedLogFileName == focusedFixtureName &&
+                  diagnostics.CandidateLogs == 1 &&
+                  diagnostics.ProcessLookupRejected == 0 &&
+                  diagnostics.ExecutableRejected == 0 &&
+                  diagnostics.ProcessCreationRejected == 0 &&
+                  diagnostics.LastWriteRejected == 0 &&
+                  diagnostics.ParseRejected == 0,
+                "FOCUSED_READER_EXACT_CAPTURED_SHAPE_ALL_GATES_PASS");
+
+            using (var activeWriter = new FileStream(
+                       focusedFixturePath,
+                       FileMode.Open,
+                       FileAccess.Write,
+                       FileShare.ReadWrite | FileShare.Delete))
+            {
+                diagnostics = diagnosticReader.ReadWithDiagnostics(completion, T.AddSeconds(4));
+                Check(diagnostics.Proof is not null &&
+                      diagnostics.IoRejected == 0 &&
+                      diagnostics.MatchedLogFileName == focusedFixtureName,
+                    "FOCUSED_READER_ACTIVE_WRITER_SHARED_READ");
+            }
+
+            diagnostics = new CodexDesktopFocusedCompletionReader(focusedFixtureRoot, _ => null)
+                .ReadWithDiagnostics(completion, T.AddSeconds(4));
+            Check(diagnostics.Proof is null && diagnostics.CandidateLogs == 1 &&
+                  diagnostics.ProcessLookupRejected == 1,
+                "FOCUSED_READER_PROCESS_LOOKUP_REJECTION_IDENTIFIED");
+
+            diagnostics = new CodexDesktopFocusedCompletionReader(
+                focusedFixtureRoot,
+                pid => new(pid, @"C:\Windows\ChatGPT.exe", trustedStartedUtc))
+                .ReadWithDiagnostics(completion, T.AddSeconds(4));
+            Check(diagnostics.Proof is null && diagnostics.ExecutableRejected == 1,
+                "FOCUSED_READER_EXECUTABLE_REJECTION_IDENTIFIED");
+
+            diagnostics = new CodexDesktopFocusedCompletionReader(
+                focusedFixtureRoot,
+                pid => new(pid, trustedDesktopPath, T.AddHours(1)))
+                .ReadWithDiagnostics(completion, T.AddSeconds(4));
+            Check(diagnostics.Proof is null && diagnostics.ProcessCreationRejected == 1,
+                "FOCUSED_READER_PROCESS_CREATION_REJECTION_IDENTIFIED");
+
+            WriteFocusedFixture(liveTurnStartLog, completion.CompletedUtc.AddSeconds(-10));
+            diagnostics = diagnosticReader.ReadWithDiagnostics(completion, T.AddSeconds(4));
+            Check(diagnostics.Proof is null && diagnostics.LastWriteRejected == 1,
+                "FOCUSED_READER_LAST_WRITE_REJECTION_IDENTIFIED");
+
+            WriteFocusedFixture(
+                liveTurnStartLog.Replace("turnId=U", "turnId=OTHER"),
+                T.AddSeconds(3));
+            diagnostics = diagnosticReader.ReadWithDiagnostics(completion, T.AddSeconds(4));
+            Check(diagnostics.Proof is null && diagnostics.ParseRejected == 1,
+                "FOCUSED_READER_PARSE_REJECTION_IDENTIFIED");
+
+            File.WriteAllText(focusedFixturePath, string.Empty);
+            diagnostics = diagnosticReader.ReadWithDiagnostics(completion, T.AddSeconds(4));
+            Check(diagnostics.Proof is null && diagnostics.FileMetadataRejected == 1,
+                "FOCUSED_READER_FILE_METADATA_REJECTION_IDENTIFIED");
+        }
+        finally
+        {
+            if (Directory.Exists(focusedFixtureRoot))
+                Directory.Delete(focusedFixtureRoot, true);
+        }
+
         var unread = new Reader { Ids = [] };
         var focus = new FocusedReader { Proof = proof };
         var observer = new CodexFocusedReadAckObserver(new SingleCodexUnreadSourceRegistry(unread), focus, "local");

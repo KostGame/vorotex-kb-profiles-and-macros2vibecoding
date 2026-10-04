@@ -1,6 +1,39 @@
 using Vorotex.K15.StatusLab;
 using System.Text.Json;
 
+if (args.Length == 6 && args[0] == "--focused-reader-probe")
+{
+    var probeCompletion = new CodexCompletionKey(
+        "probe",
+        args[3],
+        args[4],
+        1,
+        Guid.Empty,
+        DateTimeOffset.Parse(args[5], null, System.Globalization.DateTimeStyles.RoundtripKind),
+        args[2]);
+    var probeDiagnostics = new CodexDesktopFocusedCompletionReader(args[1])
+        .ReadWithDiagnostics(probeCompletion, DateTimeOffset.UtcNow);
+    Console.WriteLine($"FOCUSED_READER_PROOF={(probeDiagnostics.Proof is null ? "NONE" : "PASS")}");
+    Console.WriteLine($"MATCHED_LOG={probeDiagnostics.MatchedLogFileName ?? ""}");
+    Console.WriteLine($"CANDIDATE_LOGS={probeDiagnostics.CandidateLogs}");
+    Console.WriteLine($"COMPLETION_IDENTITY_REJECTED={probeDiagnostics.CompletionIdentityRejected}");
+    Console.WriteLine($"FILE_METADATA_REJECTED={probeDiagnostics.FileMetadataRejected}");
+    Console.WriteLine($"PROCESS_ID_REJECTED={probeDiagnostics.ProcessIdRejected}");
+    Console.WriteLine($"PROCESS_LOOKUP_REJECTED={probeDiagnostics.ProcessLookupRejected}");
+    Console.WriteLine($"EXECUTABLE_REJECTED={probeDiagnostics.ExecutableRejected}");
+    Console.WriteLine($"PROCESS_CREATION_REJECTED={probeDiagnostics.ProcessCreationRejected}");
+    Console.WriteLine($"LAST_WRITE_REJECTED={probeDiagnostics.LastWriteRejected}");
+    Console.WriteLine($"PARSE_REJECTED={probeDiagnostics.ParseRejected}");
+    Console.WriteLine($"IO_REJECTED={probeDiagnostics.IoRejected}");
+    Console.WriteLine($"UNAUTHORIZED_REJECTED={probeDiagnostics.UnauthorizedRejected}");
+    if (probeDiagnostics.Proof is not null)
+    {
+        Console.WriteLine($"DESKTOP_PROCESS_ID={probeDiagnostics.Proof.DesktopProcessId}");
+        Console.WriteLine($"DESKTOP_COMPLETED_UTC={probeDiagnostics.Proof.DesktopCompletedUtc:O}");
+    }
+    return;
+}
+
 static void Require(bool condition, string message)
 {
     if (!condition) throw new InvalidOperationException(message);
