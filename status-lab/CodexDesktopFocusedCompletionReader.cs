@@ -111,7 +111,7 @@ internal sealed class CodexDesktopFocusedCompletionReader : ICodexFocusedComplet
                 }
 
                 if (info.CreationTimeUtc < process.StartedUtc.UtcDateTime.AddSeconds(-10) ||
-                    info.CreationTimeUtc > process.StartedUtc.UtcDateTime.AddMinutes(2))
+                    info.CreationTimeUtc > completion.CompletedUtc.UtcDateTime.Add(CompletionSkew))
                 {
                     processCreationRejected++;
                     continue;
