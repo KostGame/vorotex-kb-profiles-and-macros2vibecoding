@@ -161,10 +161,10 @@ internal static class CodexReadAckTests
             @"C:\Program Files\WindowsApps\OpenAI.Codex_26.930.3930.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe";
         var trustedStartedUtc = T.AddMinutes(-1);
 
-        void WriteFocusedFixture(string text, DateTimeOffset lastWriteUtc)
+        void WriteFocusedFixture(string text, DateTimeOffset lastWriteUtc, DateTimeOffset? creationUtc = null)
         {
             File.WriteAllText(focusedFixturePath, text);
-            File.SetCreationTimeUtc(focusedFixturePath, T.AddSeconds(-30).UtcDateTime);
+            File.SetCreationTimeUtc(focusedFixturePath, (creationUtc ?? T.AddSeconds(-30)).UtcDateTime);
             File.SetLastWriteTimeUtc(focusedFixturePath, lastWriteUtc.UtcDateTime);
         }
 
@@ -199,6 +199,23 @@ internal static class CodexReadAckTests
                       diagnostics.MatchedLogFileName == focusedFixtureName,
                     "FOCUSED_READER_ACTIVE_WRITER_SHARED_READ");
             }
+
+            WriteFocusedFixture(liveTurnStartLog, T.AddSeconds(3), T.AddMinutes(-10));
+            diagnostics = new CodexDesktopFocusedCompletionReader(
+                focusedFixtureRoot,
+                pid => pid == 1234
+                    ? new(pid, trustedDesktopPath, T.AddHours(-5))
+                    : null)
+                .ReadWithDiagnostics(completion, T.AddSeconds(4));
+            Check(diagnostics.Proof is not null &&
+                  diagnostics.ProcessCreationRejected == 0 &&
+                  diagnostics.MatchedLogFileName == focusedFixtureName,
+                "FOCUSED_READER_ROTATED_LOG_SAME_PROCESS_PASS");
+
+            WriteFocusedFixture(liveTurnStartLog, T.AddSeconds(3), T.AddMinutes(10));
+            diagnostics = diagnosticReader.ReadWithDiagnostics(completion, T.AddSeconds(4));
+            Check(diagnostics.Proof is null && diagnostics.ProcessCreationRejected == 1,
+                "FOCUSED_READER_CREATION_AFTER_COMPLETION_REJECTED");
 
             diagnostics = new CodexDesktopFocusedCompletionReader(focusedFixtureRoot, _ => null)
                 .ReadWithDiagnostics(completion, T.AddSeconds(4));
