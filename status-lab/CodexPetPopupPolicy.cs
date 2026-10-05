@@ -9,6 +9,8 @@ internal static class CodexPetPopupPolicy
     internal enum TaskStatusGlyphShape { Dot, AttentionCircle, Check }
 
     internal readonly record struct TaskStatusGlyphStyle(TaskStatusGlyphShape Shape, Color SemanticColor);
+    internal readonly record struct TaskOutlineStyle(int Alpha, float Width);
+    internal const double WaitingOutlinePulsePeriodSeconds = 1.4d;
 
     internal static TaskStatusGlyphStyle GlyphFor(CodexPetVisualState state) => state switch
     {
@@ -24,6 +26,21 @@ internal static class CodexPetPopupPolicy
     internal static Point ClampToWorkingArea(Point desired, Size popupSize, Rectangle workingArea) => new(
         Math.Clamp(desired.X, workingArea.Left, Math.Max(workingArea.Left, workingArea.Right - popupSize.Width)),
         Math.Clamp(desired.Y, workingArea.Top, Math.Max(workingArea.Top, workingArea.Bottom - popupSize.Height)));
+
+
+    internal static TaskOutlineStyle OutlineFor(CodexPetVisualState state, bool isTopCard, double elapsedSeconds)
+    {
+        if (state != CodexPetVisualState.Waiting)
+            return new(isTopCard ? 220 : 130, 1f);
+
+        var t = Math.Max(0d, elapsedSeconds);
+        var phase = (1d - Math.Cos(2d * Math.PI * t / WaitingOutlinePulsePeriodSeconds)) / 2d;
+        var minAlpha = isTopCard ? 180d : 160d;
+        var maxAlpha = isTopCard ? 255d : 235d;
+        return new(
+            Clamp(minAlpha + (maxAlpha - minAlpha) * phase),
+            (float)(1.2d + 1.4d * phase));
+    }
 
     internal static Color Accent(PetPalette palette, CodexPetVisualState state)
     {

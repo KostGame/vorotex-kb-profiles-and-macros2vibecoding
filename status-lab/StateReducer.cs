@@ -46,7 +46,11 @@ internal sealed record StatusInputEvent(
     bool PermissionModeProvided = false,
     string SourceInstanceId = "",
     string RequestFamily = "",
-    string ApprovalsReviewer = "");
+    string ApprovalsReviewer = "",
+    string NativeThreadStatus = "",
+    bool NativeWaitingOnApproval = false,
+    bool NativeWaitingOnUserInput = false,
+    string NativeClassification = "");
 
 internal sealed record PermissionRequestEvidence(
     string EventSubtype = "",
@@ -138,6 +142,7 @@ internal sealed class StateReducer
         public string ApprovalRpcId { get; set; } = string.Empty;
         public string ApprovalItemId { get; set; } = string.Empty;
         public string ApprovalRequestFamily { get; set; } = string.Empty;
+        public bool NativeApprovalWaiting { get; set; }
         public DateTimeOffset? LastStopUtc { get; set; }
         public DateTimeOffset? DoneEnteredUtc { get; set; }
         public DateTimeOffset? AcknowledgedUtc { get; set; }
@@ -226,6 +231,32 @@ internal sealed class StateReducer
         return RecomputeAggregate("codex_read_ack", evidence.SecondNoUnreadUtc);
     }
 
+    public StateTransition? ApplyFocusedReadAck(CodexFocusedReadAckEvidence evidence)
+    {
+        LastSessionTransitions = Array.Empty<SessionStateTransition>();
+        var key = evidence.Completion;
+        if (evidence.Host != "local" || key.RuntimeEpoch != _runtimeEpoch ||
+            evidence.DesktopProcessId <= 0 ||
+            evidence.DesktopCompletedUtc < key.CompletedUtc ||
+            evidence.DesktopCompletedUtc - key.CompletedUtc > TimeSpan.FromSeconds(5) ||
+            evidence.DesktopCompletedUtc <= _runtimeStartedUtc ||
+            evidence.FirstNoUnreadUtc <= evidence.DesktopCompletedUtc ||
+            evidence.SecondNoUnreadUtc <= evidence.FirstNoUnreadUtc ||
+            !ReadAckCandidates.Contains(key))
+            return null;
+        if (!_sessions.TryGetValue(CodexSourceIdentity.CompositeKey(key.SourceInstanceId, key.SessionId), out var session))
+            return null;
+
+        session.ReadAcknowledgedCompletion = key;
+        SetSessionState(session, K15NormalizedState.Normal, "codex_focused_read_ack", evidence.SecondNoUnreadUtc,
+            new(evidence.SecondNoUnreadUtc, "codex_desktop_focus_observer", "focused_read_ack",
+                ThreadId: key.ThreadId, TurnId: key.TurnId));
+        session.LastStopUtc = null;
+        session.DoneEnteredUtc = null;
+        session.AcknowledgedUtc = evidence.SecondNoUnreadUtc;
+        return RecomputeAggregate("codex_focused_read_ack", evidence.SecondNoUnreadUtc);
+    }
+
     // Journal diagnostics can restore correlation, never unread observations or
     // an ACK. Only the exact replayed DONE transition may receive that binding.
     public void RestoreCompletionCorrelations(IEnumerable<SessionStateTransition> persisted)
@@ -254,6 +285,71 @@ internal sealed class StateReducer
         }
     }
 
+    public void RestoreReadAcknowledgments(IEnumerable<CodexReadAckCheckpoint> persisted)
+    {
+        var checkpoints = persisted.ToArray();
+        if (checkpoints.Length == 0) return;
+
+        var transitionCountBefore = LastSessionTransitions.Count;
+        DateTimeOffset? latestAckUtc = null;
+
+        foreach (var session in _sessions.Values.Where(s =>
+                     !s.Internal && s.State == K15NormalizedState.DonePendingAttention &&
+                     !s.CompletionCorrelationRejected && s.Completion is not null))
+        {
+            var completion = session.Completion!;
+            var matches = checkpoints.Where(checkpoint =>
+                checkpoint.SessionId == completion.SessionId &&
+                checkpoint.ThreadId == completion.ThreadId &&
+                checkpoint.TurnId == completion.TurnId &&
+                checkpoint.Generation == completion.Generation &&
+                checkpoint.CompletedUtc == completion.CompletedUtc &&
+                (checkpoint.SourceInstanceId.Length == 0 ||
+                 checkpoint.SourceInstanceId == completion.SourceInstanceId)).ToArray();
+            if (matches.Length != 1) continue;
+
+            var checkpoint = matches[0];
+            if (checkpoint.AcknowledgedUtc <= checkpoint.CompletedUtc) continue;
+
+            // Legacy checkpoints written before sourceInstanceId was added are
+            // accepted only when the completion identity is globally unique.
+            if (checkpoint.SourceInstanceId.Length == 0)
+            {
+                var candidates = _sessions.Values.Count(other =>
+                    !other.Internal && other.State == K15NormalizedState.DonePendingAttention &&
+                    !other.CompletionCorrelationRejected && other.Completion is { } candidate &&
+                    candidate.SessionId == checkpoint.SessionId &&
+                    candidate.ThreadId == checkpoint.ThreadId &&
+                    candidate.TurnId == checkpoint.TurnId &&
+                    candidate.Generation == checkpoint.Generation &&
+                    candidate.CompletedUtc == checkpoint.CompletedUtc);
+                if (candidates != 1) continue;
+            }
+
+            session.ReadAcknowledgedCompletion = completion;
+            SetSessionState(session, K15NormalizedState.Normal, "codex_read_ack", checkpoint.AcknowledgedUtc,
+                new(checkpoint.AcknowledgedUtc, "codex_unread_observer", "read_ack",
+                    ThreadId: completion.ThreadId, TurnId: completion.TurnId,
+                    SourceInstanceId: completion.SourceInstanceId));
+            session.LastStopUtc = null;
+            session.DoneEnteredUtc = null;
+            session.AcknowledgedUtc = checkpoint.AcknowledgedUtc;
+            latestAckUtc = latestAckUtc is null || checkpoint.AcknowledgedUtc > latestAckUtc
+                ? checkpoint.AcknowledgedUtc
+                : latestAckUtc;
+        }
+
+        if (latestAckUtc is DateTimeOffset ackUtc)
+            RecomputeAggregate("codex_read_ack", ackUtc);
+
+        if (LastSessionTransitions.Count > transitionCountBefore)
+            LastSessionTransitions = LastSessionTransitions
+                .Select((transition, index) => index < transitionCountBefore
+                    ? transition
+                    : transition with { IsRehydrated = true })
+                .ToArray();
+    }
+
     private static bool ValidCorrelation(string session, string thread, string turn) =>
         session != LegacySessionId && CodexUnreadStateReader.Bounded(session) &&
         CodexUnreadStateReader.Bounded(thread) && CodexUnreadStateReader.Bounded(turn);
@@ -279,6 +375,7 @@ internal sealed class StateReducer
                 "turn_completed" => ApplyTurnCompletion(input),
                 "approval_requested" => ApplyApprovalRequest(input),
                 "approval_resolved" => ApplyApprovalResolution(input),
+                "thread_status_changed" => ApplyNativeThreadStatus(input),
                 _ => null
             };
 
@@ -526,6 +623,66 @@ internal sealed class StateReducer
         }
     }
 
+    private StateTransition? ApplyNativeThreadStatus(StatusInputEvent input)
+    {
+        if (input.SchemaVersion != "k15-codex-thread-status/v1" ||
+            !CodexSourceIdentity.IsValid(input.SourceInstanceId) ||
+            !CodexUnreadStateReader.Bounded(input.ThreadId) ||
+            input.NativeThreadStatus != "active")
+            return null;
+
+        var candidates = _sessions.Values.Where(session => !session.Internal && !session.Ended &&
+            session.SourceInstanceId == input.SourceInstanceId &&
+            input.TimestampUtc >= session.LastActivityUtc &&
+            (session.ThreadId == input.ThreadId ||
+             (session.ThreadId.Length == 0 && session.Id == input.ThreadId))).ToArray();
+        if (candidates.Length != 1)
+            return null;
+
+        var session = candidates[0];
+
+        if (input.NativeWaitingOnApproval)
+        {
+            if (session.State == K15NormalizedState.Waiting && session.NativeApprovalWaiting)
+            {
+                session.LastActivityUtc = input.TimestampUtc;
+                return null;
+            }
+            if (session.State != K15NormalizedState.Running)
+                return null;
+
+            if (session.ThreadId.Length == 0)
+                session.ThreadId = input.ThreadId;
+            session.NativeApprovalWaiting = true;
+            session.LastActivityUtc = input.TimestampUtc;
+            SetSessionState(session, K15NormalizedState.Waiting, "codex_native_waiting_on_approval", input.TimestampUtc, input);
+            session.LastPermissionUtc = input.TimestampUtc;
+            session.LastStopUtc = null;
+            session.DoneEnteredUtc = null;
+            _focusedSessionKey = session.IdentityKey;
+            return RecomputeAggregate("codex_native_waiting_on_approval", input.TimestampUtc);
+        }
+
+        if (!input.NativeWaitingOnUserInput &&
+            session.State == K15NormalizedState.Waiting &&
+            session.NativeApprovalWaiting)
+        {
+            session.NativeApprovalWaiting = false;
+            if (session.ThreadId.Length == 0)
+                session.ThreadId = input.ThreadId;
+            session.LastActivityUtc = input.TimestampUtc;
+            SetSessionState(session, K15NormalizedState.Running, "codex_native_approval_resumed", input.TimestampUtc, input);
+            session.LastPermissionUtc = null;
+            session.LastStopUtc = null;
+            session.DoneEnteredUtc = null;
+            session.AcknowledgedUtc = input.TimestampUtc;
+            _focusedSessionKey = session.IdentityKey;
+            return RecomputeAggregate("codex_native_approval_resumed", input.TimestampUtc);
+        }
+
+        return null;
+    }
+
     private StateTransition? ApplyApprovalResolution(StatusInputEvent input)
     {
         if (input.EventName != "approval_resolved" ||
@@ -593,6 +750,7 @@ internal sealed class StateReducer
         session.ApprovalRpcId = input.RpcId;
         session.ApprovalItemId = input.ItemId;
         session.ApprovalRequestFamily = input.RequestFamily;
+        session.NativeApprovalWaiting = false;
         SetSessionState(session, K15NormalizedState.Waiting, "codex_permission_request", input.TimestampUtc, input);
         session.LastPermissionUtc = input.TimestampUtc;
         session.LastStopUtc = null;
@@ -765,6 +923,8 @@ internal sealed class StateReducer
     private void SetSessionState(SessionRuntime session, K15NormalizedState next, string reason,
         DateTimeOffset timestampUtc, StatusInputEvent? input = null)
     {
+        if (next != K15NormalizedState.Waiting)
+            session.NativeApprovalWaiting = false;
         if (session.State == next)
             return;
 

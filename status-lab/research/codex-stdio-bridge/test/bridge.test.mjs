@@ -83,6 +83,46 @@ test('native status notification becomes bounded ordered authority events', asyn
   assert.equal(events[0].classification, 'canary');
 });
 
+test('native status journal sink persists only sanitized bounded status metadata with source identity', async () => {
+  const lines = [];
+  const sink = createSanitizedJsonlSink('C:\Temp\k15-native-status.jsonl', {
+    makeDirectory: async () => {},
+    appendFile: async (_path, line) => lines.push(line)
+  });
+  const observer = new NativeThreadStatusObserver({
+    authoritySink: () => {},
+    journalSink: sink,
+    sourceInstanceId: TEST_SOURCE_INSTANCE_ID,
+    classificationResolver: () => 'user'
+  });
+  observer.observeServerChunk(Buffer.from(JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'thread/status/changed',
+    params: {
+      threadId: 'thread-journal',
+      status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+      prompt: 'MUST NOT REACH JOURNAL',
+      command: 'MUST NOT REACH JOURNAL'
+    },
+    emittedAtMs: 1788854400000
+  }) + '\n'));
+  for (let attempt = 0; attempt < 10 && lines.length < 1; attempt++) await tick();
+  assert.equal(lines.length, 1);
+  const event = JSON.parse(lines[0]);
+  assert.deepEqual(event, {
+    schemaVersion: 'k15-codex-thread-status/v1',
+    timestampUtc: '2026-09-08T08:00:00.000Z',
+    source: 'codex_stdio_bridge',
+    event: 'thread_status_changed',
+    sourceInstanceId: TEST_SOURCE_INSTANCE_ID,
+    threadId: 'thread-journal',
+    status: 'active',
+    activeFlags: ['waitingOnApproval'],
+    classification: 'user'
+  });
+  assert.doesNotMatch(lines[0], /MUST NOT REACH JOURNAL|prompt|command/);
+});
+
 test('proven thread/started metadata emits only bounded exact Unicode cwd', () => {
   const events = [];
   const observer = new NativeThreadMetadataObserver({ metadataSink: event => events.push(event) });

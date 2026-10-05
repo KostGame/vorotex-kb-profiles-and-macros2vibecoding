@@ -128,6 +128,43 @@ test('real approval wrapper seam observes native status while preserving bytes',
   assert.equal(events[0].threadId, 'thread-native-fixture');
 });
 
+test('configured approval sink also journals sanitized native status with source identity', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'k15-codex-native-journal-'));
+  const sinkPath = path.join(root, 'status-lab', 'events.jsonl');
+  const stdin = new PassThrough(); const stdout = new PassThrough(); const stderr = new PassThrough();
+  const output = collect(stdout);
+  const run = runApprovalWrapper({
+    argv: ['app-server'],
+    sourceInstanceId: 'local:fc48c8bff668af187c6ae9b203b3321c',
+    env: {
+      ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('CODEX_BRIDGE_'))),
+      CODEX_BRIDGE_CHILD_PATH: fakeChild,
+      FAKE_CHILD_MODE: 'native',
+      [APPROVAL_SINK_PATH_ENV]: sinkPath
+    },
+    stdin, stdout, stderr,
+    spawnProcess: (childPath, childArgs, options) => spawn(process.execPath, [childPath, ...childArgs], { ...options })
+  });
+  stdout.once('data', () => stdin.end(Buffer.from('transparent-client-bytes')));
+  assert.equal(await run, 0);
+  await output;
+  await new Promise(resolve => setImmediate(resolve));
+  const records = (await readFile(sinkPath, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);
+  const status = records.find(record => record.event === 'thread_status_changed');
+  assert.deepEqual(status, {
+    schemaVersion: 'k15-codex-thread-status/v1',
+    timestampUtc: status.timestampUtc,
+    source: 'codex_stdio_bridge',
+    event: 'thread_status_changed',
+    sourceInstanceId: 'local:fc48c8bff668af187c6ae9b203b3321c',
+    threadId: 'thread-native-fixture',
+    status: 'active',
+    activeFlags: ['waitingOnApproval']
+  });
+  assert.doesNotMatch(JSON.stringify(records), /transparent-client-bytes|prompt|command/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test('authority pipe boundary delivers sanitized native state without spawning Runtime', async () => {
   const records = [];
   const stdin = new PassThrough(); const stdout = new PassThrough(); const stderr = new PassThrough();

@@ -515,13 +515,15 @@ export class ApprovalObserver {
 }
 
 export class NativeThreadStatusObserver {
-  #sink; #classify; #receiptClock; #authorityDegraded; #diagnostics; #queue = []; #busy = false; #accepted = 0; #delivered = 0; #overflow = 0; #sinkFailures = 0; #partial = Buffer.alloc(0);
-  constructor({ authoritySink = () => {}, classificationResolver = () => undefined, receiptClock = () => new Date(), authorityDegraded = () => {}, diagnostics } = {}) {
+  #sink; #journalSink; #classify; #receiptClock; #authorityDegraded; #diagnostics; #sourceInstanceId; #queue = []; #busy = false; #accepted = 0; #delivered = 0; #overflow = 0; #sinkFailures = 0; #partial = Buffer.alloc(0);
+  constructor({ authoritySink = () => {}, journalSink, classificationResolver = () => undefined, receiptClock = () => new Date(), authorityDegraded = () => {}, diagnostics, sourceInstanceId } = {}) {
     this.#sink = authoritySink;
+    this.#journalSink = journalSink;
     this.#classify = classificationResolver;
     this.#receiptClock = receiptClock;
     this.#authorityDegraded = authorityDegraded;
     this.#diagnostics = diagnostics;
+    this.#sourceInstanceId = /^local:[0-9a-f]{32}$/.test(sourceInstanceId ?? '') ? sourceInstanceId : undefined;
   }
   observeServerChunk(chunk) {
     const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -572,6 +574,10 @@ export class NativeThreadStatusObserver {
     const event = { schemaVersion: THREAD_STATUS_SCHEMA_VERSION, source: 'codex_stdio_bridge', event: 'thread_status_changed',
       timestampUtc: timestamp, threadId, status, activeFlags };
     if (classification !== undefined) event.classification = classification;
+    if (this.#journalSink && this.#sourceInstanceId) {
+      const journalEvent = { ...event, sourceInstanceId: this.#sourceInstanceId };
+      try { Promise.resolve(this.#journalSink(journalEvent)).catch(() => {}); } catch { /* optional journal path */ }
+    }
     if (this.#queue.length >= MAX_AUTHORITY_QUEUE) {
       this.#overflow += 1;
       this.#diagnostics?.recordAuthority('overflow');
@@ -654,6 +660,30 @@ export function createSanitizedJsonlSink(filePath, { appendFile, makeDirectory }
   let directoryReady;
 
   return (event) => {
+    if (event.schemaVersion === THREAD_STATUS_SCHEMA_VERSION && event.event === 'thread_status_changed') {
+      if (event.source !== 'codex_stdio_bridge' ||
+          !/^local:[0-9a-f]{32}$/.test(event.sourceInstanceId ?? '') ||
+          typeof event.timestampUtc !== 'string' || Number.isNaN(Date.parse(event.timestampUtc)) ||
+          typeof event.threadId !== 'string' || Buffer.byteLength(event.threadId, 'utf8') > 1024 ||
+          !THREAD_STATUSES.has(event.status) || !Array.isArray(event.activeFlags) || event.activeFlags.length > 8 ||
+          event.activeFlags.some(flag => !THREAD_FLAGS.has(flag)) || new Set(event.activeFlags).size !== event.activeFlags.length ||
+          (event.classification !== undefined && !THREAD_CLASSIFICATIONS.has(event.classification))) return;
+      const sanitized = {
+        schemaVersion: THREAD_STATUS_SCHEMA_VERSION,
+        timestampUtc: event.timestampUtc,
+        source: 'codex_stdio_bridge',
+        event: 'thread_status_changed',
+        sourceInstanceId: event.sourceInstanceId,
+        threadId: event.threadId,
+        status: event.status,
+        activeFlags: [...event.activeFlags]
+      };
+      if (event.classification !== undefined) sanitized.classification = event.classification;
+      const line = JSON.stringify(sanitized) + '\n';
+      if (Buffer.byteLength(line, 'utf8') > MAX_PARTIAL_BYTES) return;
+      if (!directoryReady) directoryReady = mkdir(path.dirname(filePath), { recursive: true });
+      return Promise.resolve(directoryReady).then(() => append(filePath, line, { encoding: 'utf8' }));
+    }
     const sanitized = {
       schemaVersion: event.schemaVersion,
       timestampUtc: event.timestampUtc,

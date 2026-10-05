@@ -190,10 +190,13 @@ internal static class EventJournal
     private static bool IsSafeReason(string? value) => value is "codex_read_ack" or "codex_user_prompt_submit" or "codex_permission_request" or "codex_pre_tool_use" or "codex_post_tool_use" or "codex_stop" or "codex_session_end" or "codex_approval_resolved" or "codex_turn_completed" or "state_rehydrated" or "stale_attention_timeout" or "codex_desktop_not_running" or "aggregate_precedence_normal" or "aggregate_precedence_running" or "aggregate_precedence_waiting" or "aggregate_precedence_donependingattention";
     private static bool IsSafeReadAckEvidence(JsonElement root)
     {
-        var allowed = new[] { "timestampUtc", "source", "event", "reason", "host", "sessionId", "threadId", "turnId", "runtimeEpoch", "completionGeneration", "completedUtc", "hasUnreadUtc", "firstNoUnreadUtc", "secondNoUnreadUtc" };
-        if (root.EnumerateObject().Count() != allowed.Length ||
-            root.EnumerateObject().Any(p => !allowed.Contains(p.Name, StringComparer.Ordinal)) ||
-            root.EnumerateObject().Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != allowed.Length ||
+        var allowed = new[] { "timestampUtc", "source", "event", "reason", "host", "sessionId", "threadId", "turnId", "sourceInstanceId", "runtimeEpoch", "completionGeneration", "completedUtc", "hasUnreadUtc", "firstNoUnreadUtc", "secondNoUnreadUtc" };
+        var properties = root.EnumerateObject().ToArray();
+        var hasSourceInstanceId = properties.Any(p => p.Name == "sourceInstanceId");
+        var expectedCount = hasSourceInstanceId ? allowed.Length : allowed.Length - 1;
+        if (properties.Length != expectedCount ||
+            properties.Any(p => !allowed.Contains(p.Name, StringComparer.Ordinal)) ||
+            properties.Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() != properties.Length ||
             GetString(root, "host") != "local" || GetString(root, "reason") != "codex_read_ack" ||
             !Guid.TryParse(GetString(root, "runtimeEpoch"), out _) ||
             !root.TryGetProperty("completionGeneration", out var generation) || generation.ValueKind != JsonValueKind.Number ||
@@ -204,6 +207,8 @@ internal static class EventJournal
             var value = GetString(root, name);
             if (string.IsNullOrWhiteSpace(value) || value.Any(char.IsControl) || Encoding.UTF8.GetByteCount(value) > 128) return false;
         }
+        if (hasSourceInstanceId && !CodexSourceIdentity.IsValid(GetString(root, "sourceInstanceId")))
+            return false;
         foreach (var name in new[] { "timestampUtc", "completedUtc", "hasUnreadUtc", "firstNoUnreadUtc", "secondNoUnreadUtc" })
             if (!DateTimeOffset.TryParse(GetString(root, name), out _)) return false;
         return true;

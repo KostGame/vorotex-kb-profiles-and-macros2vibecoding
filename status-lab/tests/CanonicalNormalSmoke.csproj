@@ -11,6 +11,7 @@
     <Compile Include="CanonicalNormalSmokeProgram.cs" />
     <Compile Include="..\StateReducer.cs" Link="StateReducer.cs" />
     <Compile Include="..\CodexReadAck.cs" Link="CodexReadAck.cs" />
+    <Compile Include="..\CodexDesktopFocusedCompletionReader.cs" Link="CodexDesktopFocusedCompletionReader.cs" />
     <Compile Include="..\CodexSourceIdentity.cs" Link="CodexSourceIdentity.cs" />
     <Compile Include="..\CodexUnreadSourceRegistry.cs" Link="CodexUnreadSourceRegistry.cs" />
     <Compile Include="..\CodexUnreadStateReader.cs" Link="CodexUnreadStateReader.cs" />
